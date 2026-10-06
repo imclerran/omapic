@@ -93,11 +93,18 @@ Window {
             return
         index = (i % count + count) % count
         const back = (front === 0) ? 1 : 0
+        const backImg = (back === 0) ? img0 : img1
         loadingInto = back
-        if (back === 1)
-            img1.source = currentSource
-        else
-            img0.source = currentSource
+        if (String(backImg.source) === currentSource && backImg.status === Image.Ready) {
+            // The back buffer already holds this image (e.g. navigating back, a
+            // wrap, or a short playlist). Re-assigning the same source fires no
+            // status change, so flip now instead of waiting for a Ready that
+            // never comes.
+            front = back
+            loadingInto = -1
+        } else {
+            backImg.source = currentSource
+        }
     }
 
     function next() { go(index + 1) }
