@@ -16,6 +16,9 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("omapic"));
     QGuiApplication::setOrganizationName(QStringLiteral("omapic"));
+    // Ties the window to omapic.desktop so Wayland compositors show the right
+    // icon and name in docks, alt-tab, etc. (the app_id becomes "omapic").
+    QGuiApplication::setDesktopFileName(QStringLiteral("omapic"));
 
     // Fusion renders fully from the QPalette, which the Omarchy theme bridge
     // below fills from the active theme's colors.

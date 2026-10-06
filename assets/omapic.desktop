@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=omapic
+GenericName=Photo Gallery
+Comment=Photo gallery with tagging, filtering, and slideshows
+Exec=omapic
+Icon=omapic
+Terminal=false
+Categories=Graphics;Photography;Viewer;
+Keywords=photo;photos;gallery;image;images;picture;tag;tags;slideshow;
+StartupWMClass=omapic

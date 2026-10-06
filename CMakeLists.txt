@@ -38,3 +38,16 @@ qt_add_qml_module(omapic
 target_include_directories(omapic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui)
+
+# Installation. The QML module is compiled into the executable, so only the
+# binary plus its desktop entry and icon need to be installed.
+include(GNUInstallDirs)
+
+install(TARGETS omapic
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(FILES assets/omapic.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+
+install(FILES assets/omapic.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
