@@ -1,3 +1,7 @@
+// omapic - a photo gallery with tagging and slideshows
+// Copyright (C) 2026 Ian McLerran
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "photomodel.h"
 
 #include <QUrl>
