@@ -1,0 +1,17 @@
+pkgbase = omapic
+	pkgdesc = A photo gallery with tagging, tag filtering, and slideshows
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/imclerran/omapic
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = cmake
+	makedepends = ninja
+	depends = qt6-base
+	depends = qt6-declarative
+	depends = qt6-imageformats
+	depends = qt6-wayland
+	source = omapic-0.1.0.tar.gz::https://github.com/imclerran/omapic/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 97df3ccb51dfabf509f4b93a44f8042d651005986ae8666111264eb4c32688df
+
+pkgname = omapic

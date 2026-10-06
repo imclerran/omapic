@@ -1,0 +1,5 @@
+# makepkg build artifacts (when building in this dir)
+/src/
+/pkg/
+/*.tar.gz
+/*.pkg.tar.*

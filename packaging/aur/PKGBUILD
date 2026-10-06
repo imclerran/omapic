@@ -1,0 +1,25 @@
+# Maintainer: Ian McLerran <imclerran@protonmail.com>
+pkgname=omapic
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A photo gallery with tagging, tag filtering, and slideshows"
+arch=('x86_64')
+url="https://github.com/imclerran/omapic"
+license=('GPL-3.0-or-later')
+depends=('qt6-base' 'qt6-declarative' 'qt6-imageformats' 'qt6-wayland')
+makedepends=('cmake' 'ninja')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('97df3ccb51dfabf509f4b93a44f8042d651005986ae8666111264eb4c32688df')
+
+build() {
+  cmake -B build -S "$pkgname-$pkgver" -G Ninja \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -Wno-dev
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$pkgname-$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
