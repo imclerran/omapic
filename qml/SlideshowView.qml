@@ -28,6 +28,26 @@ Window {
 
     signal toggleShuffleRequested()
 
+    // The paused controls hint auto-hides after a few seconds, and reappears on
+    // activity (mouse move or navigation) so it isn't gone for the whole pause.
+    property bool hintShown: true
+
+    Timer {
+        id: hintHideTimer
+        interval: 3000
+        onTriggered: root.hintShown = false
+    }
+
+    function pokeHint() {
+        hintShown = true
+        if (!playing)
+            hintHideTimer.restart()
+        else
+            hintHideTimer.stop()
+    }
+
+    onPlayingChanged: pokeHint()
+
     width: 960
     height: 640
     color: "black"
@@ -190,8 +210,8 @@ Window {
         height: hint.implicitHeight + 12
         radius: 6
         color: Qt.rgba(0, 0, 0, 0.6)
-        opacity: root.playing ? 0.0 : 1.0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
+        opacity: (!root.playing && root.hintShown) ? 1.0 : 0.0
+        Behavior on opacity { NumberAnimation { duration: 300 } }
 
         Label {
             id: hint
@@ -202,20 +222,30 @@ Window {
         }
     }
 
+    // Mouse movement counts as activity: bring the paused hint back.
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.NoButton
+        hoverEnabled: true
+        onPositionChanged: root.pokeHint()
+    }
+
     Item {
         id: keyCatcher
         anchors.fill: parent
         focus: true
         Keys.onEscapePressed: root.stop()
-        Keys.onLeftPressed: root.prev()
-        Keys.onRightPressed: root.next()
+        Keys.onLeftPressed: { root.prev(); root.pokeHint() }
+        Keys.onRightPressed: { root.next(); root.pokeHint() }
         Keys.onSpacePressed: root.playing = !root.playing
         Keys.onPressed: (event) => {
             if (event.key === Qt.Key_S) {
                 root.toggleShuffleRequested()
+                root.pokeHint()
                 event.accepted = true
             } else if (event.key === Qt.Key_N) {
                 root.showName = !root.showName
+                root.pokeHint()
                 event.accepted = true
             }
         }
