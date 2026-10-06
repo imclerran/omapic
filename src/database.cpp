@@ -207,6 +207,47 @@ QVector<TagInfo> Database::activeTags()
     return tags;
 }
 
+QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected)
+{
+    QVector<TagInfo> tags;
+    if (selected.isEmpty())
+        return activeTags();
+
+    QStringList ph;
+    for (int i = 0; i < selected.size(); ++i)
+        ph.append(QStringLiteral("?"));
+    const QString inList = ph.join(QLatin1Char(','));
+
+    // Matching photos: active photos that carry every selected tag. Then return
+    // the tags present on those photos, counted over that matching set.
+    const QString sql = QStringLiteral(
+        "SELECT t.id, t.name, COUNT(DISTINCT pt.photo_id) "
+        "FROM tags t "
+        "JOIN photo_tags pt ON pt.tag_id = t.id "
+        "JOIN photos p ON p.id = pt.photo_id "
+        "WHERE %1 AND p.id IN ("
+        "  SELECT pt2.photo_id FROM photo_tags pt2 "
+        "  WHERE pt2.tag_id IN (%2) "
+        "  GROUP BY pt2.photo_id HAVING COUNT(DISTINCT pt2.tag_id) = %3) "
+        "GROUP BY t.id, t.name HAVING COUNT(DISTINCT pt.photo_id) > 0 "
+        "ORDER BY t.name")
+        .arg(activeClause(QStringLiteral("p")), inList, QString::number(selected.size()));
+
+    QSqlQuery q(m_db);
+    q.prepare(sql);
+    for (int id : selected)
+        q.addBindValue(id);
+    q.exec();
+    while (q.next()) {
+        TagInfo info;
+        info.id = q.value(0).toInt();
+        info.name = q.value(1).toString();
+        info.count = q.value(2).toInt();
+        tags.append(info);
+    }
+    return tags;
+}
+
 QVector<FolderInfo> Database::loadFolders()
 {
     QVector<FolderInfo> folders;

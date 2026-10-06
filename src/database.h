@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QList>
 #include <QPair>
 #include <QSqlDatabase>
 #include <QString>
@@ -23,6 +24,9 @@ public:
     QVector<Photo> loadPhotos();         // only photos in the active (shown) set
     QVector<TagInfo> loadTags();         // every tag, with its total photo count
     QVector<TagInfo> activeTags();       // tags applying to >=1 active photo, with active counts
+    // Tags on the active photos that carry ALL of `selected` (faceted drill-down),
+    // counted over that matching set. Used for the "match all" filter sidebar.
+    QVector<TagInfo> coOccurringTags(const QList<int> &selected);
     QStringList allTagNames();           // tag names relevant to the active set, for autocomplete
     QVector<FolderInfo> loadFolders(); // registered library folders, with photo counts + enabled
 

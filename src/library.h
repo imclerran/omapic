@@ -61,6 +61,9 @@ public:
     Q_INVOKABLE void setFolderEnabled(int folderId, bool enabled);
     Q_INVOKABLE void removeOrphanPhotos();
     Q_INVOKABLE void rescan(); // reconcile the library with disk (adds, moves, deletions)
+    // Tells the library whether the gallery filter is in "match all" mode, so the
+    // sidebar can narrow its tags to those on the currently-matching photos.
+    Q_INVOKABLE void setMatchAll(bool matchAll);
     Q_INVOKABLE void addTag(int photoId, const QString &name);
     Q_INVOKABLE void removeTag(int photoId, int tagId);
     Q_INVOKABLE void addTagToPhotos(const QVariantList &photoIds, const QString &name);
@@ -103,6 +106,7 @@ private:
     QThread m_workerThread;
     LibraryWorker *m_worker = nullptr;
 
+    bool m_matchAll = true; // mirrors the gallery's "match all tags" toggle
     bool m_busy = false;
     double m_progress = -1.0;
     QString m_statusText;

@@ -238,6 +238,10 @@ ApplicationWindow {
                 id: matchAllSwitch
                 text: qsTr("Match all tags")
                 checked: true
+                // Keep the library's filter mode in sync so the sidebar can
+                // narrow its tags to the current match set when this is on.
+                onCheckedChanged: library.setMatchAll(checked)
+                Component.onCompleted: library.setMatchAll(checked)
             }
             ToolButton {
                 text: win.selectedIds.length > 1

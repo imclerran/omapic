@@ -29,6 +29,10 @@ Library::Library(QObject *parent)
     m_filtered->setSortCaseSensitivity(Qt::CaseInsensitive);
     m_filtered->sort(0);
 
+    // Changing the tag selection re-narrows the sidebar (faceted drill-down) when
+    // in "match all" mode.
+    connect(m_tags, &TagModel::selectionChanged, this, &Library::refreshTags);
+
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
 
@@ -361,11 +365,46 @@ void Library::applyTags(int photoId)
     m_photos->setTagsForId(photoId, ids, names);
 }
 
+void Library::setMatchAll(bool matchAll)
+{
+    if (m_matchAll == matchAll)
+        return;
+    m_matchAll = matchAll;
+    refreshTags(); // the sidebar's tag set depends on the filter mode
+}
+
 void Library::refreshTags()
 {
     // The filter sidebar shows only tags relevant to the active (shown) set, with
     // counts over that set; tags touching only hidden folders drop out. Unused
     // tags still live in the DB and appear in the tag manager.
-    m_tags->setTags(m_db.activeTags());
+    //
+    // In "match all" mode with tags already selected, narrow further to tags that
+    // co-occur on the currently-matching photos (faceted drill-down), so chips
+    // that could only ever yield an empty result disappear.
+    const QList<int> sel = m_tags->selectedTagIds();
+    QVector<TagInfo> tags =
+        (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel) : m_db.activeTags();
+
+    // Keep every selected tag present (even if the match set is momentarily empty,
+    // e.g. after switching an incompatible selection into match-all) so it stays
+    // visible and can be deselected.
+    QSet<int> have;
+    for (const TagInfo &t : tags)
+        have.insert(t.id);
+    for (int id : sel) {
+        if (!have.contains(id)) {
+            TagInfo t;
+            t.id = id;
+            t.name = m_db.tagName(id);
+            t.count = 0;
+            tags.append(t);
+        }
+    }
+    std::sort(tags.begin(), tags.end(), [](const TagInfo &a, const TagInfo &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+
+    m_tags->setTags(tags);
     emit tagsChanged();
 }
