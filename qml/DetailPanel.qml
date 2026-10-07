@@ -136,8 +136,15 @@ Rectangle {
             color: palette.placeholderText
         }
 
-        Flow {
+        ScrollView {
+            id: tagScroll
             Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+            Flow {
+            width: tagScroll.availableWidth
             spacing: 4
 
             Repeater {
@@ -189,9 +196,8 @@ Rectangle {
                 text: qsTr("No tags yet.")
                 color: palette.placeholderText
             }
+            }
         }
-
-        Item { Layout.fillHeight: true }
 
         RowLayout {
             Layout.fillWidth: true
