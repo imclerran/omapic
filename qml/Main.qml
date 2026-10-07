@@ -41,6 +41,16 @@ ApplicationWindow {
         selectedIds = ids
     }
 
+    // Select every photo in the current (filtered) gallery.
+    function selectAll() {
+        const n = library.filtered.count
+        if (n === 0)
+            return
+        selectRange(0, n - 1)
+        anchorIndex = 0
+        cursorIndex = n - 1
+    }
+
     function handleClick(index, id, modifiers) {
         if ((modifiers & Qt.ShiftModifier) && anchorIndex >= 0) {
             cursorIndex = index
@@ -301,6 +311,14 @@ ApplicationWindow {
                 // Arrow-key navigation (our own, not GridView's currentIndex).
                 focus: true
                 keyNavigationEnabled: false
+                // Ctrl+A selects the whole gallery. Handled here (not window-wide)
+                // so text fields keep their own Ctrl+A for selecting text.
+                Keys.onPressed: (event) => {
+                    if (event.key === Qt.Key_A && (event.modifiers & Qt.ControlModifier)) {
+                        win.selectAll()
+                        event.accepted = true
+                    }
+                }
                 Keys.onLeftPressed: (event) => { win.navigate("left", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
                 Keys.onRightPressed: (event) => { win.navigate("right", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
                 Keys.onUpPressed: (event) => { win.navigate("up", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
