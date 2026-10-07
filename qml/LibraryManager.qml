@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Ian McLerran
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -26,6 +27,9 @@ Dialog {
     FolderDialog {
         id: addDialog
         title: qsTr("Choose a folder to add")
+        // Start browsing from the home directory (keeps the last spot once the
+        // user navigates during the session).
+        currentFolder: StandardPaths.writableLocation(StandardPaths.HomeLocation)
         onAccepted: root.library.importDirectory(selectedFolder)
     }
 
