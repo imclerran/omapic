@@ -136,6 +136,9 @@ ApplicationWindow {
     // play=false opens the slideshow paused.
     function startSlideshow(startId, play) {
         const selectedOnly = selectedIds.length > 1
+        // Enter / double-click (play === false) on a specific photo start there,
+        // ignoring random start. Play / Space (play === true) let random start win.
+        const honorStart = (!play && startId >= 0)
         const srcs = []
         let startPos = 0
         const n = library.filtered.count
@@ -164,9 +167,10 @@ ApplicationWindow {
                 const t = srcs[i]; srcs[i] = srcs[j]; srcs[j] = t
             }
             startPos = 0
-        } else if (appSettings.randomStart && (selectedOnly || startId < 0)) {
-            // Random start: within the selection when several are selected,
-            // otherwise within the whole set. A single explicit photo is kept.
+        } else if (appSettings.randomStart && !honorStart) {
+            // Random start applies to Play/Space (and whenever there's no specific
+            // photo to honor) — within the selection if several are selected,
+            // otherwise the whole set. Enter/double-click keep their photo.
             startPos = Math.floor(Math.random() * srcs.length)
         }
 
