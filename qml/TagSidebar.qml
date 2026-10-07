@@ -11,8 +11,9 @@ Rectangle {
 
     property var tagModel
     property color accent: "#4a90d9"
-    // Exposed so Main can drive the filter / faceting from this toggle.
+    // Exposed so Main can drive the filter / faceting from these controls.
     property alias matchAll: matchAllSwitch.checked
+    property int tagPresence: 0 // 0 all, 1 tagged only, 2 untagged only
 
     // How many chips match the current search text (all of them when empty).
     function matchCount(q) {
@@ -136,6 +137,28 @@ Rectangle {
         }
 
         MenuSeparator { Layout.fillWidth: true }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: 12
+            Layout.rightMargin: 12
+            spacing: 8
+
+            Label {
+                text: qsTr("Show")
+                color: palette.placeholderText
+            }
+            Button {
+                text: root.tagPresence === 0 ? qsTr("All")
+                    : root.tagPresence === 1 ? qsTr("Tagged")
+                    : qsTr("Untagged")
+                highlighted: root.tagPresence !== 0
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Cycle: all photos → tagged only → untagged only")
+                onClicked: root.tagPresence = (root.tagPresence + 1) % 3
+            }
+            Item { Layout.fillWidth: true }
+        }
 
         Switch {
             id: matchAllSwitch
