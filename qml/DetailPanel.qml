@@ -29,13 +29,15 @@ Rectangle {
         if (n === 1) {
             info = library.photoInfo(selectedIds[0])
             const ts = info.tags || []
-            chips = ts.map(function (t) { return { id: t.id, name: t.name, label: t.name } })
+            chips = ts.map(function (t) { return { id: t.id, name: t.name, label: t.name, partial: false } })
             appliedLower = ts.map(function (t) { return t.name.toLowerCase() })
         } else if (n > 1) {
             info = ({})
             const ct = library.commonTags(selectedIds)
             chips = ct.map(function (t) {
-                return { id: t.id, name: t.name, label: t.name + "  (" + t.count + "/" + n + ")" }
+                return { id: t.id, name: t.name,
+                         label: t.name + "  (" + t.count + "/" + n + ")",
+                         partial: t.count < n } // on some but not all selected
             })
             // Only hide tags already on every selected photo.
             appliedLower = ct.filter(function (t) { return t.count === n })
@@ -145,8 +147,22 @@ Rectangle {
                     radius: height / 2
                     height: 24
                     width: chipRow.implicitWidth + 12
-                    color: sys.alternateBase
+                    // Partial tags (on only some of the selection) read as
+                    // "unfilled" to hint they can be completed with a click.
+                    color: modelData.partial ? "transparent" : sys.alternateBase
                     border.color: root.accent
+
+                    // Click a partial chip to apply the tag to every selected photo.
+                    // Sits below the row so the ✕ button still gets its own clicks.
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: modelData.partial === true
+                        hoverEnabled: enabled
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: root.commitTag(modelData.name)
+                        ToolTip.visible: enabled && containsMouse
+                        ToolTip.text: qsTr("Apply to all %1 selected").arg(root.count)
+                    }
 
                     RowLayout {
                         id: chipRow
