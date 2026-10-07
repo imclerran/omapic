@@ -23,6 +23,25 @@ Dialog {
     property string pendingName: ""
     property int pendingCount: 0
 
+    // The tag list, filtered by the search box (filter the model, not visibility —
+    // a ListView leaves gaps for hidden delegates).
+    readonly property var filteredTags: {
+        const q = searchField.text.trim().toLowerCase()
+        const all = root.library.allTags
+        if (q === "")
+            return all
+        return all.filter(function (t) { return t.name.toLowerCase().indexOf(q) !== -1 })
+    }
+
+    // Run a mutation that refreshes the tag list without the view jumping to the
+    // top (the model is replaced wholesale, which otherwise resets the scroll).
+    function withPreservedScroll(fn) {
+        const y = list.contentY
+        fn()
+        list.contentY = y
+        Qt.callLater(function () { list.contentY = y })
+    }
+
     Dialog {
         id: confirmDialog
         title: qsTr("Delete tag?")
@@ -32,7 +51,8 @@ Dialog {
         standardButtons: Dialog.Yes | Dialog.No
 
         onAccepted: {
-            root.library.deleteTag(root.pendingId)
+            const id = root.pendingId
+            root.withPreservedScroll(function () { root.library.deleteTag(id) })
             root.pendingId = -1
             root.pendingName = ""
             root.pendingCount = 0
@@ -93,7 +113,9 @@ Dialog {
         function apply() {
             if (!canApply)
                 return
-            root.library.renameTag(targetId, trimmed)
+            const id = targetId
+            const name = trimmed
+            root.withPreservedScroll(function () { root.library.renameTag(id, name) })
             close()
         }
 
@@ -133,16 +155,28 @@ Dialog {
         }
     }
 
-    Frame {
+    ColumnLayout {
         anchors.fill: parent
-        padding: 0
+        spacing: 10
 
-        ListView {
-            id: list
+        TextField {
+            id: searchField
+            Layout.fillWidth: true
+            placeholderText: qsTr("Search tags…")
+            Keys.onEscapePressed: text = ""
+        }
+
+        Frame {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 320
+            padding: 0
+
+            ListView {
+                id: list
             anchors.fill: parent
             clip: true
-            implicitHeight: 320
-            model: root.library.allTags
+            model: root.filteredTags
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
 
@@ -191,9 +225,12 @@ Dialog {
                 visible: list.count === 0
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: qsTr("No tags yet. Select a photo and add some.")
+                text: searchField.text.trim() === ""
+                      ? qsTr("No tags yet. Select a photo and add some.")
+                      : qsTr("No tags match “%1”.").arg(searchField.text.trim())
                 color: palette.placeholderText
             }
+        }
         }
     }
 }
