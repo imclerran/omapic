@@ -51,6 +51,13 @@ ApplicationWindow {
         cursorIndex = n - 1
     }
 
+    // Re-anchor the gallery to the top. Deferred so it runs after the filter
+    // model has updated, avoiding a GridView originY gap (blank space above the
+    // results) when the filter changes while scrolled down.
+    function scrollGalleryToTop() {
+        Qt.callLater(function () { grid.positionViewAtBeginning() })
+    }
+
     // Drop any selected ids whose photos have left the library's active set
     // (e.g. a folder was disabled or removed), so the detail pane doesn't keep
     // showing hidden photos.
@@ -235,7 +242,16 @@ ApplicationWindow {
     // orphan cleanup), drop selected photos that are no longer shown.
     Connections {
         target: library
-        function onFoldersChanged() { win.pruneSelection() }
+        function onFoldersChanged() {
+            win.pruneSelection()
+            win.scrollGalleryToTop()
+        }
+    }
+
+    // Changing the tag filter re-anchors the gallery to the top of the results.
+    Connections {
+        target: library.tags
+        function onSelectionChanged() { win.scrollGalleryToTop() }
     }
 
     // Push the sidebar's tag selection and the toolbar's match mode into the filter.
@@ -277,7 +293,7 @@ ApplicationWindow {
                 checked: true
                 // Keep the library's filter mode in sync so the sidebar can
                 // narrow its tags to the current match set when this is on.
-                onCheckedChanged: library.setMatchAll(checked)
+                onCheckedChanged: { library.setMatchAll(checked); win.scrollGalleryToTop() }
                 Component.onCompleted: library.setMatchAll(checked)
             }
             ToolButton {
