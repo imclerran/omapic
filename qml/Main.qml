@@ -13,7 +13,7 @@ ApplicationWindow {
     width: 1280
     height: 820
     visible: true
-    title: qsTr("omapic")
+    title: qsTr("Omapic")
 
     readonly property color accent: omarchyTheme.accent
 

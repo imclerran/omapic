@@ -52,7 +52,7 @@ Window {
     height: 640
     color: "black"
     visibility: Window.Hidden
-    title: qsTr("omapic — slideshow")
+    title: qsTr("Omapic — slideshow")
 
     function clampIndex() {
         if (count === 0) { index = 0; return }
