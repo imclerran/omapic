@@ -266,12 +266,10 @@ ApplicationWindow {
         value: tagSidebar.matchAll
     }
 
-    // Non-blocking progress bar for background jobs that don't lock the UI
-    // (bulk tagging). Blocking jobs use the centered overlay instead.
+    // Status bar: photo/selection count always, plus a progress bar for
+    // non-blocking background jobs (bulk tagging). Blocking jobs use the overlay.
     footer: ToolBar {
         id: statusBar
-        visible: library.busy && !library.busyModal
-        height: visible ? implicitHeight : 0
 
         RowLayout {
             anchors.fill: parent
@@ -280,17 +278,28 @@ ApplicationWindow {
             spacing: 12
 
             Label {
+                text: win.selectedIds.length > 0
+                      ? qsTr("%1 photos · %2 selected").arg(library.filtered.count).arg(win.selectedIds.length)
+                      : qsTr("%1 photos").arg(library.filtered.count)
+                color: palette.placeholderText
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Label {
+                visible: library.busy && !library.busyModal
                 text: library.statusText
                 elide: Text.ElideRight
             }
             ProgressBar {
-                Layout.fillWidth: true
+                visible: library.busy && !library.busyModal
+                Layout.preferredWidth: 180
                 indeterminate: library.progress < 0
                 from: 0; to: 1
                 value: library.progress < 0 ? 0 : library.progress
             }
             Label {
-                visible: library.progress >= 0
+                visible: library.busy && !library.busyModal && library.progress >= 0
                 text: Math.round(library.progress * 100) + "%"
                 color: palette.placeholderText
             }
@@ -304,16 +313,21 @@ ApplicationWindow {
             anchors.rightMargin: 8
 
             ToolButton {
-                text: qsTr("Manage Library…")
-                onClicked: libraryManager.open()
-            }
-            ToolButton {
-                text: qsTr("Manage Tags…")
-                onClicked: tagManager.open()
-            }
-            ToolSeparator {}
-            Label {
-                text: library.filtered.count + qsTr(" photos")
+                text: qsTr("Manage ▾")
+                onClicked: manageMenu.open()
+
+                Menu {
+                    id: manageMenu
+                    y: parent.height
+                    MenuItem {
+                        text: qsTr("Library…")
+                        onTriggered: libraryManager.open()
+                    }
+                    MenuItem {
+                        text: qsTr("Tags…")
+                        onTriggered: tagManager.open()
+                    }
+                }
             }
 
             Item { Layout.fillWidth: true }
