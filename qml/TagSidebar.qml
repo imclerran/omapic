@@ -140,14 +140,17 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 12
+            Layout.leftMargin: 8
             Layout.rightMargin: 12
+            Layout.bottomMargin: 4
             spacing: 8
 
-            Label {
-                text: qsTr("Show")
-                color: palette.placeholderText
+            Switch {
+                id: matchAllSwitch
+                text: qsTr("Match all tags")
+                checked: true
             }
+            Item { Layout.fillWidth: true }
             Button {
                 text: root.tagPresence === 0 ? qsTr("All")
                     : root.tagPresence === 1 ? qsTr("Tagged")
@@ -157,15 +160,6 @@ Rectangle {
                 ToolTip.text: qsTr("Cycle: all photos → tagged only → untagged only")
                 onClicked: root.tagPresence = (root.tagPresence + 1) % 3
             }
-            Item { Layout.fillWidth: true }
-        }
-
-        Switch {
-            id: matchAllSwitch
-            text: qsTr("Match all tags")
-            checked: true
-            Layout.leftMargin: 8
-            Layout.bottomMargin: 4
         }
     }
 }
