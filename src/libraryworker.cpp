@@ -212,3 +212,59 @@ void LibraryWorker::rescan()
 
     emit rescanFinished();
 }
+
+void LibraryWorker::addTagToPhotos(const QList<int> &photoIds, const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    const int tagId = trimmed.isEmpty() ? -1 : m_db.ensureTag(trimmed);
+    if (tagId < 0 || photoIds.isEmpty()) {
+        emit tagJobFinished();
+        return;
+    }
+
+    const int total = photoIds.size();
+    emit progress(tr("Applying tag…"), 0, total);
+    const int step = qMax(1, total / 100);
+
+    m_db.beginTransaction();
+    int done = 0;
+    for (int pid : photoIds) {
+        if (pid >= 0) {
+            m_db.linkPhotoTag(pid, tagId);
+            m_db.rememberContentTag(m_db.photoHash(pid), tagId);
+        }
+        ++done;
+        if (done % step == 0 || done == total)
+            emit progress(tr("Applying tag…"), done, total);
+    }
+    m_db.commitTransaction();
+
+    emit tagJobFinished();
+}
+
+void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)
+{
+    if (tagId < 0 || photoIds.isEmpty()) {
+        emit tagJobFinished();
+        return;
+    }
+
+    const int total = photoIds.size();
+    emit progress(tr("Removing tag…"), 0, total);
+    const int step = qMax(1, total / 100);
+
+    m_db.beginTransaction();
+    int done = 0;
+    for (int pid : photoIds) {
+        if (pid >= 0) {
+            m_db.unlinkPhotoTag(pid, tagId);
+            m_db.forgetContentTag(m_db.photoHash(pid), tagId);
+        }
+        ++done;
+        if (done % step == 0 || done == total)
+            emit progress(tr("Removing tag…"), done, total);
+    }
+    m_db.commitTransaction();
+
+    emit tagJobFinished();
+}

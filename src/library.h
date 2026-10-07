@@ -32,6 +32,9 @@ class Library : public QObject {
     // A long-running background job (startup migration or folder import) is in
     // progress; progress is 0..1, or < 0 when the total isn't known yet.
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // When busy: true shows the blocking overlay (import/migration/rescan), false
+    // shows the non-blocking bottom status bar (bulk tagging).
+    Q_PROPERTY(bool busyModal READ busyModal NOTIFY busyChanged)
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusChanged)
 
@@ -53,6 +56,7 @@ public:
     QVariantList folders() const;
     int orphanPhotoCount() const;
     bool busy() const { return m_busy; }
+    bool busyModal() const { return m_busyModal; }
     double progress() const { return m_progress; }
     QString statusText() const { return m_statusText; }
 
@@ -86,17 +90,20 @@ signals:
     void requestMigration();
     void requestImport(const QString &root);
     void requestRescan();
+    void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
+    void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
 
 private:
     void applyTags(int photoId);
     void refreshTags();
-    void beginBusy(const QString &status);
+    void beginBusy(const QString &status, bool modal = true);
     void endBusy();
 
     void onWorkerProgress(const QString &phase, int done, int total);
     void onMigrationFinished();
     void onImportFinished(const QString &root);
     void onRescanFinished();
+    void onTagJobFinished();
 
     mutable Database m_db;
     PhotoModel *m_photos;
@@ -108,6 +115,7 @@ private:
 
     bool m_matchAll = true; // mirrors the gallery's "match all tags" toggle
     bool m_busy = false;
+    bool m_busyModal = true;
     double m_progress = -1.0;
     QString m_statusText;
 };

@@ -12,6 +12,12 @@
 
 #include "libraryworker.h"
 
+namespace {
+// Above this many photos, bulk tag add/remove runs on the worker thread with a
+// progress bar instead of blocking the UI; at or below it, apply in place.
+constexpr int kBulkTagThreshold = 100;
+}
+
 Library::Library(QObject *parent)
     : QObject(parent)
     , m_photos(new PhotoModel(this))
@@ -45,10 +51,13 @@ Library::Library(QObject *parent)
     connect(this, &Library::requestMigration, m_worker, &LibraryWorker::runMigration);
     connect(this, &Library::requestImport, m_worker, &LibraryWorker::importDirectory);
     connect(this, &Library::requestRescan, m_worker, &LibraryWorker::rescan);
+    connect(this, &Library::requestAddTagToPhotos, m_worker, &LibraryWorker::addTagToPhotos);
+    connect(this, &Library::requestRemoveTagFromPhotos, m_worker, &LibraryWorker::removeTagFromPhotos);
     connect(m_worker, &LibraryWorker::progress, this, &Library::onWorkerProgress);
     connect(m_worker, &LibraryWorker::migrationFinished, this, &Library::onMigrationFinished);
     connect(m_worker, &LibraryWorker::importFinished, this, &Library::onImportFinished);
     connect(m_worker, &LibraryWorker::rescanFinished, this, &Library::onRescanFinished);
+    connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     m_workerThread.start();
 
     // Kick off the one-time hash backfill. Only show the progress UI when there
@@ -73,16 +82,15 @@ void Library::importDirectory(const QUrl &dir)
     emit requestImport(root); // runs on the worker thread
 }
 
-void Library::beginBusy(const QString &status)
+void Library::beginBusy(const QString &status, bool modal)
 {
     m_statusText = status;
     emit statusChanged();
     m_progress = -1.0; // indeterminate until the first progress report
     emit progressChanged();
-    if (!m_busy) {
-        m_busy = true;
-        emit busyChanged();
-    }
+    m_busyModal = modal;
+    m_busy = true;
+    emit busyChanged(); // also notifies busyModal
 }
 
 void Library::endBusy()
@@ -134,6 +142,14 @@ void Library::onRescanFinished()
     refreshTags();
     endBusy();
     emit foldersChanged();
+}
+
+void Library::onTagJobFinished()
+{
+    // The worker changed photo_tags in bulk; reload the in-memory tags once.
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags(); // tagsChanged refreshes the detail panel in one pass
+    endBusy();
 }
 
 QVariantList Library::folders() const
@@ -216,18 +232,35 @@ void Library::addTagToPhotos(const QVariantList &photoIds, const QString &name)
     const QString trimmed = name.trimmed();
     if (trimmed.isEmpty() || photoIds.isEmpty())
         return;
+
+    QList<int> ids;
+    ids.reserve(photoIds.size());
+    for (const QVariant &v : photoIds) {
+        const int pid = v.toInt();
+        if (pid >= 0)
+            ids.append(pid);
+    }
+    if (ids.isEmpty())
+        return;
+
+    // Large sets: do the writes on the worker thread with a progress bar so the
+    // UI stays responsive. onTagJobFinished reloads the models once.
+    if (ids.size() > kBulkTagThreshold) {
+        beginBusy(tr("Applying tag…"), /*modal=*/false);
+        emit requestAddTagToPhotos(ids, trimmed);
+        return;
+    }
+
     const int tagId = m_db.ensureTag(trimmed);
     if (tagId < 0)
         return;
-    for (const QVariant &v : photoIds) {
-        const int pid = v.toInt();
-        if (pid < 0)
-            continue;
+    m_db.beginTransaction();
+    for (int pid : ids) {
         m_db.linkPhotoTag(pid, tagId);
         m_db.rememberContentTag(m_db.photoHash(pid), tagId);
-        applyTags(pid);
-        emit photoChanged(pid);
+        applyTags(pid); // in-place model update; detail refreshes once via refreshTags
     }
+    m_db.commitTransaction();
     refreshTags();
 }
 
@@ -235,15 +268,30 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
 {
     if (tagId < 0 || photoIds.isEmpty())
         return;
+
+    QList<int> ids;
+    ids.reserve(photoIds.size());
     for (const QVariant &v : photoIds) {
         const int pid = v.toInt();
-        if (pid < 0)
-            continue;
+        if (pid >= 0)
+            ids.append(pid);
+    }
+    if (ids.isEmpty())
+        return;
+
+    if (ids.size() > kBulkTagThreshold) {
+        beginBusy(tr("Removing tag…"), /*modal=*/false);
+        emit requestRemoveTagFromPhotos(ids, tagId);
+        return;
+    }
+
+    m_db.beginTransaction();
+    for (int pid : ids) {
         m_db.unlinkPhotoTag(pid, tagId);
         m_db.forgetContentTag(m_db.photoHash(pid), tagId);
         applyTags(pid);
-        emit photoChanged(pid);
     }
+    m_db.commitTransaction();
     refreshTags();
 }
 

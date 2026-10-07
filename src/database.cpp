@@ -67,6 +67,16 @@ bool Database::open(const QString &path, const QString &connectionName)
     return true;
 }
 
+bool Database::beginTransaction()
+{
+    return m_db.transaction();
+}
+
+bool Database::commitTransaction()
+{
+    return m_db.commit();
+}
+
 bool Database::hasColumn(const QString &table, const QString &column)
 {
     QSqlQuery q(m_db);

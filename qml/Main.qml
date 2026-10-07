@@ -266,6 +266,37 @@ ApplicationWindow {
         value: matchAllSwitch.checked
     }
 
+    // Non-blocking progress bar for background jobs that don't lock the UI
+    // (bulk tagging). Blocking jobs use the centered overlay instead.
+    footer: ToolBar {
+        id: statusBar
+        visible: library.busy && !library.busyModal
+        height: visible ? implicitHeight : 0
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            spacing: 12
+
+            Label {
+                text: library.statusText
+                elide: Text.ElideRight
+            }
+            ProgressBar {
+                Layout.fillWidth: true
+                indeterminate: library.progress < 0
+                from: 0; to: 1
+                value: library.progress < 0 ? 0 : library.progress
+            }
+            Label {
+                visible: library.progress >= 0
+                text: Math.round(library.progress * 100) + "%"
+                color: palette.placeholderText
+            }
+        }
+    }
+
     header: ToolBar {
         RowLayout {
             anchors.fill: parent
@@ -451,7 +482,7 @@ ApplicationWindow {
         modal: true
         dim: true
         closePolicy: Popup.NoAutoClose
-        visible: library.busy
+        visible: library.busy && library.busyModal
         padding: 24
         width: Math.min(420, (Overlay.overlay ? Overlay.overlay.width : width) - 48)
 

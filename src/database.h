@@ -21,6 +21,9 @@ public:
     // file (QSqlDatabase connections are per-thread).
     bool open(const QString &path, const QString &connectionName = {});
 
+    bool beginTransaction();  // wrap many writes in one commit (much faster)
+    bool commitTransaction();
+
     QVector<Photo> loadPhotos();         // only photos in the active (shown) set
     QVector<TagInfo> loadTags();         // tags with >=1 active-folder photo, total count (tag manager)
     QVector<TagInfo> activeTags();       // tags applying to >=1 active photo, with active counts
