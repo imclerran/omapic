@@ -18,6 +18,7 @@ class PhotoFilterModel : public QSortFilterProxyModel {
     QML_UNCREATABLE("Owned by Library")
     Q_PROPERTY(QList<int> selectedTagIds READ selectedTagIds WRITE setSelectedTagIds NOTIFY selectedTagIdsChanged)
     Q_PROPERTY(bool matchAll READ matchAll WRITE setMatchAll NOTIFY matchAllChanged)
+    Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
 
 public:
@@ -29,6 +30,9 @@ public:
     bool matchAll() const { return m_matchAll; }
     void setMatchAll(bool on);
 
+    QString searchText() const { return m_search; }
+    void setSearchText(const QString &text); // matches file name or any tag name
+
     int count() const { return rowCount(); }
 
     // Map a proxy row to its image URL (used by the slideshow).
@@ -39,6 +43,7 @@ public:
 signals:
     void selectedTagIdsChanged();
     void matchAllChanged();
+    void searchTextChanged();
     void countChanged();
 
 protected:
@@ -47,4 +52,5 @@ protected:
 private:
     QSet<int> m_selected;
     bool m_matchAll = true;
+    QString m_search;
 };

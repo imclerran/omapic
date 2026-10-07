@@ -318,6 +318,18 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
+            TextField {
+                id: gallerySearch
+                Layout.preferredWidth: 220
+                placeholderText: qsTr("Search name or tags…")
+                // Combines (AND) with the tag filter from the sidebar.
+                onTextChanged: {
+                    library.filtered.searchText = text
+                    win.scrollGalleryToTop()
+                }
+                Keys.onEscapePressed: text = ""
+            }
+
             ToolButton {
                 text: win.selectedIds.length > 1
                       ? qsTr("▶  Slideshow (%1)").arg(win.selectedIds.length)
@@ -452,9 +464,9 @@ ApplicationWindow {
             Label {
                 anchors.centerIn: parent
                 visible: grid.count === 0
-                text: library.tags.selectedTagIds.length === 0
+                text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === "")
                       ? qsTr("Import a folder to get started.")
-                      : qsTr("No photos match the selected tags.")
+                      : qsTr("No photos match the current filters.")
                 color: palette.placeholderText
             }
         }

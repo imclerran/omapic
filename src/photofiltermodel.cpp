@@ -4,6 +4,9 @@
 
 #include "photofiltermodel.h"
 
+#include <QString>
+#include <QStringList>
+
 #include "photomodel.h"
 
 PhotoFilterModel::PhotoFilterModel(QObject *parent)
@@ -41,6 +44,17 @@ void PhotoFilterModel::setMatchAll(bool on)
     emit countChanged();
 }
 
+void PhotoFilterModel::setSearchText(const QString &text)
+{
+    const QString trimmed = text.trimmed();
+    if (m_search == trimmed)
+        return;
+    m_search = trimmed;
+    invalidateFilter();
+    emit searchTextChanged();
+    emit countChanged();
+}
+
 QUrl PhotoFilterModel::sourceAt(int row) const
 {
     if (row < 0 || row >= rowCount())
@@ -57,26 +71,44 @@ int PhotoFilterModel::idAt(int row) const
 
 bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
-    if (m_selected.isEmpty())
-        return true;
-
     const QModelIndex idx = sourceModel()->index(sourceRow, 0, sourceParent);
-    const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
 
-    QSet<int> tags;
-    tags.reserve(raw.size());
-    for (const QVariant &v : raw)
-        tags.insert(v.toInt());
+    // Tag filter.
+    if (!m_selected.isEmpty()) {
+        const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
+        QSet<int> tags;
+        tags.reserve(raw.size());
+        for (const QVariant &v : raw)
+            tags.insert(v.toInt());
 
-    if (m_matchAll) {
-        for (int t : m_selected)
-            if (!tags.contains(t))
+        if (m_matchAll) {
+            for (int t : m_selected)
+                if (!tags.contains(t))
+                    return false;
+        } else {
+            bool any = false;
+            for (int t : m_selected) {
+                if (tags.contains(t)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any)
                 return false;
-        return true;
+        }
     }
 
-    for (int t : m_selected)
-        if (tags.contains(t))
+    // Text search: match the file name or any tag name.
+    if (!m_search.isEmpty()) {
+        const QString name = sourceModel()->data(idx, PhotoModel::FileNameRole).toString();
+        if (name.contains(m_search, Qt::CaseInsensitive))
             return true;
-    return false;
+        const QStringList tagNames = sourceModel()->data(idx, PhotoModel::TagsRole).toStringList();
+        for (const QString &tn : tagNames)
+            if (tn.contains(m_search, Qt::CaseInsensitive))
+                return true;
+        return false;
+    }
+
+    return true;
 }
