@@ -51,6 +51,22 @@ ApplicationWindow {
         cursorIndex = n - 1
     }
 
+    // Drop any selected ids whose photos have left the library's active set
+    // (e.g. a folder was disabled or removed), so the detail pane doesn't keep
+    // showing hidden photos.
+    function pruneSelection() {
+        if (selectedIds.length === 0)
+            return
+        const kept = selectedIds.filter(function (id) { return library.photos.contains(id) })
+        if (kept.length !== selectedIds.length) {
+            selectedIds = kept
+            if (kept.length === 0) {
+                anchorIndex = -1
+                cursorIndex = -1
+            }
+        }
+    }
+
     function handleClick(index, id, modifiers) {
         if ((modifiers & Qt.ShiftModifier) && anchorIndex >= 0) {
             cursorIndex = index
@@ -209,6 +225,13 @@ ApplicationWindow {
         id: tagManager
         library: library
         accent: win.accent
+    }
+
+    // When the active photo set changes (folder enabled/disabled/removed, rescan,
+    // orphan cleanup), drop selected photos that are no longer shown.
+    Connections {
+        target: library
+        function onFoldersChanged() { win.pruneSelection() }
     }
 
     // Push the sidebar's tag selection and the toolbar's match mode into the filter.

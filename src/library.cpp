@@ -385,17 +385,23 @@ void Library::refreshTags()
     // co-occur on the currently-matching photos (faceted drill-down), so chips
     // that could only ever yield an empty result disappear.
     const QList<int> sel = m_tags->selectedTagIds();
-    QVector<TagInfo> tags =
-        (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel) : m_db.activeTags();
+    const QVector<TagInfo> active = m_db.activeTags();
+    QSet<int> activeIds;
+    for (const TagInfo &t : active)
+        activeIds.insert(t.id);
 
-    // Keep every selected tag present (even if the match set is momentarily empty,
-    // e.g. after switching an incompatible selection into match-all) so it stays
-    // visible and can be deselected.
+    QVector<TagInfo> tags =
+        (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel) : active;
+
+    // Keep a selected tag visible only while it still applies to some active
+    // photo. This keeps an incompatible match-all pick deselectable, but lets a
+    // tag whose photos all left the active set (e.g. its folder was disabled) be
+    // pruned by setTags, which drops it from the selection and the filter.
     QSet<int> have;
     for (const TagInfo &t : tags)
         have.insert(t.id);
     for (int id : sel) {
-        if (!have.contains(id)) {
+        if (!have.contains(id) && activeIds.contains(id)) {
             TagInfo t;
             t.id = id;
             t.name = m_db.tagName(id);

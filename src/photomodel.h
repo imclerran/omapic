@@ -35,6 +35,7 @@ public:
     void setPhotos(QVector<Photo> photos);
     void appendPhoto(const Photo &photo);
     int rowForId(int id) const;
+    Q_INVOKABLE bool contains(int id) const { return rowForId(id) >= 0; }
     Photo photoById(int id) const;
     void setTagsForId(int photoId, const QSet<int> &ids, const QStringList &names);
 
