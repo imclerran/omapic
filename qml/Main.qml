@@ -263,7 +263,7 @@ ApplicationWindow {
     Binding {
         target: library.filtered
         property: "matchAll"
-        value: matchAllSwitch.checked
+        value: tagSidebar.matchAll
     }
 
     // Non-blocking progress bar for background jobs that don't lock the UI
@@ -318,15 +318,6 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
-            Switch {
-                id: matchAllSwitch
-                text: qsTr("Match all tags")
-                checked: true
-                // Keep the library's filter mode in sync so the sidebar can
-                // narrow its tags to the current match set when this is on.
-                onCheckedChanged: { library.setMatchAll(checked); win.scrollGalleryToTop() }
-                Component.onCompleted: library.setMatchAll(checked)
-            }
             ToolButton {
                 text: win.selectedIds.length > 1
                       ? qsTr("▶  Slideshow (%1)").arg(win.selectedIds.length)
@@ -361,10 +352,15 @@ ApplicationWindow {
             }
 
             TagSidebar {
+                id: tagSidebar
                 SplitView.fillHeight: true
                 SplitView.minimumHeight: 120
                 tagModel: library.tags
                 accent: win.accent
+                // Keep the library's filter mode in sync so the sidebar can
+                // narrow its tags to the current match set when this is on.
+                onMatchAllChanged: { library.setMatchAll(matchAll); win.scrollGalleryToTop() }
+                Component.onCompleted: library.setMatchAll(matchAll)
             }
         }
 

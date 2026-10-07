@@ -11,6 +11,8 @@ Rectangle {
 
     property var tagModel
     property color accent: "#4a90d9"
+    // Exposed so Main can drive the filter / faceting from this toggle.
+    property alias matchAll: matchAllSwitch.checked
 
     // How many chips match the current search text (all of them when empty).
     function matchCount(q) {
@@ -131,6 +133,16 @@ Rectangle {
                       : qsTr("No tags match “%1”.").arg(searchField.text.trim())
                 color: palette.placeholderText
             }
+        }
+
+        MenuSeparator { Layout.fillWidth: true }
+
+        Switch {
+            id: matchAllSwitch
+            text: qsTr("Match all tags")
+            checked: true
+            Layout.leftMargin: 8
+            Layout.bottomMargin: 4
         }
     }
 }
