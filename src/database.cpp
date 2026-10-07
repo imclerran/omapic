@@ -166,11 +166,19 @@ QVector<Photo> Database::loadPhotos()
 
 QVector<TagInfo> Database::loadTags()
 {
+    // Tags that apply to at least one photo in an active (enabled, non-removed)
+    // folder, so the tag manager hides tags living only on hidden-folder or
+    // removed-folder images. The count is still the tag's total across all
+    // photos, so the delete confirmation reflects everything it would remove.
     QVector<TagInfo> tags;
     QSqlQuery q(QStringLiteral(
                     "SELECT t.id, t.name, COUNT(pt.photo_id) "
                     "FROM tags t LEFT JOIN photo_tags pt ON pt.tag_id = t.id "
-                    "GROUP BY t.id, t.name ORDER BY t.name"),
+                    "WHERE EXISTS (SELECT 1 FROM photo_tags pt2 "
+                    "              JOIN photos p ON p.id = pt2.photo_id "
+                    "              WHERE pt2.tag_id = t.id AND %1) "
+                    "GROUP BY t.id, t.name ORDER BY t.name")
+                    .arg(activeClause(QStringLiteral("p"))),
                 m_db);
     while (q.next()) {
         TagInfo info;

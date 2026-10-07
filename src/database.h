@@ -22,7 +22,7 @@ public:
     bool open(const QString &path, const QString &connectionName = {});
 
     QVector<Photo> loadPhotos();         // only photos in the active (shown) set
-    QVector<TagInfo> loadTags();         // every tag, with its total photo count
+    QVector<TagInfo> loadTags();         // tags with >=1 active-folder photo, total count (tag manager)
     QVector<TagInfo> activeTags();       // tags applying to >=1 active photo, with active counts
     // Tags on the active photos that carry ALL of `selected` (faceted drill-down),
     // counted over that matching set. Used for the "match all" filter sidebar.

@@ -312,6 +312,8 @@ QStringList Library::allTagNames() const
 
 QVariantList Library::allTags() const
 {
+    // Tags shown in the tag manager: those with at least one photo in an active
+    // folder (hidden-folder-only and removed-folder-only tags are left out).
     QVariantList out;
     for (const TagInfo &t : m_db.loadTags()) {
         out.append(QVariantMap{
