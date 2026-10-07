@@ -318,6 +318,22 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
+            ToolButton {
+                id: tagPresenceButton
+                property int mode: 0 // 0 all, 1 tagged only, 2 untagged only
+                text: mode === 0 ? qsTr("All photos")
+                    : mode === 1 ? qsTr("Tagged only")
+                    : qsTr("Untagged only")
+                highlighted: mode !== 0
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Cycle: all photos → tagged only → untagged only")
+                onClicked: {
+                    mode = (mode + 1) % 3
+                    library.filtered.tagPresence = mode
+                    win.scrollGalleryToTop()
+                }
+            }
+
             TextField {
                 id: gallerySearch
                 Layout.preferredWidth: 220
@@ -464,7 +480,8 @@ ApplicationWindow {
             Label {
                 anchors.centerIn: parent
                 visible: grid.count === 0
-                text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === "")
+                text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === ""
+                       && tagPresenceButton.mode === 0)
                       ? qsTr("Import a folder to get started.")
                       : qsTr("No photos match the current filters.")
                 color: palette.placeholderText

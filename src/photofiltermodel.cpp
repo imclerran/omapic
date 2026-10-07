@@ -55,6 +55,16 @@ void PhotoFilterModel::setSearchText(const QString &text)
     emit countChanged();
 }
 
+void PhotoFilterModel::setTagPresence(TagPresence mode)
+{
+    if (m_tagPresence == mode)
+        return;
+    m_tagPresence = mode;
+    invalidateFilter();
+    emit tagPresenceChanged();
+    emit countChanged();
+}
+
 QUrl PhotoFilterModel::sourceAt(int row) const
 {
     if (row < 0 || row >= rowCount())
@@ -96,6 +106,15 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
             if (!any)
                 return false;
         }
+    }
+
+    // Tagged / untagged restriction.
+    if (m_tagPresence != AnyTags) {
+        const bool hasTags = !sourceModel()->data(idx, PhotoModel::TagIdsRole).toList().isEmpty();
+        if (m_tagPresence == TaggedOnly && !hasTags)
+            return false;
+        if (m_tagPresence == UntaggedOnly && hasTags)
+            return false;
     }
 
     // Text search: match the file name or any tag name.
