@@ -9,6 +9,7 @@ Item {
     id: root
 
     property bool selected: false
+    property bool crop: true
     property color accent: "#4a90d9"
 
     signal clicked(int modifiers)
@@ -19,7 +20,10 @@ Item {
     Rectangle {
         anchors.fill: parent
         anchors.margins: 4
-        color: sys.alternateBase
+        // Cropped thumbnails fill the card, so a distinct card color reads well.
+        // Fitted thumbnails letterbox, so match the gallery background and let
+        // the empty space blend in rather than showing a grey box.
+        color: root.crop ? sys.alternateBase : sys.base
         border.color: root.selected ? root.accent : "transparent"
         border.width: 3
         radius: 4
@@ -28,7 +32,7 @@ Item {
             anchors.fill: parent
             anchors.margins: 4
             source: "image://thumbs/" + encodeURIComponent(model.filePath)
-            fillMode: Image.PreserveAspectCrop
+            fillMode: root.crop ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
             cache: true
             sourceSize.width: 320

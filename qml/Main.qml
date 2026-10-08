@@ -17,6 +17,12 @@ ApplicationWindow {
 
     readonly property color accent: omarchyTheme.accent
 
+    // Grid thumbnail sizes (square cell edge, px): xs, sm, md, lg. "md" is the
+    // original default. The chosen index is persisted in gallerySettings.
+    readonly property var thumbSizes: [120, 152, 184, 240]
+    readonly property int thumbIndex: Math.max(0, Math.min(thumbSizes.length - 1, gallerySettings.thumbIndex))
+    readonly property int cellSize: thumbSizes[thumbIndex]
+
     // Multi-selection state: ids of selected photos, plus the anchor row for
     // shift-range selection. Reassign selectedIds wholesale so bindings update.
     property var selectedIds: []
@@ -226,6 +232,16 @@ ApplicationWindow {
         property bool randomStart: false
     }
 
+    Settings {
+        id: gallerySettings
+        category: "gallery"
+        // Index into win.thumbSizes; 2 == "md", the original thumbnail size.
+        property int thumbIndex: 2
+        // true: crop thumbnails to a square (original behavior). false: fit the
+        // whole image, letterboxed to its true aspect ratio.
+        property bool cropThumbs: true
+    }
+
     LibraryManager {
         id: libraryManager
         library: library
@@ -308,6 +324,44 @@ ApplicationWindow {
                 visible: library.busy && !library.busyModal && library.progress >= 0
                 text: Math.round(library.progress * 100) + "%"
                 color: palette.placeholderText
+            }
+
+            // Toggle thumbnails between cropped-to-square and whole-image (fit).
+            ToolButton {
+                text: gallerySettings.cropThumbs ? qsTr("◼ Crop") : qsTr("▭ Fit")
+                checkable: true
+                checked: !gallerySettings.cropThumbs
+                onToggled: gallerySettings.cropThumbs = !checked
+                ToolTip.visible: hovered
+                ToolTip.text: gallerySettings.cropThumbs
+                              ? qsTr("Cropping thumbnails to squares")
+                              : qsTr("Fitting whole images to their aspect ratio")
+            }
+
+            // Thumbnail size control: drag to pick xs / sm / md / lg. Flanked by
+            // small and large glyphs so the direction reads at a glance.
+            Label {
+                text: "▪"
+                color: palette.placeholderText
+                font.pixelSize: 11
+            }
+            Slider {
+                id: thumbSizeSlider
+                Layout.preferredWidth: 90
+                from: 0
+                to: win.thumbSizes.length - 1
+                stepSize: 1
+                snapMode: Slider.SnapAlways
+                value: gallerySettings.thumbIndex
+                onMoved: gallerySettings.thumbIndex = Math.round(value)
+
+                ToolTip.visible: hovered || pressed
+                ToolTip.text: ["Extra small", "Small", "Medium", "Large"][win.thumbIndex]
+            }
+            Label {
+                text: "◼"
+                color: palette.placeholderText
+                font.pixelSize: 16
             }
         }
     }
@@ -407,8 +461,8 @@ ApplicationWindow {
                 id: grid
                 anchors.fill: parent
                 clip: true
-                cellWidth: 184
-                cellHeight: 184
+                cellWidth: win.cellSize
+                cellHeight: win.cellSize
                 model: library.filtered
                 boundsBehavior: Flickable.StopAtBounds
 
@@ -446,6 +500,7 @@ ApplicationWindow {
                     width: grid.cellWidth
                     height: grid.cellHeight
                     accent: win.accent
+                    crop: gallerySettings.cropThumbs
                     selected: win.selectedIds.indexOf(model.id) !== -1
                     onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
                     onDoubleClicked: win.startSlideshow(model.id, false)
