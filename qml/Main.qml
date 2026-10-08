@@ -293,6 +293,11 @@ ApplicationWindow {
     footer: ToolBar {
         id: statusBar
 
+        // Keep the status bar slim: the ToolButton's default padding would
+        // otherwise dictate a much taller bar.
+        topPadding: 2
+        bottomPadding: 2
+
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 8
@@ -332,6 +337,13 @@ ApplicationWindow {
                 checkable: true
                 checked: !gallerySettings.cropThumbs
                 onToggled: gallerySettings.cropThumbs = !checked
+                // Compact: trim the default padding so it doesn't inflate the bar.
+                font.pixelSize: 12
+                topPadding: 3
+                bottomPadding: 3
+                leftPadding: 10
+                rightPadding: 10
+                Layout.preferredHeight: 24
                 ToolTip.visible: hovered
                 ToolTip.text: gallerySettings.cropThumbs
                               ? qsTr("Cropping thumbnails to squares")
@@ -348,6 +360,7 @@ ApplicationWindow {
             Slider {
                 id: thumbSizeSlider
                 Layout.preferredWidth: 90
+                Layout.preferredHeight: 24
                 from: 0
                 to: win.thumbSizes.length - 1
                 stepSize: 1
