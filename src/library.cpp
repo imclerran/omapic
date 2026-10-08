@@ -5,7 +5,10 @@
 #include "library.h"
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QHash>
+#include <QProcess>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -16,6 +19,29 @@ namespace {
 // Above this many photos, bulk tag add/remove runs on the worker thread with a
 // progress bar instead of blocking the UI; at or below it, apply in place.
 constexpr int kBulkTagThreshold = 100;
+
+// The active Omarchy theme's short name (the folder name under themes/), read
+// from the state file the theme switcher keeps. Empty if it can't be read.
+QString currentOmarchyTheme()
+{
+    QFile f(QDir::homePath() + QStringLiteral("/.local/state/omarchy/current/theme.name"));
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+    return QString::fromUtf8(f.readAll()).trimmed();
+}
+
+// Copy srcPath into destDir (created if needed), keeping the original filename.
+// If a file with that name is already there, treat it as already installed
+// rather than duplicating it. Returns true once the file is present in destDir.
+bool copyIntoDir(const QString &srcPath, const QString &destDir)
+{
+    if (!QDir().mkpath(destDir))
+        return false;
+    const QString dest = destDir + QLatin1Char('/') + QFileInfo(srcPath).fileName();
+    if (QFile::exists(dest))
+        return true; // same name already present — nothing to do
+    return QFile::copy(srcPath, dest);
+}
 }
 
 Library::Library(QObject *parent)
@@ -199,6 +225,87 @@ void Library::removeOrphanPhotos()
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
     emit foldersChanged();
+}
+
+void Library::removeFromLibrary(int photoId)
+{
+    if (photoId < 0)
+        return;
+    m_db.deletePhoto(photoId); // content_tags archive (keyed by hash) survives
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    emit foldersChanged(); // folder tallies / orphan count may change
+}
+
+bool Library::deleteFromDisk(int photoId)
+{
+    if (photoId < 0)
+        return false;
+    const Photo p = m_photos->photoById(photoId);
+    if (p.id < 0)
+        return false;
+
+    // Trash rather than unlink: still "gone from disk" from the library's view,
+    // but recoverable from the file manager. If trashing isn't supported, the
+    // caller is told (we keep the row) instead of silently hard-deleting.
+    QFile f(p.path);
+    if (f.exists() && !f.moveToTrash())
+        return false;
+
+    m_db.deletePhoto(photoId);
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    emit foldersChanged();
+    return true;
+}
+
+bool Library::addToThemeWallpapers(int photoId)
+{
+    const Photo p = m_photos->photoById(photoId);
+    if (p.id < 0)
+        return false;
+    // Goes into the *user* backgrounds folder for the active theme, keyed by its
+    // slug, so the wallpaper shows up only while that theme is active.
+    const QString theme = currentOmarchyTheme();
+    if (theme.isEmpty())
+        return false;
+    return copyIntoDir(p.path, QDir::homePath()
+                                   + QStringLiteral("/.config/omarchy/backgrounds/") + theme);
+}
+
+bool Library::editThemeInAether(int photoId)
+{
+    const Photo p = m_photos->photoById(photoId);
+    if (p.id < 0)
+        return false;
+
+    // Load the photo into Aether's GUI editor so a new theme can be tweaked
+    // before applying — deliberately not `--generate`, which would apply a theme
+    // immediately (that's setAetherTheme). `aether extract` talks to a running
+    // GUI over its control socket, so: start the GUI if it isn't up, then retry
+    // `extract` until the socket is ready. Run in a detached shell so the wait
+    // never blocks omapic's UI thread.
+    static const QString script = QStringLiteral(
+        "sock=\"$HOME/.config/aether/aether.sock\"\n"
+        "if [ ! -S \"$sock\" ]; then setsid aether >/dev/null 2>&1 & fi\n"
+        "for i in $(seq 1 100); do\n"
+        "  aether extract \"$1\" >/dev/null 2>&1 && exit 0\n"
+        "  sleep 0.2\n"
+        "done\n"
+        "exit 1\n");
+    return QProcess::startDetached(QStringLiteral("sh"),
+                                   {QStringLiteral("-c"), script,
+                                    QStringLiteral("sh"), p.path});
+}
+
+bool Library::setAetherTheme(int photoId)
+{
+    const Photo p = m_photos->photoById(photoId);
+    if (p.id < 0)
+        return false;
+    // Extract colors from the photo and apply the generated theme right away.
+    return QProcess::startDetached(QStringLiteral("aether"),
+                                   {QStringLiteral("--generate"), p.path});
 }
 
 void Library::addTag(int photoId, const QString &name)

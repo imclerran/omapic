@@ -78,6 +78,24 @@ public:
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
 
+    // --- Single-photo context-menu actions ---
+    // Drop the photo from the library only; the file on disk is left untouched.
+    Q_INVOKABLE void removeFromLibrary(int photoId);
+    // Move the file to the Trash, then drop it from the library. Returns false
+    // (and keeps the library row) if the file couldn't be trashed, so a photo is
+    // never silently lost from the library while still present on disk.
+    Q_INVOKABLE bool deleteFromDisk(int photoId);
+    // Copy the photo into the active theme's user backgrounds folder
+    // (~/.config/omarchy/backgrounds/<theme>/), so it joins that theme's wallpaper
+    // rotation — and only that theme's. Returns false on failure.
+    Q_INVOKABLE bool addToThemeWallpapers(int photoId);
+    // Load the photo into Aether's GUI editor to craft a new theme from it,
+    // without applying anything yet. Returns false if the helper couldn't start.
+    Q_INVOKABLE bool editThemeInAether(int photoId);
+    // Generate a desktop theme from the photo and apply it immediately via Aether.
+    // Returns false if the process couldn't be launched.
+    Q_INVOKABLE bool setAetherTheme(int photoId);
+
 signals:
     void photoChanged(int photoId);
     void foldersChanged();

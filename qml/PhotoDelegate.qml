@@ -14,6 +14,7 @@ Item {
 
     signal clicked(int modifiers)
     signal doubleClicked()
+    signal rightClicked()
 
     SystemPalette { id: sys }
 
@@ -63,8 +64,13 @@ Item {
 
     MouseArea {
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
-        onClicked: (mouse) => root.clicked(mouse.modifiers)
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: (mouse) => {
+            if (mouse.button === Qt.RightButton)
+                root.rightClicked()
+            else
+                root.clicked(mouse.modifiers)
+        }
         onDoubleClicked: root.doubleClicked()
     }
 }

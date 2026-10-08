@@ -29,6 +29,18 @@ ApplicationWindow {
     property int anchorIndex: -1
     property int cursorIndex: -1
 
+    // The photo the right-click context menu currently targets. Set when the
+    // menu opens and read by the menu items and the remove/delete confirm dialogs.
+    property int menuPhotoId: -1
+    property string menuPhotoName: ""
+
+    // Brief, self-dismissing status message (wallpaper added, Aether failed, …).
+    function toast(message) {
+        toastLabel.text = message
+        toastPopup.open()
+        toastTimer.restart()
+    }
+
     // The unshuffled slideshow playlist, kept so shuffle can be toggled live.
     property var slideshowBase: []
     // Shuffle state for the CURRENT slideshow only; seeded from the saved
@@ -537,6 +549,14 @@ ApplicationWindow {
                     selected: win.selectedIds.indexOf(model.id) !== -1
                     onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
                     onDoubleClicked: win.startSlideshow(model.id, false)
+                    onRightClicked: {
+                        // Target just this photo, and select it so it's clear
+                        // which one the menu acts on.
+                        win.handleClick(index, model.id, 0)
+                        win.menuPhotoId = model.id
+                        win.menuPhotoName = model.fileName
+                        photoMenu.popup()
+                    }
                 }
             }
 
@@ -703,6 +723,123 @@ ApplicationWindow {
                     onToggled: appSettings.randomStart = checked
                 }
             }
+        }
+    }
+
+    // Right-click context menu for a single photo. Opened by PhotoDelegate via
+    // win.menuPhotoId / win.menuPhotoName, which every item below reads.
+    Menu {
+        id: photoMenu
+
+        MenuItem {
+            text: qsTr("View photo")
+            onTriggered: win.startSlideshow(win.menuPhotoId, false)
+        }
+        MenuItem {
+            text: qsTr("Play slideshow")
+            onTriggered: win.startSlideshow(win.menuPhotoId, true)
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            text: qsTr("Add to theme wallpapers")
+            onTriggered: win.toast(library.addToThemeWallpapers(win.menuPhotoId)
+                                   ? qsTr("Added to theme wallpapers")
+                                   : qsTr("Couldn't add to theme wallpapers"))
+        }
+        MenuItem {
+            text: qsTr("Edit theme in Aether")
+            onTriggered: {
+                if (!library.editThemeInAether(win.menuPhotoId))
+                    win.toast(qsTr("Couldn't launch Aether"))
+            }
+        }
+        MenuItem {
+            text: qsTr("Set as Aether theme")
+            onTriggered: {
+                if (!library.setAetherTheme(win.menuPhotoId))
+                    win.toast(qsTr("Couldn't launch Aether"))
+            }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            text: qsTr("Remove from library")
+            onTriggered: removeConfirm.open()
+        }
+        MenuItem {
+            text: qsTr("Delete from disk")
+            onTriggered: deleteConfirm.open()
+        }
+    }
+
+    // "Remove from library": drops the entry but leaves the file on disk.
+    Dialog {
+        id: removeConfirm
+        title: qsTr("Remove from library")
+        anchors.centerIn: parent
+        modal: true
+        width: 420
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: library.removeFromLibrary(win.menuPhotoId)
+
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: qsTr("Remove “%1” from the library?\n\nThe file stays on disk — only its library entry and tags are removed.")
+                  .arg(win.menuPhotoName)
+        }
+    }
+
+    // "Delete from disk": moves the file to the Trash, then drops the entry.
+    Dialog {
+        id: deleteConfirm
+        title: qsTr("Delete from disk")
+        anchors.centerIn: parent
+        modal: true
+        width: 420
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: {
+            if (!library.deleteFromDisk(win.menuPhotoId))
+                win.toast(qsTr("Couldn't delete the file"))
+        }
+
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: qsTr("Delete “%1”?\n\nThe file is moved to the Trash and removed from the library.")
+                  .arg(win.menuPhotoName)
+        }
+    }
+
+    // Transient status toast (see win.toast). Floats near the bottom, fades out.
+    Popup {
+        id: toastPopup
+        parent: Overlay.overlay
+        x: Math.round(((parent ? parent.width : width) - width) / 2)
+        y: (parent ? parent.height : height) - height - 48
+        modal: false
+        closePolicy: Popup.NoAutoClose
+        padding: 12
+
+        background: Rectangle {
+            color: palette.window
+            radius: 8
+            border.color: palette.mid
+        }
+
+        Label {
+            id: toastLabel
+            color: palette.windowText
+            font.pixelSize: 13
+        }
+
+        Timer {
+            id: toastTimer
+            interval: 2200
+            onTriggered: toastPopup.close()
         }
     }
 }
