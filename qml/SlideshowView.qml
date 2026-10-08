@@ -190,7 +190,7 @@ Window {
         id: namePlate
         visible: root.showName && root.currentName !== ""
         anchors.left: parent.left
-        anchors.bottom: parent.bottom
+        anchors.top: parent.top
         anchors.margins: 24
         radius: 6
         color: Qt.rgba(0, 0, 0, 0.6)
