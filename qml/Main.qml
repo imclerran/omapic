@@ -158,12 +158,14 @@ ApplicationWindow {
 
     // Build the slideshow set: the selection when more than one is selected,
     // otherwise the whole filtered set — in grid order, starting at startId.
-    // play=false opens the slideshow paused.
-    function startSlideshow(startId, play) {
+    // play=false opens the slideshow paused. forceStart begins at startId even
+    // when playing, overriding the random-start setting (used by "Play from here").
+    function startSlideshow(startId, play, forceStart) {
         const selectedOnly = selectedIds.length > 1
         // Enter / double-click (play === false) on a specific photo start there,
-        // ignoring random start. Play / Space (play === true) let random start win.
-        const honorStart = (!play && startId >= 0)
+        // ignoring random start; so does "Play from here" (forceStart). Play /
+        // Space (play === true) otherwise let random start win.
+        const honorStart = (startId >= 0) && (!play || forceStart === true)
         const srcs = []
         let startPos = 0
         const n = library.filtered.count
@@ -736,8 +738,8 @@ ApplicationWindow {
             onTriggered: win.startSlideshow(win.menuPhotoId, false)
         }
         MenuItem {
-            text: qsTr("Play slideshow")
-            onTriggered: win.startSlideshow(win.menuPhotoId, true)
+            text: qsTr("Play from here")
+            onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
 
         MenuSeparator {}
