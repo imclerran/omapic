@@ -104,27 +104,52 @@ void Library::importDirectory(const QUrl &dir)
     const QString root = dir.toLocalFile();
     if (root.isEmpty())
         return;
-    beginBusy(tr("Importing folder…"));
+    // Non-modal: the import runs on the worker thread, so report progress in the
+    // status bar (like bulk tagging) and leave the library usable meanwhile,
+    // rather than blocking behind the modal overlay.
+    beginBusy(tr("Importing folder…"), /*modal=*/false);
     emit requestImport(root); // runs on the worker thread
 }
 
 void Library::beginBusy(const QString &status, bool modal)
 {
-    m_statusText = status;
-    emit statusChanged();
-    m_progress = -1.0; // indeterminate until the first progress report
-    emit progressChanged();
-    m_busyModal = modal;
-    m_busy = true;
-    emit busyChanged(); // also notifies busyModal
+    // Only the first job to start sets the initial label and an indeterminate
+    // bar. If something is already running, leave its reporting untouched: the
+    // newly queued job is serialized behind it on the worker, and its own
+    // progress signals will take over the label once the worker reaches it —
+    // which avoids briefly flashing the second job's label over the first.
+    if (m_busyCount == 0) {
+        m_statusText = status;
+        emit statusChanged();
+        m_progress = -1.0; // indeterminate until the first progress report
+        emit progressChanged();
+    }
+
+    ++m_busyCount;
+    if (modal)
+        ++m_modalCount;
+    updateBusyState();
 }
 
-void Library::endBusy()
+void Library::endBusy(bool modal)
 {
-    if (!m_busy)
+    if (m_busyCount == 0)
         return;
-    m_busy = false;
-    emit busyChanged();
+    --m_busyCount;
+    if (modal && m_modalCount > 0)
+        --m_modalCount;
+    updateBusyState();
+}
+
+void Library::updateBusyState()
+{
+    const bool busy = m_busyCount > 0;
+    const bool modal = m_modalCount > 0;
+    if (busy == m_busy && modal == m_busyModal)
+        return;
+    m_busy = busy;
+    m_busyModal = modal;
+    emit busyChanged(); // also notifies busyModal
 }
 
 void Library::onWorkerProgress(const QString &phase, int done, int total)
@@ -142,7 +167,7 @@ void Library::onWorkerProgress(const QString &phase, int done, int total)
 
 void Library::onMigrationFinished()
 {
-    endBusy();
+    endBusy(/*modal=*/true);
 }
 
 void Library::onImportFinished(const QString &root)
@@ -151,13 +176,15 @@ void Library::onImportFinished(const QString &root)
     // The worker wrote the rows; refresh the in-memory views from the DB.
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
-    endBusy();
+    endBusy(/*modal=*/false); // import reports in the status bar
     emit foldersChanged();
 }
 
 void Library::rescan()
 {
-    beginBusy(tr("Scanning folders…"));
+    // Non-modal: runs on the worker thread, so report in the status bar and keep
+    // the library usable (same as import), rather than blocking behind the overlay.
+    beginBusy(tr("Scanning folders…"), /*modal=*/false);
     emit requestRescan(); // runs on the worker thread
 }
 
@@ -166,7 +193,7 @@ void Library::onRescanFinished()
     // Rows were added/relocated/removed on the worker's connection; reload.
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
-    endBusy();
+    endBusy(/*modal=*/false); // rescan reports in the status bar
     emit foldersChanged();
 }
 
@@ -175,7 +202,7 @@ void Library::onTagJobFinished()
     // The worker changed photo_tags in bulk; reload the in-memory tags once.
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags(); // tagsChanged refreshes the detail panel in one pass
-    endBusy();
+    endBusy(/*modal=*/false); // bulk tagging reports in the status bar
 }
 
 QVariantList Library::folders() const
@@ -316,7 +343,7 @@ void Library::addTag(int photoId, const QString &name)
     const int tagId = m_db.ensureTag(trimmed);
     if (tagId < 0)
         return;
-    m_db.linkPhotoTag(photoId, tagId);
+    m_db.linkTagToContent(photoId, tagId); // every copy of this content, not just the visible one
     m_db.rememberContentTag(m_db.photoHash(photoId), tagId);
     applyTags(photoId);
     refreshTags();
@@ -327,7 +354,7 @@ void Library::removeTag(int photoId, int tagId)
 {
     if (photoId < 0 || tagId < 0)
         return;
-    m_db.unlinkPhotoTag(photoId, tagId);
+    m_db.unlinkTagFromContent(photoId, tagId); // every copy of this content
     m_db.forgetContentTag(m_db.photoHash(photoId), tagId);
     applyTags(photoId);
     refreshTags();
@@ -363,7 +390,7 @@ void Library::addTagToPhotos(const QVariantList &photoIds, const QString &name)
         return;
     m_db.beginTransaction();
     for (int pid : ids) {
-        m_db.linkPhotoTag(pid, tagId);
+        m_db.linkTagToContent(pid, tagId); // every copy of this content
         m_db.rememberContentTag(m_db.photoHash(pid), tagId);
         applyTags(pid); // in-place model update; detail refreshes once via refreshTags
     }
@@ -394,7 +421,7 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
 
     m_db.beginTransaction();
     for (int pid : ids) {
-        m_db.unlinkPhotoTag(pid, tagId);
+        m_db.unlinkTagFromContent(pid, tagId); // every copy of this content
         m_db.forgetContentTag(m_db.photoHash(pid), tagId);
         applyTags(pid);
     }

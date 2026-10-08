@@ -52,6 +52,11 @@ public:
     void renameTag(int tagId, const QString &newName);
     bool linkPhotoTag(int photoId, int tagId);
     bool unlinkPhotoTag(int photoId, int tagId);
+    // Link/unlink a tag on every photo row sharing this photo's content hash, so
+    // duplicates collapsed out of the gallery stay in lockstep with the visible
+    // copy. Falls back to the single row when the hash isn't computed yet.
+    void linkTagToContent(int photoId, int tagId);
+    void unlinkTagFromContent(int photoId, int tagId);
     void deleteTag(int tagId); // delete a tag and all its photo links
 
     QVector<QPair<int, QString>> photoTagPairs(int photoId);

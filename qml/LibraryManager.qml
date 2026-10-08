@@ -18,7 +18,8 @@ Dialog {
     modal: true
     anchors.centerIn: parent
     width: Math.min(620, (parent ? parent.width : 620) - 80)
-    standardButtons: Dialog.Close
+    // No standardButtons: Close lives in the single bottom row below, alongside
+    // Add Folder and Rescan, so the dialog needs only one button row.
 
     // Folder the user is about to remove; -1 when no confirmation is pending.
     property int pendingId: -1
@@ -190,13 +191,17 @@ Dialog {
                 text: qsTr("Add Folder…")
                 onClicked: addDialog.open()
             }
-            Item { Layout.fillWidth: true }
             Button {
                 text: qsTr("Rescan")
                 enabled: list.count > 0
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Pick up new, moved, and deleted files on disk")
                 onClicked: root.library.rescan()
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: qsTr("Close")
+                onClicked: root.close()
             }
         }
     }

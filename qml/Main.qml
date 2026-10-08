@@ -334,7 +334,9 @@ ApplicationWindow {
             }
             ProgressBar {
                 visible: library.busy && !library.busyModal
-                Layout.preferredWidth: 180
+                // Compact fixed width so it reads as a status element rather than
+                // stretching across the bar.
+                Layout.preferredWidth: 100
                 indeterminate: library.progress < 0
                 from: 0; to: 1
                 value: library.progress < 0 ? 0 : library.progress

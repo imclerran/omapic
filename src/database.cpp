@@ -144,8 +144,19 @@ QVector<Photo> Database::loadPhotos()
     QHash<int, int> indexOf;
     QVector<Photo> photos;
 
-    QSqlQuery q(QStringLiteral("SELECT id, path FROM photos WHERE %1 ORDER BY added_at, id")
-                    .arg(activeClause(QStringLiteral("photos"))),
+    // Collapse duplicates: among the active photos, show at most one row per
+    // content hash — the earliest added (by added_at, then id). Rows whose hash
+    // isn't computed yet (NULL/empty) are always shown, so nothing disappears
+    // before the background hashing catches up, and the representative is chosen
+    // only from photos that are themselves active, so disabling the folder
+    // holding the kept copy promotes a still-visible duplicate in its place.
+    QSqlQuery q(QStringLiteral(
+                    "SELECT p.id, p.path FROM photos p WHERE %1 "
+                    "AND (p.hash IS NULL OR p.hash = '' OR p.id = ("
+                    "  SELECT p2.id FROM photos p2 WHERE p2.hash = p.hash AND %2 "
+                    "  ORDER BY p2.added_at, p2.id LIMIT 1)) "
+                    "ORDER BY p.added_at, p.id")
+                    .arg(activeClause(QStringLiteral("p")), activeClause(QStringLiteral("p2"))),
                 m_db);
     while (q.next()) {
         Photo p;
@@ -579,6 +590,39 @@ bool Database::unlinkPhotoTag(int photoId, int tagId)
     q.addBindValue(photoId);
     q.addBindValue(tagId);
     return q.exec();
+}
+
+void Database::linkTagToContent(int photoId, int tagId)
+{
+    const QString hash = photoHash(photoId);
+    if (hash.isEmpty()) {
+        linkPhotoTag(photoId, tagId);
+        return;
+    }
+    // One statement tags every copy of this content at once (cheap via idx_photos_hash).
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO photo_tags(photo_id, tag_id) "
+        "SELECT id, ? FROM photos WHERE hash = ?"));
+    q.addBindValue(tagId);
+    q.addBindValue(hash);
+    q.exec();
+}
+
+void Database::unlinkTagFromContent(int photoId, int tagId)
+{
+    const QString hash = photoHash(photoId);
+    if (hash.isEmpty()) {
+        unlinkPhotoTag(photoId, tagId);
+        return;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "DELETE FROM photo_tags WHERE tag_id = ? "
+        "AND photo_id IN (SELECT id FROM photos WHERE hash = ?)"));
+    q.addBindValue(tagId);
+    q.addBindValue(hash);
+    q.exec();
 }
 
 void Database::deleteTag(int tagId)

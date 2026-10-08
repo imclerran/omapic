@@ -230,7 +230,7 @@ void LibraryWorker::addTagToPhotos(const QList<int> &photoIds, const QString &na
     int done = 0;
     for (int pid : photoIds) {
         if (pid >= 0) {
-            m_db.linkPhotoTag(pid, tagId);
+            m_db.linkTagToContent(pid, tagId); // every copy of this content
             m_db.rememberContentTag(m_db.photoHash(pid), tagId);
         }
         ++done;
@@ -257,7 +257,7 @@ void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)
     int done = 0;
     for (int pid : photoIds) {
         if (pid >= 0) {
-            m_db.unlinkPhotoTag(pid, tagId);
+            m_db.unlinkTagFromContent(pid, tagId); // every copy of this content
             m_db.forgetContentTag(m_db.photoHash(pid), tagId);
         }
         ++done;
