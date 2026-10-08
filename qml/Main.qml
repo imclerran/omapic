@@ -333,16 +333,36 @@ ApplicationWindow {
 
             // Toggle thumbnails between cropped-to-square and whole-image (fit).
             ToolButton {
-                text: gallerySettings.cropThumbs ? qsTr("◼ Crop") : qsTr("▭ Fit")
-                checkable: true
-                checked: !gallerySettings.cropThumbs
-                onToggled: gallerySettings.cropThumbs = !checked
+                id: cropFitButton
+                readonly property string cropLabel: qsTr("◼ Crop")
+                readonly property string fitLabel: qsTr("▭  Fit")
+                text: gallerySettings.cropThumbs ? cropLabel : fitLabel
+                // Plain toggle: flip the mode on click. Not `checkable`, so it
+                // never sticks in a highlighted state — same look in both modes.
+                onClicked: gallerySettings.cropThumbs = !gallerySettings.cropThumbs
                 // Compact: trim the default padding so it doesn't inflate the bar.
                 font.pixelSize: 12
                 topPadding: 3
                 bottomPadding: 3
                 leftPadding: 10
                 rightPadding: 10
+                // Size to the wider of the two labels so the button width stays
+                // constant when the text swaps — measured by pixel width (not
+                // character count: the ◼/▭ glyphs render at different widths), so
+                // it never clips and tracks the font/theme, not a magic number.
+                TextMetrics {
+                    id: cropMetrics
+                    font: cropFitButton.font
+                    text: cropFitButton.cropLabel
+                }
+                TextMetrics {
+                    id: fitMetrics
+                    font: cropFitButton.font
+                    text: cropFitButton.fitLabel
+                }
+                Layout.preferredWidth: Math.ceil(Math.max(cropMetrics.advanceWidth,
+                                                          fitMetrics.advanceWidth))
+                                       + leftPadding + rightPadding
                 Layout.preferredHeight: 24
                 ToolTip.visible: hovered
                 ToolTip.text: gallerySettings.cropThumbs
