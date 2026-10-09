@@ -84,7 +84,7 @@ Rectangle {
         visible: root.count === 0
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
-        text: qsTr("Select a photo to see its details.\nCtrl+click and Shift+click to select several.")
+        text: qsTr("Select a photo to see its details.")
         color: palette.placeholderText
     }
 

@@ -130,7 +130,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 text: rep.count === 0
-                      ? qsTr("No tags yet. Select a photo and add some below.")
+                      ? qsTr("No tags yet. Select a photo and add some above.")
                       : qsTr("No tags match “%1”.").arg(searchField.text.trim())
                 color: palette.placeholderText
             }
