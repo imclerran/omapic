@@ -4,14 +4,27 @@
 
 #pragma once
 
+#include <QFileInfo>
 #include <QSet>
 #include <QString>
 #include <QStringList>
+
+// True when `path` names a video file we treat as playable. Keep this list in
+// sync with the scanner globs (libraryworker.cpp) and SlideshowView.qml.
+inline bool isVideoPath(const QString &path)
+{
+    static const QSet<QString> kVideoSuffixes = {
+        QStringLiteral("mp4"), QStringLiteral("m4v"), QStringLiteral("webm"),
+        QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("avi"),
+    };
+    return kVideoSuffixes.contains(QFileInfo(path).suffix().toLower());
+}
 
 struct Photo {
     int id = -1;
     QString path;
     QString fileName;
+    bool isVideo = false;
     QSet<int> tagIds;
     QStringList tagNames;
 };

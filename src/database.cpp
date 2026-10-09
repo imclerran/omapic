@@ -163,6 +163,7 @@ QVector<Photo> Database::loadPhotos()
         p.id = q.value(0).toInt();
         p.path = q.value(1).toString();
         p.fileName = QFileInfo(p.path).fileName();
+        p.isVideo = isVideoPath(p.path);
         indexOf.insert(p.id, photos.size());
         photos.append(p);
     }

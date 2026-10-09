@@ -97,6 +97,12 @@ public:
     // Returns false if the process couldn't be launched.
     Q_INVOKABLE bool setAetherTheme(int photoId);
 
+    // Same three actions addressed by file URL instead of photo id, for the
+    // slideshow (which tracks sources, not ids). `source` is a file:// URL.
+    Q_INVOKABLE bool addToThemeWallpapersUrl(const QUrl &source);
+    Q_INVOKABLE bool editThemeInAetherUrl(const QUrl &source);
+    Q_INVOKABLE bool setAetherThemeUrl(const QUrl &source);
+
 signals:
     void photoChanged(int photoId);
     void foldersChanged();
@@ -113,6 +119,11 @@ signals:
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
 
 private:
+    // Path-based cores shared by the id- and url-addressed theme actions above.
+    bool addPathToThemeWallpapers(const QString &path);
+    bool editThemeInAetherPath(const QString &path);
+    bool setAetherThemePath(const QString &path);
+
     void applyTags(int photoId);
     void refreshTags();
     // Ref-counted so overlapping worker jobs (e.g. a bulk tag started mid-import)

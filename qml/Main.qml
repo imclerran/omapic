@@ -34,6 +34,7 @@ ApplicationWindow {
     // menu opens and read by the menu items and the remove/delete confirm dialogs.
     property int menuPhotoId: -1
     property string menuPhotoName: ""
+    property bool menuPhotoIsVideo: false
 
     // Brief, self-dismissing status message (wallpaper added, Aether failed, …).
     function toast(message) {
@@ -184,18 +185,26 @@ ApplicationWindow {
         slideshowBase = srcs.slice()
         slideshowShuffleActive = appSettings.shuffle
 
+        // Random start overrides a selected start photo on Play/Space, but not
+        // when a specific photo is honored (Enter / double-click / "Play from
+        // here"). Mirrors the non-shuffle branch below.
+        const randomize = appSettings.randomStart && !honorStart
+
         if (slideshowShuffleActive) {
-            // Keep the chosen start photo first (if any), shuffle the rest.
-            if (startPos > 0) {
+            // Pin the chosen start photo first and shuffle the rest — unless
+            // random start applies, in which case shuffle everything so the
+            // slideshow opens on a random photo.
+            const pin = (startId >= 0) && !randomize
+            if (pin && startPos > 0) {
                 const s = srcs[0]; srcs[0] = srcs[startPos]; srcs[startPos] = s
             }
-            const from = (startId >= 0) ? 1 : 0
+            const from = pin ? 1 : 0
             for (let i = srcs.length - 1; i > from; --i) {
                 const j = from + Math.floor(Math.random() * (i - from + 1))
                 const t = srcs[i]; srcs[i] = srcs[j]; srcs[j] = t
             }
             startPos = 0
-        } else if (appSettings.randomStart && !honorStart) {
+        } else if (randomize) {
             // Random start applies to Play/Space (and whenever there's no specific
             // photo to honor) — within the selection if several are selected,
             // otherwise the whole set. Enter/double-click keep their photo.
@@ -245,6 +254,7 @@ ApplicationWindow {
         property bool shuffle: false
         property bool fade: true
         property bool randomStart: false
+        property bool loop: false
     }
 
     Settings {
@@ -350,11 +360,6 @@ ApplicationWindow {
                 indeterminate: library.progress < 0
                 from: 0; to: 1
                 value: library.progress < 0 ? 0 : library.progress
-            }
-            Label {
-                visible: library.busy && !library.busyModal && library.progress >= 0
-                text: Math.round(library.progress * 100) + "%"
-                color: palette.placeholderText
             }
 
             // Toggle thumbnails between cropped-to-square and whole-image (fit).
@@ -576,6 +581,7 @@ ApplicationWindow {
                         win.handleClick(index, model.id, 0)
                         win.menuPhotoId = model.id
                         win.menuPhotoName = model.fileName
+                        win.menuPhotoIsVideo = model.isVideo === true
                         photoMenu.popup()
                     }
                 }
@@ -629,7 +635,28 @@ ApplicationWindow {
         intervalMs: appSettings.intervalMs
         shuffle: win.slideshowShuffleActive
         transitionMs: appSettings.fade ? 280 : 0
+        loop: appSettings.loop
         onToggleShuffleRequested: win.toggleSlideshowShuffle()
+        onToggleLoopRequested: appSettings.loop = !appSettings.loop
+
+        // Theme actions from the slideshow's context menu. The Library lives here,
+        // and feedback goes to the slideshow's own toast (its window is on top).
+        onAddWallpaperRequested: (source) => slideshow.flashMessage(
+            library.addToThemeWallpapersUrl(source)
+                ? qsTr("Added to theme wallpapers")
+                : qsTr("Couldn't add to theme wallpapers"))
+        onEditInAetherRequested: (source) => {
+            // Editing opens Aether's GUI to switch to, so leave the fullscreen
+            // slideshow on success; stay and report if it couldn't launch.
+            if (library.editThemeInAetherUrl(source))
+                slideshow.stop()
+            else
+                slideshow.flashMessage(qsTr("Couldn't launch Aether"))
+        }
+        onSetAetherThemeRequested: (source) => {
+            if (!library.setAetherThemeUrl(source))
+                slideshow.flashMessage(qsTr("Couldn't launch Aether"))
+        }
     }
 
     // Progress overlay for background jobs (startup hashing / folder import).
@@ -744,6 +771,19 @@ ApplicationWindow {
                     onToggled: appSettings.randomStart = checked
                 }
             }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 16
+                Label {
+                    text: qsTr("Loop videos")
+                    Layout.fillWidth: true
+                }
+                Switch {
+                    checked: appSettings.loop
+                    onToggled: appSettings.loop = checked
+                }
+            }
         }
     }
 
@@ -753,7 +793,7 @@ ApplicationWindow {
         id: photoMenu
 
         MenuItem {
-            text: qsTr("View photo")
+            text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
             onTriggered: win.startSlideshow(win.menuPhotoId, false)
         }
         MenuItem {
@@ -761,15 +801,19 @@ ApplicationWindow {
             onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
 
-        MenuSeparator {}
-
+        // Theme actions apply to still images only.
+        MenuSeparator { visible: !win.menuPhotoIsVideo; height: visible ? implicitHeight : 0 }
         MenuItem {
+            visible: !win.menuPhotoIsVideo
+            height: visible ? implicitHeight : 0
             text: qsTr("Add to theme wallpapers")
             onTriggered: win.toast(library.addToThemeWallpapers(win.menuPhotoId)
                                    ? qsTr("Added to theme wallpapers")
                                    : qsTr("Couldn't add to theme wallpapers"))
         }
         MenuItem {
+            visible: !win.menuPhotoIsVideo
+            height: visible ? implicitHeight : 0
             text: qsTr("Edit theme in Aether")
             onTriggered: {
                 if (!library.editThemeInAether(win.menuPhotoId))
@@ -777,6 +821,8 @@ ApplicationWindow {
             }
         }
         MenuItem {
+            visible: !win.menuPhotoIsVideo
+            height: visible ? implicitHeight : 0
             text: qsTr("Set as Aether theme")
             onTriggered: {
                 if (!library.setAetherTheme(win.menuPhotoId))

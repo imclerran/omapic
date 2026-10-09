@@ -33,6 +33,8 @@ QVariant PhotoModel::data(const QModelIndex &index, int role) const
         return p.path;
     case FileNameRole:
         return p.fileName;
+    case IsVideoRole:
+        return p.isVideo;
     case TagsRole:
         return p.tagNames;
     case TagIdsRole: {
@@ -54,6 +56,7 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
         {PathRole, "path"},
         {FilePathRole, "filePath"},
         {FileNameRole, "fileName"},
+        {IsVideoRole, "isVideo"},
         {TagsRole, "tags"},
         {TagIdsRole, "tagIds"},
     };

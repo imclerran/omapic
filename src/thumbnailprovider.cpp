@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
+#include <QProcess>
 #include <QQuickImageResponse>
 #include <QQuickTextureFactory>
 #include <QRunnable>
@@ -17,9 +18,37 @@
 #include <QThread>
 #include <QUrl>
 
+#include "photo.h"
+
 namespace {
 
 constexpr int kThumbBox = 320;
+
+// Render a representative frame of a video to `cachePath` using
+// ffmpegthumbnailer (runs on this pool worker thread, so blocking is fine).
+QImage makeVideoThumbnail(const QString &path, const QString &cachePath)
+{
+    QProcess proc;
+    proc.start(QStringLiteral("ffmpegthumbnailer"),
+               {QStringLiteral("-i"), path,
+                QStringLiteral("-o"), cachePath,
+                QStringLiteral("-s"), QString::number(kThumbBox),
+                QStringLiteral("-q"), QStringLiteral("8")});
+    // Generous ceiling; a frame grab is normally well under a second.
+    if (!proc.waitForStarted(5000))
+        return {}; // ffmpegthumbnailer not installed / not on PATH
+    if (!proc.waitForFinished(30000)) {
+        proc.kill();
+        return {};
+    }
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0)
+        return {};
+
+    QImage img;
+    if (img.load(cachePath))
+        return img;
+    return {};
+}
 
 QImage makeThumbnail(const QString &rawId, const QString &cacheDir)
 {
@@ -47,6 +76,9 @@ QImage makeThumbnail(const QString &rawId, const QString &cacheDir)
     QImage img;
     if (QFileInfo::exists(cachePath) && img.load(cachePath))
         return img;
+
+    if (isVideoPath(path))
+        return makeVideoThumbnail(path, cachePath);
 
     QImageReader reader(path);
     reader.setAutoTransform(true); // honour EXIF orientation

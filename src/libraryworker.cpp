@@ -13,13 +13,17 @@
 
 namespace {
 
-const QStringList kImageGlobs = {
+// Image and video globs the scanner picks up. Keep the video set in sync with
+// Photo::isVideo (database.cpp), the thumbnail provider, and SlideshowView.qml.
+const QStringList kMediaGlobs = {
     QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.png"),
     QStringLiteral("*.gif"), QStringLiteral("*.bmp"), QStringLiteral("*.webp"),
     QStringLiteral("*.tif"), QStringLiteral("*.tiff"),
+    QStringLiteral("*.mp4"), QStringLiteral("*.m4v"), QStringLiteral("*.webm"),
+    QStringLiteral("*.mkv"), QStringLiteral("*.mov"), QStringLiteral("*.avi"),
 };
 
-// Collect every image file under `root`, skipping folders (and their subtrees)
+// Collect every media file under `root`, skipping folders (and their subtrees)
 // marked with a .nomedia file. Results are added to `out`.
 void collectImages(const QString &root, QSet<QString> &out)
 {
@@ -41,7 +45,7 @@ void collectImages(const QString &root, QSet<QString> &out)
         return ex;
     };
 
-    QDirIterator it(root, kImageGlobs, QDir::Files, QDirIterator::Subdirectories);
+    QDirIterator it(root, kMediaGlobs, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString file = it.next();
         if (!isExcluded(QFileInfo(file).path()))

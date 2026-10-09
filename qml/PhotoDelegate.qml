@@ -41,6 +41,37 @@ Item {
             clip: true
         }
 
+        // Play indicator for video items: a semi-opaque disc with a triangle.
+        Rectangle {
+            visible: model.isVideo === true
+            anchors.centerIn: parent
+            width: 44
+            height: 44
+            radius: width / 2
+            color: Qt.rgba(0, 0, 0, 0.5)
+            border.color: Qt.rgba(1, 1, 1, 0.85)
+            border.width: 2
+
+            // Equilateral "play" triangle, nudged right to look centered.
+            Canvas {
+                anchors.centerIn: parent
+                anchors.horizontalCenterOffset: 2
+                width: 16
+                height: 18
+                onPaint: {
+                    const ctx = getContext("2d")
+                    ctx.reset()
+                    ctx.fillStyle = "white"
+                    ctx.beginPath()
+                    ctx.moveTo(0, 0)
+                    ctx.lineTo(width, height / 2)
+                    ctx.lineTo(0, height)
+                    ctx.closePath()
+                    ctx.fill()
+                }
+            }
+        }
+
         // Tag-count badge.
         Rectangle {
             visible: model.tags.length > 0

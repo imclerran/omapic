@@ -22,6 +22,7 @@ public:
         PathRole,
         FilePathRole,
         FileNameRole,
+        IsVideoRole,
         TagsRole,
         TagIdsRole,
     };

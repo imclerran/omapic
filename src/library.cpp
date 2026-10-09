@@ -289,23 +289,40 @@ bool Library::deleteFromDisk(int photoId)
 bool Library::addToThemeWallpapers(int photoId)
 {
     const Photo p = m_photos->photoById(photoId);
-    if (p.id < 0)
-        return false;
+    return p.id < 0 ? false : addPathToThemeWallpapers(p.path);
+}
+
+bool Library::addToThemeWallpapersUrl(const QUrl &source)
+{
+    const QString path = source.toLocalFile();
+    return path.isEmpty() ? false : addPathToThemeWallpapers(path);
+}
+
+bool Library::addPathToThemeWallpapers(const QString &path)
+{
     // Goes into the *user* backgrounds folder for the active theme, keyed by its
     // slug, so the wallpaper shows up only while that theme is active.
     const QString theme = currentOmarchyTheme();
     if (theme.isEmpty())
         return false;
-    return copyIntoDir(p.path, QDir::homePath()
-                                   + QStringLiteral("/.config/omarchy/backgrounds/") + theme);
+    return copyIntoDir(path, QDir::homePath()
+                                 + QStringLiteral("/.config/omarchy/backgrounds/") + theme);
 }
 
 bool Library::editThemeInAether(int photoId)
 {
     const Photo p = m_photos->photoById(photoId);
-    if (p.id < 0)
-        return false;
+    return p.id < 0 ? false : editThemeInAetherPath(p.path);
+}
 
+bool Library::editThemeInAetherUrl(const QUrl &source)
+{
+    const QString path = source.toLocalFile();
+    return path.isEmpty() ? false : editThemeInAetherPath(path);
+}
+
+bool Library::editThemeInAetherPath(const QString &path)
+{
     // Load the photo into Aether's GUI editor so a new theme can be tweaked
     // before applying — deliberately not `--generate`, which would apply a theme
     // immediately (that's setAetherTheme). `aether extract` talks to a running
@@ -322,17 +339,26 @@ bool Library::editThemeInAether(int photoId)
         "exit 1\n");
     return QProcess::startDetached(QStringLiteral("sh"),
                                    {QStringLiteral("-c"), script,
-                                    QStringLiteral("sh"), p.path});
+                                    QStringLiteral("sh"), path});
 }
 
 bool Library::setAetherTheme(int photoId)
 {
     const Photo p = m_photos->photoById(photoId);
-    if (p.id < 0)
-        return false;
+    return p.id < 0 ? false : setAetherThemePath(p.path);
+}
+
+bool Library::setAetherThemeUrl(const QUrl &source)
+{
+    const QString path = source.toLocalFile();
+    return path.isEmpty() ? false : setAetherThemePath(path);
+}
+
+bool Library::setAetherThemePath(const QString &path)
+{
     // Extract colors from the photo and apply the generated theme right away.
     return QProcess::startDetached(QStringLiteral("aether"),
-                                   {QStringLiteral("--generate"), p.path});
+                                   {QStringLiteral("--generate"), path});
 }
 
 void Library::addTag(int photoId, const QString &name)
