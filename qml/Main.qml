@@ -382,8 +382,8 @@ ApplicationWindow {
                 Layout.preferredHeight: 24
                 ToolTip.visible: hovered
                 ToolTip.text: gallerySettings.cropThumbs
-                              ? qsTr("Cropping thumbnails to squares")
-                              : qsTr("Fitting whole images to their aspect ratio")
+                              ? qsTr("Crop thumbnails to squares")
+                              : qsTr("Fit whole image in thumbnail")
             }
 
             // Thumbnail size control: drag to pick xs / sm / md / lg. Flanked by
