@@ -61,6 +61,14 @@ ApplicationWindow {
         selectedIds = ids
     }
 
+    // Clear the gallery selection (e.g. clicking empty space in the grid).
+    function clearSelection() {
+        selectedIds = []
+        anchorIndex = -1
+        cursorIndex = -1
+        grid.forceActiveFocus()
+    }
+
     // Select every photo in the current (filtered) gallery.
     function selectAll() {
         const n = library.filtered.count
@@ -616,6 +624,23 @@ ApplicationWindow {
                         wheelAnim.start()
                     }
                 }
+            }
+
+            // Clicking empty gallery space (the right remainder left by column
+            // wrapping, or below the last row) clears the selection. Sits above
+            // the grid and hit-tests each press: presses on a photo cell fall
+            // through to its delegate (so selection and drag-flicking still
+            // work), only empty-space presses are handled here.
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
+                onPressed: (mouse) => {
+                    const idx = grid.indexAt(grid.contentX + mouse.x, grid.contentY + mouse.y)
+                    // Keep the press only when it missed every photo; otherwise
+                    // let it reach the GridView and the delegate beneath.
+                    mouse.accepted = (idx === -1)
+                }
+                onClicked: win.clearSelection()
             }
 
             Label {
