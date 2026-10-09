@@ -170,6 +170,19 @@ Window {
     function next() { go(index + 1) }
     function prev() { go(index - 1) }
 
+    // Manually advancing (arrow keys) resets the slide timer so the new photo
+    // gets its full dwell time instead of whatever was left on the clock.
+    function restartSlideTimer() {
+        if (!slideTimer.running)
+            return
+        slideTimer.restart()
+        // restart() assigns `running` imperatively, dropping its binding;
+        // restore it so pause / videos / exit still stop the timer declaratively.
+        slideTimer.running = Qt.binding(function () {
+            return root.visible && root.playing && root.count > 1 && !root.showingVideo
+        })
+    }
+
     // When an image finishes loading into the back buffer, flip it to the front
     // and (if we were showing a video) crossfade the video layer out.
     function imageReady(buffer) {
@@ -239,6 +252,7 @@ Window {
 
     // The slide timer governs images only; videos drive their own advance.
     Timer {
+        id: slideTimer
         interval: root.intervalMs
         repeat: true
         running: root.visible && root.playing && root.count > 1 && !root.showingVideo
@@ -408,8 +422,8 @@ Window {
         anchors.fill: parent
         focus: true
         Keys.onEscapePressed: root.stop()
-        Keys.onLeftPressed: { root.prev(); root.pokeHint() }
-        Keys.onRightPressed: { root.next(); root.pokeHint() }
+        Keys.onLeftPressed: { root.prev(); root.pokeHint(); root.restartSlideTimer() }
+        Keys.onRightPressed: { root.next(); root.pokeHint(); root.restartSlideTimer() }
         Keys.onSpacePressed: root.playing = !root.playing
         Keys.onPressed: (event) => {
             if (event.key === Qt.Key_S) {
