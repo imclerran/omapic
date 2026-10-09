@@ -6,6 +6,7 @@ import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import Omapic
 
 ApplicationWindow {
@@ -262,6 +263,15 @@ ApplicationWindow {
         accent: win.accent
     }
 
+    // Folder picker for the header's Import button (the Library dialog has its
+    // own, so this one lets you import without opening that dialog first).
+    FolderDialog {
+        id: importDialog
+        title: qsTr("Choose a folder to add")
+        currentFolder: StandardPaths.writableLocation(StandardPaths.HomeLocation)
+        onAccepted: library.importDirectory(selectedFolder)
+    }
+
     TagManager {
         id: tagManager
         library: library
@@ -437,6 +447,13 @@ ApplicationWindow {
                         onTriggered: tagManager.open()
                     }
                 }
+            }
+
+            ToolButton {
+                text: qsTr("Import…")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Add a folder of photos to the library")
+                onClicked: importDialog.open()
             }
 
             Item { Layout.fillWidth: true }
