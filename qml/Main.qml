@@ -610,15 +610,19 @@ ApplicationWindow {
                 acceptedButtons: Qt.NoButton
                 propagateComposedEvents: true
                 onWheel: (wheel) => {
-                    const maxY = Math.max(0, grid.contentHeight - grid.height)
+                    // A GridView's top extent is originY, not 0 — it drifts as
+                    // delegates above the viewport are recycled. Clamping to 0
+                    // would let the wheel push the content above the first row.
+                    const minY = grid.originY
+                    const maxY = Math.max(minY, grid.originY + grid.contentHeight - grid.height)
                     if (wheel.pixelDelta.y !== 0) {
                         // High-resolution trackpad: amplified, immediate.
                         wheelAnim.stop()
-                        grid.contentY = Math.max(0, Math.min(maxY, grid.contentY - wheel.pixelDelta.y * 4.0))
+                        grid.contentY = Math.max(minY, Math.min(maxY, grid.contentY - wheel.pixelDelta.y * 4.0))
                     } else {
                         // Mouse-wheel notches: glide ~0.7 page with momentum.
                         const step = (wheel.angleDelta.y / 120) * grid.height * 0.7
-                        const target = Math.max(0, Math.min(maxY, grid.contentY - step))
+                        const target = Math.max(minY, Math.min(maxY, grid.contentY - step))
                         wheelAnim.stop()
                         wheelAnim.to = target
                         wheelAnim.start()
