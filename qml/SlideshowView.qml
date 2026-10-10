@@ -208,6 +208,7 @@ Window {
             id: img0
             anchors.fill: parent
             fillMode: Image.PreserveAspectFit
+            autoTransform: true // honour EXIF orientation, like the thumbnails
             asynchronous: true
             cache: true
             opacity: root.front === 0 ? 1 : 0
@@ -218,6 +219,7 @@ Window {
             id: img1
             anchors.fill: parent
             fillMode: Image.PreserveAspectFit
+            autoTransform: true // honour EXIF orientation, like the thumbnails
             asynchronous: true
             cache: true
             opacity: root.front === 1 ? 1 : 0
