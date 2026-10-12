@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QProcess>
+#include <QUrl>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -359,6 +360,32 @@ bool Library::setAetherThemePath(const QString &path)
     // Extract colors from the photo and apply the generated theme right away.
     return QProcess::startDetached(QStringLiteral("aether"),
                                    {QStringLiteral("--generate"), path});
+}
+
+bool Library::showInFileManager(int photoId)
+{
+    const Photo p = m_photos->photoById(photoId);
+    return p.id < 0 ? false : showPathInFileManager(p.path);
+}
+
+bool Library::showPathInFileManager(const QString &path)
+{
+    // Open the containing folder with the file highlighted, via the freedesktop
+    // FileManager1 D-Bus interface rather than spawning a specific file manager.
+    // Omarchy's default (Nautilus) implements it, as does any compliant manager,
+    // and it selects the item — which spawning `nautilus <path>` doesn't reliably
+    // do across versions. The URL is fully percent-encoded so spaces and other
+    // special characters in the name survive as a single D-Bus argument.
+    const QString uri = QUrl::fromLocalFile(path).toString(QUrl::FullyEncoded);
+    return QProcess::startDetached(
+        QStringLiteral("dbus-send"),
+        {QStringLiteral("--session"),
+         QStringLiteral("--dest=org.freedesktop.FileManager1"),
+         QStringLiteral("--type=method_call"),
+         QStringLiteral("/org/freedesktop/FileManager1"),
+         QStringLiteral("org.freedesktop.FileManager1.ShowItems"),
+         QStringLiteral("array:string:") + uri,
+         QStringLiteral("string:")});
 }
 
 void Library::addTag(int photoId, const QString &name)

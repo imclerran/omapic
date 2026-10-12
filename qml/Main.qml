@@ -864,6 +864,16 @@ ApplicationWindow {
         MenuSeparator {}
 
         MenuItem {
+            text: qsTr("Show in file manager")
+            onTriggered: {
+                if (!library.showInFileManager(win.menuPhotoId))
+                    win.toast(qsTr("Couldn't open the file manager"))
+            }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
             text: qsTr("Remove from library")
             onTriggered: removeConfirm.open()
         }

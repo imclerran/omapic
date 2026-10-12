@@ -96,6 +96,10 @@ public:
     // Generate a desktop theme from the photo and apply it immediately via Aether.
     // Returns false if the process couldn't be launched.
     Q_INVOKABLE bool setAetherTheme(int photoId);
+    // Open the photo's containing folder in the file manager (Omarchy's default
+    // is Nautilus) with the file itself selected. Returns false if the helper
+    // couldn't start.
+    Q_INVOKABLE bool showInFileManager(int photoId);
 
     // Same three actions addressed by file URL instead of photo id, for the
     // slideshow (which tracks sources, not ids). `source` is a file:// URL.
@@ -123,6 +127,7 @@ private:
     bool addPathToThemeWallpapers(const QString &path);
     bool editThemeInAetherPath(const QString &path);
     bool setAetherThemePath(const QString &path);
+    bool showPathInFileManager(const QString &path);
 
     void applyTags(int photoId);
     void refreshTags();
