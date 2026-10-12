@@ -64,6 +64,10 @@ protected:
     bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
 
 private:
+    // Re-run the row filter. Wraps the begin/endFilterChange API on Qt that has it
+    // (invalidateFilter() is deprecated there), falling back for older Qt.
+    void invalidateRowFilter();
+
     QSet<int> m_selected;
     bool m_matchAll = true;
     QString m_search;

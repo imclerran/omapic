@@ -21,6 +21,16 @@ PhotoFilterModel::PhotoFilterModel(QObject *parent)
     connect(this, &QAbstractItemModel::layoutChanged, this, &PhotoFilterModel::countChanged);
 }
 
+void PhotoFilterModel::invalidateRowFilter()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0)
+    beginFilterChange();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+    invalidateFilter();
+#endif
+}
+
 QList<int> PhotoFilterModel::selectedTagIds() const
 {
     return QList<int>(m_selected.begin(), m_selected.end());
@@ -32,7 +42,7 @@ void PhotoFilterModel::setSelectedTagIds(const QList<int> &ids)
     if (next == m_selected)
         return;
     m_selected = next;
-    invalidateFilter();
+    invalidateRowFilter();
     emit selectedTagIdsChanged();
     emit countChanged();
 }
@@ -42,7 +52,7 @@ void PhotoFilterModel::setMatchAll(bool on)
     if (m_matchAll == on)
         return;
     m_matchAll = on;
-    invalidateFilter();
+    invalidateRowFilter();
     emit matchAllChanged();
     emit countChanged();
 }
@@ -53,7 +63,7 @@ void PhotoFilterModel::setSearchText(const QString &text)
     if (m_search == trimmed)
         return;
     m_search = trimmed;
-    invalidateFilter();
+    invalidateRowFilter();
     emit searchTextChanged();
     emit countChanged();
 }
@@ -63,7 +73,7 @@ void PhotoFilterModel::setTagPresence(TagPresence mode)
     if (m_tagPresence == mode)
         return;
     m_tagPresence = mode;
-    invalidateFilter();
+    invalidateRowFilter();
     emit tagPresenceChanged();
     emit countChanged();
 }
