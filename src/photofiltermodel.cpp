@@ -12,6 +12,9 @@
 PhotoFilterModel::PhotoFilterModel(QObject *parent)
     : QSortFilterProxyModel(parent)
 {
+    m_collator.setNumericMode(true);
+    m_collator.setCaseSensitivity(Qt::CaseInsensitive);
+
     connect(this, &QAbstractItemModel::rowsInserted, this, &PhotoFilterModel::countChanged);
     connect(this, &QAbstractItemModel::rowsRemoved, this, &PhotoFilterModel::countChanged);
     connect(this, &QAbstractItemModel::modelReset, this, &PhotoFilterModel::countChanged);
@@ -77,6 +80,13 @@ int PhotoFilterModel::idAt(int row) const
     if (row < 0 || row >= rowCount())
         return -1;
     return data(index(row, 0), PhotoModel::IdRole).toInt();
+}
+
+bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const
+{
+    const QString ln = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
+    const QString rn = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
+    return m_collator.compare(ln, rn) < 0;
 }
 
 bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const

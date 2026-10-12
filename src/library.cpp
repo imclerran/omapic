@@ -58,8 +58,8 @@ Library::Library(QObject *parent)
 
     m_filtered->setSourceModel(m_photos);
     m_filtered->setDynamicSortFilter(true);
-    m_filtered->setSortRole(PhotoModel::FileNameRole);
-    m_filtered->setSortCaseSensitivity(Qt::CaseInsensitive);
+    // Ordering is defined by PhotoFilterModel::lessThan (natural, case-insensitive
+    // sort of the file name); sort(0) activates it and keeps it maintained.
     m_filtered->sort(0);
 
     // Changing the tag selection re-narrows the sidebar (faceted drill-down) when

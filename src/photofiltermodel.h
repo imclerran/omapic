@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QCollator>
 #include <QQmlEngine>
 #include <QSet>
 #include <QSortFilterProxyModel>
@@ -57,10 +58,15 @@ signals:
 
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
+    // Natural, case-insensitive ordering of file names: runs of digits compare by
+    // value (3 < 22 < 111), so numbered files sort as a person would expect, and
+    // the rest of the name compares alphabetically.
+    bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
 
 private:
     QSet<int> m_selected;
     bool m_matchAll = true;
     QString m_search;
     TagPresence m_tagPresence = AnyTags;
+    QCollator m_collator;
 };
