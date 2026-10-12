@@ -620,8 +620,10 @@ ApplicationWindow {
                         wheelAnim.stop()
                         grid.contentY = Math.max(minY, Math.min(maxY, grid.contentY - wheel.pixelDelta.y * 4.0))
                     } else {
-                        // Mouse-wheel notches: glide ~0.7 page with momentum.
-                        const step = (wheel.angleDelta.y / 120) * grid.height * 0.7
+                        // Mouse-wheel notches: glide one row per notch with
+                        // momentum (tied to cell height, not the viewport, so one
+                        // notch is a single row rather than most of a page).
+                        const step = (wheel.angleDelta.y / 120) * grid.cellHeight
                         const target = Math.max(minY, Math.min(maxY, grid.contentY - step))
                         wheelAnim.stop()
                         wheelAnim.to = target
