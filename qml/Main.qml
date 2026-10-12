@@ -612,9 +612,12 @@ ApplicationWindow {
                     onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
                     onDoubleClicked: win.startSlideshow(model.id, false)
                     onRightClicked: {
-                        // Target just this photo, and select it so it's clear
-                        // which one the menu acts on.
-                        win.handleClick(index, model.id, 0)
+                        // Right-clicking a photo that's already part of a
+                        // multi-selection keeps the whole selection (the menu acts
+                        // on all of it); otherwise select just this one so it's
+                        // clear which photo the menu targets.
+                        if (win.selectedIds.length <= 1 || win.selectedIds.indexOf(model.id) === -1)
+                            win.handleClick(index, model.id, 0)
                         win.menuPhotoId = model.id
                         win.menuPhotoName = model.fileName
                         win.menuPhotoIsVideo = model.isVideo === true
@@ -846,25 +849,34 @@ ApplicationWindow {
         }
     }
 
-    // Right-click context menu for a single photo. Opened by PhotoDelegate via
-    // win.menuPhotoId / win.menuPhotoName, which every item below reads.
+    // Right-click context menu for the targeted photo (win.menuPhotoId). When
+    // several photos are selected it stays open on the whole selection: the
+    // actions that make sense for many (slideshow, remove, delete) act on all of
+    // them, the single-photo actions below are disabled.
     Menu {
         id: photoMenu
 
+        // True when the menu is acting on more than one selected photo.
+        readonly property bool multi: win.selectedIds.length > 1
+
+        // Slideshow first so the top item is always enabled, even for a
+        // multi-selection (it plays the selected photos from the clicked one).
         MenuItem {
-            text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
-            onTriggered: win.startSlideshow(win.menuPhotoId, false)
-        }
-        MenuItem {
-            text: qsTr("Play from here")
+            text: qsTr("Play slideshow")
             onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
+        MenuItem {
+            text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
+            enabled: !photoMenu.multi
+            onTriggered: win.startSlideshow(win.menuPhotoId, false)
+        }
 
-        // Theme actions apply to still images only.
+        // Theme actions apply to a single still image only.
         MenuSeparator { visible: !win.menuPhotoIsVideo; height: visible ? implicitHeight : 0 }
         MenuItem {
             visible: !win.menuPhotoIsVideo
             height: visible ? implicitHeight : 0
+            enabled: !photoMenu.multi
             text: qsTr("Add to theme wallpapers")
             onTriggered: win.toast(library.addToThemeWallpapers(win.menuPhotoId)
                                    ? qsTr("Added to theme wallpapers")
@@ -873,6 +885,7 @@ ApplicationWindow {
         MenuItem {
             visible: !win.menuPhotoIsVideo
             height: visible ? implicitHeight : 0
+            enabled: !photoMenu.multi
             text: qsTr("Edit theme in Aether")
             onTriggered: {
                 if (!library.editThemeInAether(win.menuPhotoId))
@@ -882,6 +895,7 @@ ApplicationWindow {
         MenuItem {
             visible: !win.menuPhotoIsVideo
             height: visible ? implicitHeight : 0
+            enabled: !photoMenu.multi
             text: qsTr("Set as Aether theme")
             onTriggered: {
                 if (!library.setAetherTheme(win.menuPhotoId))
@@ -893,6 +907,7 @@ ApplicationWindow {
 
         MenuItem {
             text: qsTr("Show in file manager")
+            enabled: !photoMenu.multi
             onTriggered: {
                 if (!library.showInFileManager(win.menuPhotoId))
                     win.toast(qsTr("Couldn't open the file manager"))
@@ -920,14 +935,17 @@ ApplicationWindow {
         width: 420
         standardButtons: Dialog.Yes | Dialog.No
         onAccepted: win.withPreservedGalleryScroll(function () {
-            library.removeFromLibrary(win.menuPhotoId)
+            library.removeFromLibrary(win.selectedIds)
         })
 
         Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: qsTr("Remove “%1” from the library?\n\nThe file stays on disk — only its library entry and tags are removed.")
-                  .arg(win.menuPhotoName)
+            text: win.selectedIds.length > 1
+                  ? qsTr("Remove these %1 photos from the library?\n\nThe files stay on disk — only their library entries and tags are removed.")
+                        .arg(win.selectedIds.length)
+                  : qsTr("Remove “%1” from the library?\n\nThe file stays on disk — only its library entry and tags are removed.")
+                        .arg(win.menuPhotoName)
         }
     }
 
@@ -940,15 +958,21 @@ ApplicationWindow {
         width: 420
         standardButtons: Dialog.Yes | Dialog.No
         onAccepted: win.withPreservedGalleryScroll(function () {
-            if (!library.deleteFromDisk(win.menuPhotoId))
+            const failed = library.deleteFromDisk(win.selectedIds)
+            if (failed === 1)
                 win.toast(qsTr("Couldn't delete the file"))
+            else if (failed > 1)
+                win.toast(qsTr("Couldn't delete %1 files").arg(failed))
         })
 
         Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: qsTr("Delete “%1”?\n\nThe file is moved to the Trash and removed from the library.")
-                  .arg(win.menuPhotoName)
+            text: win.selectedIds.length > 1
+                  ? qsTr("Delete these %1 photos?\n\nThe files are moved to the Trash and removed from the library.")
+                        .arg(win.selectedIds.length)
+                  : qsTr("Delete “%1”?\n\nThe file is moved to the Trash and removed from the library.")
+                        .arg(win.menuPhotoName)
         }
     }
 

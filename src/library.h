@@ -79,13 +79,13 @@ public:
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
 
-    // --- Single-photo context-menu actions ---
-    // Drop the photo from the library only; the file on disk is left untouched.
-    Q_INVOKABLE void removeFromLibrary(int photoId);
-    // Move the file to the Trash, then drop it from the library. Returns false
-    // (and keeps the library row) if the file couldn't be trashed, so a photo is
-    // never silently lost from the library while still present on disk.
-    Q_INVOKABLE bool deleteFromDisk(int photoId);
+    // --- Context-menu actions (operate on one or many selected photos) ---
+    // Drop the photos from the library only; the files on disk are left untouched.
+    Q_INVOKABLE void removeFromLibrary(const QVariantList &photoIds);
+    // Move the files to the Trash, then drop them from the library. Returns the
+    // number that couldn't be trashed (those keep their library rows), so a photo
+    // is never silently lost from the library while still present on disk.
+    Q_INVOKABLE int deleteFromDisk(const QVariantList &photoIds);
     // Copy the photo into the active theme's user backgrounds folder
     // (~/.config/omarchy/backgrounds/<theme>/), so it joins that theme's wallpaper
     // rotation — and only that theme's. Returns false on failure.

@@ -255,36 +255,58 @@ void Library::removeOrphanPhotos()
     emit foldersChanged();
 }
 
-void Library::removeFromLibrary(int photoId)
+void Library::removeFromLibrary(const QVariantList &photoIds)
 {
-    if (photoId < 0)
+    bool any = false;
+    m_db.beginTransaction();
+    for (const QVariant &v : photoIds) {
+        const int photoId = v.toInt();
+        if (photoId < 0)
+            continue;
+        m_db.deletePhoto(photoId); // content_tags archive (keyed by hash) survives
+        any = true;
+    }
+    m_db.commitTransaction();
+    if (!any)
         return;
-    m_db.deletePhoto(photoId); // content_tags archive (keyed by hash) survives
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
     emit foldersChanged(); // folder tallies / orphan count may change
 }
 
-bool Library::deleteFromDisk(int photoId)
+int Library::deleteFromDisk(const QVariantList &photoIds)
 {
-    if (photoId < 0)
-        return false;
-    const Photo p = m_photos->photoById(photoId);
-    if (p.id < 0)
-        return false;
+    int failed = 0;
+    bool any = false;
+    m_db.beginTransaction();
+    for (const QVariant &v : photoIds) {
+        const int photoId = v.toInt();
+        if (photoId < 0)
+            continue;
+        const Photo p = m_photos->photoById(photoId);
+        if (p.id < 0)
+            continue;
 
-    // Trash rather than unlink: still "gone from disk" from the library's view,
-    // but recoverable from the file manager. If trashing isn't supported, the
-    // caller is told (we keep the row) instead of silently hard-deleting.
-    QFile f(p.path);
-    if (f.exists() && !f.moveToTrash())
-        return false;
+        // Trash rather than unlink: still "gone from disk" from the library's
+        // view, but recoverable from the file manager. If trashing isn't
+        // supported, the caller is told (we keep the row) instead of silently
+        // hard-deleting.
+        QFile f(p.path);
+        if (f.exists() && !f.moveToTrash()) {
+            ++failed;
+            continue;
+        }
+        m_db.deletePhoto(photoId);
+        any = true;
+    }
+    m_db.commitTransaction();
 
-    m_db.deletePhoto(photoId);
-    m_photos->setPhotos(m_db.loadPhotos());
-    refreshTags();
-    emit foldersChanged();
-    return true;
+    if (any) {
+        m_photos->setPhotos(m_db.loadPhotos());
+        refreshTags();
+        emit foldersChanged();
+    }
+    return failed;
 }
 
 bool Library::addToThemeWallpapers(int photoId)
