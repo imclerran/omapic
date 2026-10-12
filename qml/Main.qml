@@ -613,15 +613,18 @@ ApplicationWindow {
                     onDoubleClicked: win.startSlideshow(model.id, false)
                     onRightClicked: {
                         // Right-clicking a photo that's already part of a
-                        // multi-selection keeps the whole selection (the menu acts
-                        // on all of it); otherwise select just this one so it's
-                        // clear which photo the menu targets.
+                        // multi-selection keeps the whole selection and opens the
+                        // multi-photo menu; otherwise select just this one and open
+                        // the full single-photo menu.
                         if (win.selectedIds.length <= 1 || win.selectedIds.indexOf(model.id) === -1)
                             win.handleClick(index, model.id, 0)
                         win.menuPhotoId = model.id
                         win.menuPhotoName = model.fileName
                         win.menuPhotoIsVideo = model.isVideo === true
-                        photoMenu.popup()
+                        if (win.selectedIds.length > 1)
+                            multiPhotoMenu.popup()
+                        else
+                            photoMenu.popup()
                     }
                 }
             }
@@ -849,34 +852,26 @@ ApplicationWindow {
         }
     }
 
-    // Right-click context menu for the targeted photo (win.menuPhotoId). When
-    // several photos are selected it stays open on the whole selection: the
-    // actions that make sense for many (slideshow, remove, delete) act on all of
-    // them, the single-photo actions below are disabled.
+    // Right-click context menu for a single photo (win.menuPhotoId). A
+    // multi-selection gets its own menu below.
     Menu {
         id: photoMenu
 
-        // True when the menu is acting on more than one selected photo.
-        readonly property bool multi: win.selectedIds.length > 1
-
-        // Slideshow first so the top item is always enabled, even for a
-        // multi-selection (it plays the selected photos from the clicked one).
+        // Slideshow first so the top item is the primary action.
         MenuItem {
             text: qsTr("Play slideshow")
             onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
         MenuItem {
             text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
-            enabled: !photoMenu.multi
             onTriggered: win.startSlideshow(win.menuPhotoId, false)
         }
 
-        // Theme actions apply to a single still image only.
+        // Theme actions apply to still images only.
         MenuSeparator { visible: !win.menuPhotoIsVideo; height: visible ? implicitHeight : 0 }
         MenuItem {
             visible: !win.menuPhotoIsVideo
             height: visible ? implicitHeight : 0
-            enabled: !photoMenu.multi
             text: qsTr("Add to theme wallpapers")
             onTriggered: win.toast(library.addToThemeWallpapers(win.menuPhotoId)
                                    ? qsTr("Added to theme wallpapers")
@@ -885,7 +880,6 @@ ApplicationWindow {
         MenuItem {
             visible: !win.menuPhotoIsVideo
             height: visible ? implicitHeight : 0
-            enabled: !photoMenu.multi
             text: qsTr("Edit theme in Aether")
             onTriggered: {
                 if (!library.editThemeInAether(win.menuPhotoId))
@@ -895,7 +889,6 @@ ApplicationWindow {
         MenuItem {
             visible: !win.menuPhotoIsVideo
             height: visible ? implicitHeight : 0
-            enabled: !photoMenu.multi
             text: qsTr("Set as Aether theme")
             onTriggered: {
                 if (!library.setAetherTheme(win.menuPhotoId))
@@ -907,11 +900,32 @@ ApplicationWindow {
 
         MenuItem {
             text: qsTr("Show in file manager")
-            enabled: !photoMenu.multi
             onTriggered: {
                 if (!library.showInFileManager(win.menuPhotoId))
                     win.toast(qsTr("Couldn't open the file manager"))
             }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            text: qsTr("Remove from library")
+            onTriggered: removeConfirm.open()
+        }
+        MenuItem {
+            text: qsTr("Delete from disk")
+            onTriggered: deleteConfirm.open()
+        }
+    }
+
+    // Right-click context menu for a multi-selection: only the actions that make
+    // sense for many photos at once, each operating on the whole selection.
+    Menu {
+        id: multiPhotoMenu
+
+        MenuItem {
+            text: qsTr("Play slideshow")
+            onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
 
         MenuSeparator {}
