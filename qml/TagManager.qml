@@ -12,6 +12,10 @@ Dialog {
     property var library
     property color accent: "#4a90d9"
 
+    // Optional callback(fn) supplied by the parent that runs fn while keeping the
+    // main picture gallery's scroll position — tag edits reset the photo model.
+    property var galleryScrollGuard: null
+
     title: qsTr("Manage Tags")
     modal: true
     anchors.centerIn: parent
@@ -35,9 +39,14 @@ Dialog {
 
     // Run a mutation that refreshes the tag list without the view jumping to the
     // top (the model is replaced wholesale, which otherwise resets the scroll).
+    // The same mutation resets the gallery's photo model, so route it through the
+    // parent's guard too, keeping the picture gallery in place as well.
     function withPreservedScroll(fn) {
         const y = list.contentY
-        fn()
+        if (root.galleryScrollGuard)
+            root.galleryScrollGuard(fn)
+        else
+            fn()
         list.contentY = y
         Qt.callLater(function () { list.contentY = y })
     }

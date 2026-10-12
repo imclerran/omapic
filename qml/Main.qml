@@ -86,6 +86,28 @@ ApplicationWindow {
         Qt.callLater(function () { grid.positionViewAtBeginning() })
     }
 
+    // Set while a mutation that must keep the gallery in place is running, so the
+    // foldersChanged handler skips its scroll-to-top (see withPreservedGalleryScroll).
+    property bool preservingGalleryScroll: false
+
+    // Run a mutation that refreshes the photo model (tag rename/delete, image
+    // delete/remove) without the gallery jumping to the top. Those paths call
+    // setPhotos(), a wholesale model reset that otherwise drops the scroll; capture
+    // and restore contentY around it, deferred once more for the view's relayout.
+    function withPreservedGalleryScroll(fn) {
+        const y = grid.contentY
+        preservingGalleryScroll = true
+        try {
+            fn()
+        } finally {
+            grid.contentY = y
+            Qt.callLater(function () {
+                grid.contentY = y
+                win.preservingGalleryScroll = false
+            })
+        }
+    }
+
     // Drop any selected ids whose photos have left the library's active set
     // (e.g. a folder was disabled or removed), so the detail pane doesn't keep
     // showing hidden photos.
@@ -294,6 +316,9 @@ ApplicationWindow {
         id: tagManager
         library: library
         accent: win.accent
+        // Renaming or deleting a tag refreshes the photo model, which would drop
+        // the gallery's scroll; keep it in place across the mutation.
+        galleryScrollGuard: win.withPreservedGalleryScroll
     }
 
     // When the active photo set changes (folder enabled/disabled/removed, rescan,
@@ -302,7 +327,10 @@ ApplicationWindow {
         target: library
         function onFoldersChanged() {
             win.pruneSelection()
-            win.scrollGalleryToTop()
+            // A single image delete/remove keeps its scroll position; only broader
+            // changes (folders added/removed, rescan, orphan cleanup) re-anchor.
+            if (!win.preservingGalleryScroll)
+                win.scrollGalleryToTop()
         }
     }
 
@@ -891,7 +919,9 @@ ApplicationWindow {
         modal: true
         width: 420
         standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: library.removeFromLibrary(win.menuPhotoId)
+        onAccepted: win.withPreservedGalleryScroll(function () {
+            library.removeFromLibrary(win.menuPhotoId)
+        })
 
         Label {
             width: parent.width
@@ -909,10 +939,10 @@ ApplicationWindow {
         modal: true
         width: 420
         standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: {
+        onAccepted: win.withPreservedGalleryScroll(function () {
             if (!library.deleteFromDisk(win.menuPhotoId))
                 win.toast(qsTr("Couldn't delete the file"))
-        }
+        })
 
         Label {
             width: parent.width
