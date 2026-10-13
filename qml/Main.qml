@@ -43,11 +43,101 @@ ApplicationWindow {
         toastTimer.restart()
     }
 
-    // The unshuffled slideshow playlist, kept so shuffle can be toggled live.
+    // The unshuffled slideshow playlist (grid order), kept so shuffle can be
+    // toggled live.
     property var slideshowBase: []
-    // Shuffle state for the CURRENT slideshow only; seeded from the saved
+    // Image-shuffle state for the CURRENT slideshow only; seeded from the saved
     // setting at start, toggled by 's' without changing the saved default.
     property bool slideshowShuffleActive: false
+    // Folder-shuffle state for the CURRENT slideshow: play each folder's photos
+    // together but visit the folders in random order. Seeded from the saved
+    // setting at start; folder order stays fixed while 's' toggles image shuffle.
+    property bool slideshowFolderShuffleActive: false
+
+    // The folder (directory) portion of a source URL/path.
+    function folderOf(src) {
+        const s = "" + src
+        const slash = s.lastIndexOf('/')
+        return slash >= 0 ? s.substring(0, slash) : ""
+    }
+
+    // Fisher-Yates shuffle of arr[from+1 .. end] in place, leaving arr[0..from]
+    // pinned. from = -1 (default) shuffles the whole array.
+    function shuffleTail(arr, from) {
+        if (from === undefined)
+            from = -1
+        for (let i = arr.length - 1; i > from + 1; --i) {
+            const j = from + 1 + Math.floor(Math.random() * (i - from))
+            const t = arr[i]; arr[i] = arr[j]; arr[j] = t
+        }
+    }
+
+    // The order in which folders first appear in a source list.
+    function folderSequence(list) {
+        const seen = ({})
+        const seq = []
+        for (let i = 0; i < list.length; ++i) {
+            const d = folderOf(list[i])
+            if (!seen[d]) { seen[d] = true; seq.push(d) }
+        }
+        return seq
+    }
+
+    // Reorder `base` (grid order) into folder-grouped play order: folders are
+    // visited in random order (or `fixedFolderOrder` when given, so live image-
+    // shuffle toggles don't re-scramble the folders), and photos within a folder
+    // keep grid order unless `imageShuffle` is on. When `pinnedSrc` is given (and
+    // no fixed order), its folder goes first and begins on that photo, so the
+    // result opens on it.
+    function orderByFolderShuffle(base, imageShuffle, pinnedSrc, fixedFolderOrder) {
+        pinnedSrc = pinnedSrc || ""
+        const groups = ({})
+        const natural = []
+        for (let k = 0; k < base.length; ++k) {
+            const d = folderOf(base[k])
+            if (groups[d] === undefined) { groups[d] = []; natural.push(d) }
+            groups[d].push(base[k])
+        }
+
+        const pinnedDir = pinnedSrc !== "" ? folderOf(pinnedSrc) : null
+        const usingFixed = fixedFolderOrder !== undefined && fixedFolderOrder.length > 0
+        let dirs
+        if (usingFixed) {
+            dirs = []
+            for (let i = 0; i < fixedFolderOrder.length; ++i)
+                if (groups[fixedFolderOrder[i]] !== undefined && dirs.indexOf(fixedFolderOrder[i]) === -1)
+                    dirs.push(fixedFolderOrder[i])
+            // Append any folders the fixed order didn't mention (robustness).
+            for (let i = 0; i < natural.length; ++i)
+                if (dirs.indexOf(natural[i]) === -1) dirs.push(natural[i])
+        } else {
+            dirs = natural.slice()
+            let pinnedCount = 0
+            if (pinnedDir !== null && groups[pinnedDir] !== undefined) {
+                dirs.splice(dirs.indexOf(pinnedDir), 1); dirs.unshift(pinnedDir); pinnedCount = 1
+            }
+            shuffleTail(dirs, pinnedCount - 1)
+        }
+
+        const out = []
+        for (let di = 0; di < dirs.length; ++di) {
+            let items = groups[dirs[di]].slice()
+            const isPinnedFolder = !usingFixed && pinnedDir !== null && di === 0 && dirs[di] === pinnedDir
+            if (isPinnedFolder) {
+                const p = items.indexOf(pinnedSrc)
+                if (imageShuffle) {
+                    if (p > 0) { items.splice(p, 1); items.unshift(pinnedSrc) }
+                    shuffleTail(items, 0) // keep the pinned photo first, shuffle the rest
+                } else if (p > 0) {
+                    items = items.slice(p).concat(items.slice(0, p)) // rotate to start on it
+                }
+            } else if (imageShuffle) {
+                shuffleTail(items, -1)
+            }
+            for (let m = 0; m < items.length; ++m) out.push(items[m])
+        }
+        return out
+    }
 
     function selectRange(a, b) {
         const lo = Math.min(a, b)
@@ -201,13 +291,16 @@ ApplicationWindow {
         const honorStart = (startId >= 0) && (!play || forceStart === true)
         const srcs = []
         let startPos = 0
+        let startSrc = ""
         const n = library.filtered.count
         for (let r = 0; r < n; ++r) {
             const id = library.filtered.idAt(r)
             if (selectedOnly && selectedIds.indexOf(id) === -1)
                 continue
-            if (id === startId)
+            if (id === startId) {
                 startPos = srcs.length
+                startSrc = "" + library.filtered.sourceAt(r)
+            }
             srcs.push("" + library.filtered.sourceAt(r))
         }
         if (srcs.length === 0)
@@ -215,25 +308,31 @@ ApplicationWindow {
 
         slideshowBase = srcs.slice()
         slideshowShuffleActive = appSettings.shuffle
+        slideshowFolderShuffleActive = appSettings.shuffleFolders
 
         // Random start overrides a selected start photo on Play/Space, but not
         // when a specific photo is honored (Enter / double-click / "Play from
         // here"). Mirrors the non-shuffle branch below.
         const randomize = appSettings.randomStart && !honorStart
+        const pin = (startId >= 0) && !randomize
 
-        if (slideshowShuffleActive) {
+        if (slideshowFolderShuffleActive) {
+            // Group by folder and visit the folders in random order; image shuffle
+            // (if on) reorders photos within each folder. A honored start photo
+            // opens the show from its folder.
+            const pinnedSrc = (pin && startSrc !== "") ? startSrc : ""
+            srcs.splice(0, srcs.length)
+            const ordered = orderByFolderShuffle(slideshowBase, slideshowShuffleActive, pinnedSrc)
+            for (let i = 0; i < ordered.length; ++i) srcs.push(ordered[i])
+            startPos = 0
+        } else if (slideshowShuffleActive) {
             // Pin the chosen start photo first and shuffle the rest — unless
             // random start applies, in which case shuffle everything so the
             // slideshow opens on a random photo.
-            const pin = (startId >= 0) && !randomize
             if (pin && startPos > 0) {
                 const s = srcs[0]; srcs[0] = srcs[startPos]; srcs[startPos] = s
             }
-            const from = pin ? 1 : 0
-            for (let i = srcs.length - 1; i > from; --i) {
-                const j = from + Math.floor(Math.random() * (i - from + 1))
-                const t = srcs[i]; srcs[i] = srcs[j]; srcs[j] = t
-            }
+            shuffleTail(srcs, pin ? 0 : -1)
             startPos = 0
         } else if (randomize) {
             // Random start applies to Play/Space (and whenever there's no specific
@@ -246,27 +345,33 @@ ApplicationWindow {
         slideshow.startAt(startPos, play)
     }
 
-    // Toggle shuffle while the slideshow is running: reorder the upcoming photos
-    // but keep the current one on screen.
+    // Toggle image shuffle while the slideshow is running: reorder the upcoming
+    // photos but keep the current one on screen.
     function toggleSlideshowShuffle() {
         slideshowShuffleActive = !slideshowShuffleActive
         if (slideshowBase.length === 0)
             return
 
         const cur = slideshow.currentSource
-        const list = slideshowBase.slice()
 
+        if (slideshowFolderShuffleActive) {
+            // Keep the folders in their current order (don't re-scramble them on an
+            // image-shuffle toggle); only the within-folder order changes. The
+            // current photo stays on screen at its new position.
+            const order = orderByFolderShuffle(slideshowBase, slideshowShuffleActive,
+                                                "", folderSequence(slideshow.sources))
+            slideshow.setSources(order, Math.max(0, order.indexOf(cur)))
+            return
+        }
+
+        const list = slideshowBase.slice()
         if (slideshowShuffleActive) {
             const idx = list.indexOf(cur)
             if (idx > 0) {
                 list.splice(idx, 1)
                 list.unshift(cur)
             }
-            // Shuffle indices 1..end, keeping the current photo at the front.
-            for (let i = list.length - 1; i > 1; --i) {
-                const j = 1 + Math.floor(Math.random() * i)
-                const t = list[i]; list[i] = list[j]; list[j] = t
-            }
+            shuffleTail(list, 0) // keep the current photo at the front
             slideshow.setSources(list, 0)
         } else {
             const pos = Math.max(0, list.indexOf(cur))
@@ -283,6 +388,9 @@ ApplicationWindow {
         category: "slideshow"
         property int intervalMs: 4000
         property bool shuffle: false
+        // Visit enabled folders in random order (photos within a folder stay
+        // together); independent of the per-photo `shuffle` above.
+        property bool shuffleFolders: false
         property bool fade: true
         property bool randomStart: false
         property bool loop: false
@@ -856,6 +964,29 @@ ApplicationWindow {
                 Switch {
                     checked: appSettings.shuffle
                     onToggled: appSettings.shuffle = checked
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 16
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: qsTr("Shuffle folders")
+                    }
+                    Label {
+                        text: qsTr("Play enabled folders in random order, each folder's photos together")
+                        font.pixelSize: 12
+                        color: palette.placeholderText
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                }
+                Switch {
+                    checked: appSettings.shuffleFolders
+                    onToggled: appSettings.shuffleFolders = checked
                 }
             }
 
