@@ -815,10 +815,34 @@ ApplicationWindow {
                     Layout.fillWidth: true
                 }
                 SpinBox {
+                    id: intervalSpin
+                    // Values are in tenths of a second, so the interval is
+                    // adjustable down to 0.1 s (0.1 s … 120.0 s).
                     from: 1
-                    to: 120
-                    value: Math.round(appSettings.intervalMs / 1000)
-                    onValueModified: appSettings.intervalMs = value * 1000
+                    to: 1200
+                    editable: true
+                    value: Math.round(appSettings.intervalMs / 100)
+                    onValueModified: appSettings.intervalMs = value * 100
+
+                    // Step by a whole second (10 tenths) at or above 1 s, and by a
+                    // tenth once below it. Keyed off which indicator is pressed so
+                    // the 1 s boundary is handled per direction: from 1.0 s, down
+                    // goes to 0.9 s but up goes to 2.0 s.
+                    stepSize: intervalSpin.down.pressed ? (value > 10 ? 10 : 1)
+                                                        : (value >= 10 ? 10 : 1)
+
+                    textFromValue: function (value, locale) {
+                        return Number(value / 10).toLocaleString(locale, 'f', 1)
+                    }
+                    valueFromText: function (text, locale) {
+                        return Math.round(Number.fromLocaleString(locale, text) * 10)
+                    }
+                    validator: DoubleValidator {
+                        bottom: intervalSpin.from / 10
+                        top: intervalSpin.to / 10
+                        decimals: 1
+                        notation: DoubleValidator.StandardNotation
+                    }
                 }
             }
 
