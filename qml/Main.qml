@@ -108,13 +108,14 @@ ApplicationWindow {
         }
     }
 
-    // Drop any selected ids whose photos have left the library's active set
-    // (e.g. a folder was disabled or removed), so the detail pane doesn't keep
-    // showing hidden photos.
+    // Drop any selected ids whose photos are no longer visible in the gallery —
+    // either gone from the active set (a folder was disabled or removed) or hidden
+    // by the current tag/search filter. This keeps context-menu actions and the
+    // detail pane from touching photos the user can't actually see.
     function pruneSelection() {
         if (selectedIds.length === 0)
             return
-        const kept = selectedIds.filter(function (id) { return library.photos.contains(id) })
+        const kept = selectedIds.filter(function (id) { return library.filtered.containsId(id) })
         if (kept.length !== selectedIds.length) {
             selectedIds = kept
             if (kept.length === 0) {
@@ -344,6 +345,17 @@ ApplicationWindow {
             if (!win.preservingGalleryScroll)
                 win.scrollGalleryToTop()
         }
+    }
+
+    // When the tag/search filter changes, drop selected photos the new filter
+    // hides. The filter setters invalidate the proxy before emitting these, so
+    // containsId() already reflects the new result set here.
+    Connections {
+        target: library.filtered
+        function onSelectedTagIdsChanged() { win.pruneSelection() }
+        function onMatchAllChanged() { win.pruneSelection() }
+        function onSearchTextChanged() { win.pruneSelection() }
+        function onTagPresenceChanged() { win.pruneSelection() }
     }
 
     // Changing the tag filter re-anchors the gallery to the top of the results.

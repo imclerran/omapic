@@ -52,6 +52,9 @@ public:
     Q_INVOKABLE QUrl sourceAt(int row) const;
     // Map a proxy row to its photo id (used for range selection).
     Q_INVOKABLE int idAt(int row) const;
+    // Whether the photo with this id currently passes the filter (is visible in
+    // the gallery). Used to prune the selection when the filter changes.
+    Q_INVOKABLE bool containsId(int id) const;
 
 signals:
     void selectedTagIdsChanged();

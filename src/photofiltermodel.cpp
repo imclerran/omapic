@@ -102,6 +102,18 @@ int PhotoFilterModel::idAt(int row) const
     return data(index(row, 0), PhotoModel::IdRole).toInt();
 }
 
+bool PhotoFilterModel::containsId(int id) const
+{
+    auto *photos = qobject_cast<PhotoModel *>(sourceModel());
+    if (!photos)
+        return false;
+    const int srcRow = photos->rowForId(id);
+    if (srcRow < 0)
+        return false; // gone from the active set entirely
+    // Visible only if the source row maps through to a proxy row.
+    return mapFromSource(photos->index(srcRow, 0)).isValid();
+}
+
 bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const
 {
     if (m_folderFirst) {
