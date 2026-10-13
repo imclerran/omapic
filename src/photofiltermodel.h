@@ -21,6 +21,7 @@ class PhotoFilterModel : public QSortFilterProxyModel {
     Q_PROPERTY(bool matchAll READ matchAll WRITE setMatchAll NOTIFY matchAllChanged)
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
     Q_PROPERTY(TagPresence tagPresence READ tagPresence WRITE setTagPresence NOTIFY tagPresenceChanged)
+    Q_PROPERTY(bool folderFirst READ folderFirst WRITE setFolderFirst NOTIFY folderFirstChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
 
 public:
@@ -42,6 +43,9 @@ public:
     TagPresence tagPresence() const { return m_tagPresence; }
     void setTagPresence(TagPresence mode);
 
+    bool folderFirst() const { return m_folderFirst; }
+    void setFolderFirst(bool on); // group by containing folder before file name
+
     int count() const { return rowCount(); }
 
     // Map a proxy row to its image URL (used by the slideshow).
@@ -54,13 +58,15 @@ signals:
     void matchAllChanged();
     void searchTextChanged();
     void tagPresenceChanged();
+    void folderFirstChanged();
     void countChanged();
 
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
     // Natural, case-insensitive ordering of file names: runs of digits compare by
     // value (3 < 22 < 111), so numbered files sort as a person would expect, and
-    // the rest of the name compares alphabetically.
+    // the rest of the name compares alphabetically. When folderFirst is on, photos
+    // are grouped by containing folder (compared the same way) before file name.
     bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
 
 private:
@@ -72,5 +78,6 @@ private:
     bool m_matchAll = true;
     QString m_search;
     TagPresence m_tagPresence = AnyTags;
+    bool m_folderFirst = false;
     QCollator m_collator;
 };

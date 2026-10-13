@@ -78,6 +78,16 @@ void PhotoFilterModel::setTagPresence(TagPresence mode)
     emit countChanged();
 }
 
+void PhotoFilterModel::setFolderFirst(bool on)
+{
+    if (m_folderFirst == on)
+        return;
+    m_folderFirst = on;
+    // Only the ordering changes, so re-sort without touching the row filter.
+    invalidate();
+    emit folderFirstChanged();
+}
+
 QUrl PhotoFilterModel::sourceAt(int row) const
 {
     if (row < 0 || row >= rowCount())
@@ -94,6 +104,18 @@ int PhotoFilterModel::idAt(int row) const
 
 bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const
 {
+    if (m_folderFirst) {
+        // Compare the containing folder first, so files group by folder; within a
+        // folder (or when the paths lack a separator) fall through to the name.
+        const QString lp = sourceModel()->data(left, PhotoModel::FilePathRole).toString();
+        const QString rp = sourceModel()->data(right, PhotoModel::FilePathRole).toString();
+        const QString ld = lp.left(lp.lastIndexOf(QLatin1Char('/')));
+        const QString rd = rp.left(rp.lastIndexOf(QLatin1Char('/')));
+        const int dirCmp = m_collator.compare(ld, rd);
+        if (dirCmp != 0)
+            return dirCmp < 0;
+    }
+
     const QString ln = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
     const QString rn = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
     return m_collator.compare(ln, rn) < 0;

@@ -13,6 +13,8 @@ Dialog {
 
     property var library
     property color accent: "#4a90d9"
+    // The gallery Settings object (owned by Main), so the sort toggle persists.
+    property var gallerySettings
 
     title: qsTr("Library Folders")
     modal: true
@@ -182,6 +184,29 @@ Dialog {
                 }
             }
         }
+
+        // Sort options for the gallery grid.
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 2
+
+            CheckBox {
+                id: folderFirstCheck
+                text: qsTr("Group by folder")
+                checked: root.gallerySettings ? root.gallerySettings.folderFirst : false
+                onToggled: if (root.gallerySettings) root.gallerySettings.folderFirst = checked
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                wrapMode: Text.WordWrap
+                text: qsTr("Keep each folder's photos together, sorted by name within the folder. When off, photos from all folders are sorted by name together.")
+                font.pixelSize: 12
+                color: palette.placeholderText
+            }
+        }
+
+        MenuSeparator { Layout.fillWidth: true }
 
         RowLayout {
             Layout.fillWidth: true

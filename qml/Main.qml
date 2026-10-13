@@ -295,12 +295,24 @@ ApplicationWindow {
         // true: crop thumbnails to a square (original behavior). false: fit the
         // whole image, letterboxed to its true aspect ratio.
         property bool cropThumbs: true
+        // true: group photos by containing folder before sorting by file name.
+        // false (original): sort by file name across all folders.
+        property bool folderFirst: false
+    }
+
+    // Keep the gallery sort order in step with the saved setting (also applies it
+    // once the models exist at startup).
+    Binding {
+        target: library.filtered
+        property: "folderFirst"
+        value: gallerySettings.folderFirst
     }
 
     LibraryManager {
         id: libraryManager
         library: library
         accent: win.accent
+        gallerySettings: gallerySettings
     }
 
     // Folder picker for the header's Import button (the Library dialog has its
