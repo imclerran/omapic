@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Quick QuickControls2 Sql Gui Multimedia)
+find_package(exiv2 REQUIRED) # EXIF/metadata for the details pane
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -28,6 +29,7 @@ qt_add_qml_module(omapic
         src/database.h src/database.cpp
         src/photomodel.h src/photomodel.cpp
         src/photofiltermodel.h src/photofiltermodel.cpp
+        src/photometadata.h src/photometadata.cpp
         src/tagmodel.h src/tagmodel.cpp
         src/library.h src/library.cpp
         src/libraryworker.h src/libraryworker.cpp
@@ -37,7 +39,7 @@ qt_add_qml_module(omapic
 
 target_include_directories(omapic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia)
+target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia Exiv2::exiv2lib)
 
 # Installation. The QML module is compiled into the executable, so only the
 # binary plus its desktop entry and icon need to be installed.

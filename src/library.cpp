@@ -15,6 +15,7 @@
 #include <algorithm>
 
 #include "libraryworker.h"
+#include "photometadata.h"
 
 namespace {
 // Above this many photos, bulk tag add/remove runs on the worker thread with a
@@ -557,6 +558,15 @@ QVariantMap Library::photoInfo(int photoId) const
     info[QStringLiteral("fileName")] = p.fileName;
     info[QStringLiteral("path")] = p.path;
     info[QStringLiteral("tags")] = tags;
+
+    // Dimensions and a few EXIF fields, read from the file on demand (empty
+    // strings where unavailable, so the pane hides those rows).
+    const PhotoMetadata meta = readPhotoMetadata(p.path, p.isVideo);
+    info[QStringLiteral("dimensions")] = meta.dimensions;
+    info[QStringLiteral("size")] = meta.size;
+    info[QStringLiteral("taken")] = meta.taken;
+    info[QStringLiteral("camera")] = meta.camera;
+    info[QStringLiteral("modified")] = meta.modified;
     return info;
 }
 

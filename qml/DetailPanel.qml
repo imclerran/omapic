@@ -128,6 +128,64 @@ Rectangle {
             elide: Text.ElideMiddle
         }
 
+        // Dimensions and EXIF. Each row hides itself when its value is empty
+        // (missing tag, a video, an unreadable file); invisible layout items take
+        // no cell, so label/value pairs stay aligned as rows drop out.
+        GridLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: 4
+            visible: root.count === 1
+            columns: 2
+            columnSpacing: 12
+            rowSpacing: 4
+
+            component FieldLabel: Label {
+                font.pixelSize: 11
+                color: palette.placeholderText
+            }
+
+            FieldLabel { visible: (root.info.dimensions || "") !== ""; text: qsTr("Dimensions") }
+            Label {
+                visible: (root.info.dimensions || "") !== ""
+                Layout.fillWidth: true
+                text: root.info.dimensions || ""
+                font.pixelSize: 12
+            }
+
+            FieldLabel { visible: (root.info.size || "") !== ""; text: qsTr("Size") }
+            Label {
+                visible: (root.info.size || "") !== ""
+                Layout.fillWidth: true
+                text: root.info.size || ""
+                font.pixelSize: 12
+            }
+
+            FieldLabel { visible: (root.info.taken || "") !== ""; text: qsTr("Taken") }
+            Label {
+                visible: (root.info.taken || "") !== ""
+                Layout.fillWidth: true
+                text: root.info.taken || ""
+                font.pixelSize: 12
+            }
+
+            FieldLabel { visible: (root.info.camera || "") !== ""; text: qsTr("Camera") }
+            Label {
+                visible: (root.info.camera || "") !== ""
+                Layout.fillWidth: true
+                text: root.info.camera || ""
+                font.pixelSize: 12
+                wrapMode: Text.WrapAnywhere
+            }
+
+            FieldLabel { visible: (root.info.modified || "") !== ""; text: qsTr("Modified") }
+            Label {
+                visible: (root.info.modified || "") !== ""
+                Layout.fillWidth: true
+                text: root.info.modified || ""
+                font.pixelSize: 12
+            }
+        }
+
         MenuSeparator { Layout.fillWidth: true }
 
         Label {

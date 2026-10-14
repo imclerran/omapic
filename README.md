@@ -23,7 +23,7 @@ The library database lives at `~/.local/share/omapic/library.db`.
 
 ## Build
 
-Requires Qt 6.5+, CMake, and a C++17 compiler.
+Requires Qt 6.5+, exiv2 (for reading photo metadata), CMake, and a C++17 compiler.
 
 ```sh
 cmake -B build -G Ninja
