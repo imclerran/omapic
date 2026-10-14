@@ -62,9 +62,42 @@ bool Database::open(const QString &path, const QString &connectionName)
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
         "  PRIMARY KEY (hash, tag_id))"));
 
+    // Tag categories: a tag may belong to one category, which carries a palette
+    // slot (an index into the theme-derived category palette, not a fixed color,
+    // so chips keep following the active theme). Deleting a category leaves its
+    // tags in place, uncategorized.
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS tag_categories ("
+        "  id INTEGER PRIMARY KEY,"
+        "  name TEXT UNIQUE NOT NULL COLLATE NOCASE,"
+        "  color_slot INTEGER NOT NULL DEFAULT 0)"));
+    if (!hasColumn(QStringLiteral("tags"), QStringLiteral("category_id"))) {
+        q.exec(QStringLiteral(
+            "ALTER TABLE tags ADD COLUMN category_id INTEGER "
+            "REFERENCES tag_categories(id) ON DELETE SET NULL"));
+    }
+
     // Hashing existing photos and seeding content_tags is slow on a large
     // library, so it is driven from a worker thread (see LibraryWorker), not here.
     return true;
+}
+
+namespace {
+// Column list + join shared by every tag query, so each TagInfo carries its
+// category. The tags table must be aliased `t`.
+const char *const kTagCategoryColumns = "c.id, c.name, c.color_slot";
+const char *const kTagCategoryJoin = "LEFT JOIN tag_categories c ON c.id = t.category_id ";
+
+// Fills the category fields from a row laid out as (..., c.id, c.name, c.color_slot)
+// starting at column `first`.
+void readCategory(const QSqlQuery &q, int first, TagInfo &info)
+{
+    if (q.value(first).isNull())
+        return;
+    info.categoryId = q.value(first).toInt();
+    info.categoryName = q.value(first + 1).toString();
+    info.colorSlot = q.value(first + 2).toInt();
+}
 }
 
 bool Database::beginTransaction()
@@ -194,19 +227,23 @@ QVector<TagInfo> Database::loadTags()
     // photos, so the delete confirmation reflects everything it would remove.
     QVector<TagInfo> tags;
     QSqlQuery q(QStringLiteral(
-                    "SELECT t.id, t.name, COUNT(pt.photo_id) "
+                    "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
                     "FROM tags t LEFT JOIN photo_tags pt ON pt.tag_id = t.id "
+                    "%3"
                     "WHERE EXISTS (SELECT 1 FROM photo_tags pt2 "
                     "              JOIN photos p ON p.id = pt2.photo_id "
                     "              WHERE pt2.tag_id = t.id AND %1) "
                     "GROUP BY t.id, t.name ORDER BY t.name")
-                    .arg(activeClause(QStringLiteral("p"))),
+                    .arg(activeClause(QStringLiteral("p")),
+                         QLatin1String(kTagCategoryColumns),
+                         QLatin1String(kTagCategoryJoin)),
                 m_db);
     while (q.next()) {
         TagInfo info;
         info.id = q.value(0).toInt();
         info.name = q.value(1).toString();
         info.count = q.value(2).toInt();
+        readCategory(q, 3, info);
         tags.append(info);
     }
     return tags;
@@ -218,20 +255,24 @@ QVector<TagInfo> Database::activeTags()
     // over that set only. Drives the filter sidebar and tag autocomplete.
     QVector<TagInfo> tags;
     QSqlQuery q(QStringLiteral(
-                    "SELECT t.id, t.name, COUNT(pt.photo_id) "
+                    "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
                     "FROM tags t "
                     "JOIN photo_tags pt ON pt.tag_id = t.id "
                     "JOIN photos p ON p.id = pt.photo_id "
+                    "%3"
                     "WHERE %1 "
                     "GROUP BY t.id, t.name HAVING COUNT(pt.photo_id) > 0 "
                     "ORDER BY t.name")
-                    .arg(activeClause(QStringLiteral("p"))),
+                    .arg(activeClause(QStringLiteral("p")),
+                         QLatin1String(kTagCategoryColumns),
+                         QLatin1String(kTagCategoryJoin)),
                 m_db);
     while (q.next()) {
         TagInfo info;
         info.id = q.value(0).toInt();
         info.name = q.value(1).toString();
         info.count = q.value(2).toInt();
+        readCategory(q, 3, info);
         tags.append(info);
     }
     return tags;
@@ -251,17 +292,19 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected)
     // Matching photos: active photos that carry every selected tag. Then return
     // the tags present on those photos, counted over that matching set.
     const QString sql = QStringLiteral(
-        "SELECT t.id, t.name, COUNT(DISTINCT pt.photo_id) "
+        "SELECT t.id, t.name, COUNT(DISTINCT pt.photo_id), %4 "
         "FROM tags t "
         "JOIN photo_tags pt ON pt.tag_id = t.id "
         "JOIN photos p ON p.id = pt.photo_id "
+        "%5"
         "WHERE %1 AND p.id IN ("
         "  SELECT pt2.photo_id FROM photo_tags pt2 "
         "  WHERE pt2.tag_id IN (%2) "
         "  GROUP BY pt2.photo_id HAVING COUNT(DISTINCT pt2.tag_id) = %3) "
         "GROUP BY t.id, t.name HAVING COUNT(DISTINCT pt.photo_id) > 0 "
         "ORDER BY t.name")
-        .arg(activeClause(QStringLiteral("p")), inList, QString::number(selected.size()));
+        .arg(activeClause(QStringLiteral("p")), inList, QString::number(selected.size()),
+             QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin));
 
     QSqlQuery q(m_db);
     q.prepare(sql);
@@ -273,6 +316,7 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected)
         info.id = q.value(0).toInt();
         info.name = q.value(1).toString();
         info.count = q.value(2).toInt();
+        readCategory(q, 3, info);
         tags.append(info);
     }
     return tags;
@@ -634,17 +678,117 @@ void Database::deleteTag(int tagId)
     q.exec();
 }
 
-QVector<QPair<int, QString>> Database::photoTagPairs(int photoId)
+QVector<TagInfo> Database::photoTags(int photoId)
 {
-    QVector<QPair<int, QString>> out;
+    QVector<TagInfo> out;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
-        "SELECT t.id, t.name FROM photo_tags pt "
+        "SELECT t.id, t.name, %1 FROM photo_tags pt "
         "JOIN tags t ON t.id = pt.tag_id "
-        "WHERE pt.photo_id = ? ORDER BY t.name"));
+        "%2"
+        "WHERE pt.photo_id = ? ORDER BY t.name")
+        .arg(QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin)));
     q.addBindValue(photoId);
     q.exec();
-    while (q.next())
-        out.append({q.value(0).toInt(), q.value(1).toString()});
+    while (q.next()) {
+        TagInfo info;
+        info.id = q.value(0).toInt();
+        info.name = q.value(1).toString();
+        readCategory(q, 2, info);
+        out.append(info);
+    }
     return out;
+}
+
+QVector<CategoryInfo> Database::loadCategories()
+{
+    QVector<CategoryInfo> out;
+    QSqlQuery q(QStringLiteral(
+                    "SELECT c.id, c.name, c.color_slot, COUNT(t.id) "
+                    "FROM tag_categories c LEFT JOIN tags t ON t.category_id = c.id "
+                    "GROUP BY c.id, c.name, c.color_slot ORDER BY c.name"),
+                m_db);
+    while (q.next()) {
+        CategoryInfo info;
+        info.id = q.value(0).toInt();
+        info.name = q.value(1).toString();
+        info.colorSlot = q.value(2).toInt();
+        info.tagCount = q.value(3).toInt();
+        out.append(info);
+    }
+    return out;
+}
+
+int Database::insertCategory(const QString &name, int colorSlot)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO tag_categories(name, color_slot) VALUES(?, ?)"));
+    q.addBindValue(name);
+    q.addBindValue(colorSlot);
+    if (!q.exec())
+        return -1; // UNIQUE (NOCASE) violation or other error
+    return q.lastInsertId().toInt();
+}
+
+int Database::categoryIdByName(const QString &name)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
+    q.addBindValue(name);
+    q.exec();
+    if (q.next())
+        return q.value(0).toInt();
+    return -1;
+}
+
+QString Database::categoryName(int categoryId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT name FROM tag_categories WHERE id = ?"));
+    q.addBindValue(categoryId);
+    q.exec();
+    if (q.next())
+        return q.value(0).toString();
+    return {};
+}
+
+void Database::renameCategory(int categoryId, const QString &newName)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ?"));
+    q.addBindValue(newName);
+    q.addBindValue(categoryId);
+    q.exec();
+}
+
+void Database::setCategoryColor(int categoryId, int colorSlot)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE tag_categories SET color_slot = ? WHERE id = ?"));
+    q.addBindValue(colorSlot);
+    q.addBindValue(categoryId);
+    q.exec();
+}
+
+void Database::deleteCategory(int categoryId)
+{
+    // The FK is ON DELETE SET NULL, but clear explicitly too so the tags are
+    // uncategorized even on a connection without foreign_keys enabled.
+    QSqlQuery u(m_db);
+    u.prepare(QStringLiteral("UPDATE tags SET category_id = NULL WHERE category_id = ?"));
+    u.addBindValue(categoryId);
+    u.exec();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM tag_categories WHERE id = ?"));
+    q.addBindValue(categoryId);
+    q.exec();
+}
+
+void Database::setTagCategory(int tagId, int categoryId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE tags SET category_id = ? WHERE id = ?"));
+    q.addBindValue(categoryId < 0 ? QVariant(QMetaType(QMetaType::Int)) : QVariant(categoryId));
+    q.addBindValue(tagId);
+    q.exec();
 }

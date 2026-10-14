@@ -59,7 +59,18 @@ public:
     void unlinkTagFromContent(int photoId, int tagId);
     void deleteTag(int tagId); // delete a tag and all its photo links
 
-    QVector<QPair<int, QString>> photoTagPairs(int photoId);
+    // Tags on one photo (with category info; count is unused), sorted by name.
+    QVector<TagInfo> photoTags(int photoId);
+
+    // --- Tag categories ---
+    QVector<CategoryInfo> loadCategories();            // all categories, sorted by name
+    int insertCategory(const QString &name, int colorSlot); // new id, -1 on error/duplicate
+    int categoryIdByName(const QString &name);         // case-insensitive lookup, -1 if none
+    QString categoryName(int categoryId);              // current name, empty if unknown
+    void renameCategory(int categoryId, const QString &newName);
+    void setCategoryColor(int categoryId, int colorSlot);
+    void deleteCategory(int categoryId);               // its tags become uncategorized
+    void setTagCategory(int tagId, int categoryId);    // categoryId < 0 clears it
 
     // Content-addressed tags: tags are archived against a file's content hash so
     // they survive re-import, restore, move, or an identical copy.

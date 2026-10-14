@@ -33,6 +33,20 @@ struct TagInfo {
     int id = -1;
     QString name;
     int count = 0;
+    // The category this tag belongs to, if any (-1 / empty when uncategorized).
+    // colorSlot indexes the category palette (see OmarchyTheme::categoryPalette).
+    int categoryId = -1;
+    QString categoryName;
+    int colorSlot = -1;
+};
+
+// A user-defined grouping of tags (place, event, artist, ...). Tags inherit the
+// category's palette slot for color coding in the chips.
+struct CategoryInfo {
+    int id = -1;
+    QString name;
+    int colorSlot = 0;
+    int tagCount = 0; // tags assigned to this category
 };
 
 struct FolderInfo {

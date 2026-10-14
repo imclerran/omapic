@@ -23,6 +23,9 @@ public:
         NameRole,
         CountRole,
         SelectedRole,
+        CategoryIdRole,
+        CategoryNameRole,
+        ColorSlotRole,
     };
 
     explicit TagModel(QObject *parent = nullptr);

@@ -117,6 +117,59 @@ QColor OmarchyTheme::dimText() const
                  QGuiApplication::palette().placeholderText().color());
 }
 
+QVariantList OmarchyTheme::categoryPalette() const
+{
+    // Omarchy themes name their terminal colors; use those so category colors
+    // match the rest of the desktop. The order is fixed so slot i stays roughly
+    // the same hue family across themes (red, orange, yellow, green, ...).
+    static const char *const kThemeKeys[] = {
+        "red", "orange", "yellow", "green", "cyan", "blue", "magenta", "brown",
+    };
+    // Fallback for non-Omarchy systems: mid-saturation hues that read on both
+    // light and dark surfaces, in the same order as the theme keys.
+    static const char *const kFallback[] = {
+        "#e06c75", "#e59350", "#d4b04a", "#7fb66a", "#45b3ad", "#5c9ded", "#a98bea", "#b07d5e",
+    };
+
+    QVariantList out;
+    int fromTheme = 0;
+    for (size_t i = 0; i < sizeof(kThemeKeys) / sizeof(kThemeKeys[0]); ++i) {
+        const QString key = QLatin1String(kThemeKeys[i]);
+        if (m_colors.contains(key)) {
+            out.append(m_colors.value(key));
+            ++fromTheme;
+        } else {
+            out.append(QColor(QLatin1String(kFallback[i])));
+        }
+    }
+    // A theme with only one or two named colors would mix two palettes; only
+    // trust it when it is reasonably complete.
+    if (fromTheme < 4) {
+        out.clear();
+        for (const char *hex : kFallback)
+            out.append(QColor(QLatin1String(hex)));
+    }
+    return out;
+}
+
+QColor OmarchyTheme::categoryColor(int slot, const QColor &fallback) const
+{
+    if (slot < 0)
+        return fallback;
+    const QVariantList pal = categoryPalette();
+    if (pal.isEmpty())
+        return fallback;
+    return pal.at(slot % pal.size()).value<QColor>();
+}
+
+QColor OmarchyTheme::textOn(const QColor &background) const
+{
+    // Perceived luminance (Rec. 601 weights) on the sRGB components.
+    const qreal lum = 0.299 * background.redF() + 0.587 * background.greenF()
+                      + 0.114 * background.blueF();
+    return lum > 0.55 ? QColor(QStringLiteral("#1b1b1f")) : QColor(QStringLiteral("#f7f7f8"));
+}
+
 void OmarchyTheme::applyToApplication()
 {
     if (m_colors.isEmpty())
