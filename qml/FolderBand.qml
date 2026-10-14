@@ -23,6 +23,29 @@ Rectangle {
     color: palette.alternateBase
     implicitHeight: layout.implicitHeight + 16
 
+    // "#rrggbb" for a color, for embedding in the folder icon's SVG fill.
+    function toHex(c) {
+        function h(v) { const s = Math.round(v * 255).toString(16); return s.length < 2 ? "0" + s : s }
+        return "#" + h(c.r) + h(c.g) + h(c.b)
+    }
+
+    // An inline SVG icon (a single 24x24 path) filled with `c`, as a data URI.
+    // Vectors instead of emoji glyphs, so the tiles render consistently and
+    // follow the active theme. Re-evaluated when the color changes, so the icons
+    // recolor live with the theme.
+    function iconSource(pathData, c) {
+        return "data:image/svg+xml," + encodeURIComponent(
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='"
+            + band.toHex(c) + "' d='" + pathData + "'/></svg>")
+    }
+    function folderIcon(c) {
+        return band.iconSource("M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z", c)
+    }
+    function upIcon(c) {
+        // A solid block up-arrow (wide head, thick shaft) rather than a thin line arrow.
+        return band.iconSource("M12 3 L20 11 L15 11 L15 20 L9 20 L9 11 L4 11 Z", c)
+    }
+
     ColumnLayout {
         id: layout
         anchors.fill: parent
@@ -64,9 +87,27 @@ Rectangle {
                         anchors.rightMargin: 10
                         spacing: 6
 
-                        Label {
-                            text: tile.isUp ? "⬆" : "📁"
-                            font.pixelSize: 14
+                        // Themed folder glyph for folders; the Up tile keeps its
+                        // arrow (tinted to match).
+                        Item {
+                            Layout.preferredWidth: 16
+                            Layout.preferredHeight: 16
+                            Image {
+                                anchors.centerIn: parent
+                                visible: !tile.isUp
+                                source: band.folderIcon(band.accent)
+                                sourceSize.width: 16
+                                sourceSize.height: 16
+                                smooth: true
+                            }
+                            Image {
+                                anchors.centerIn: parent
+                                visible: tile.isUp
+                                source: band.upIcon(band.accent)
+                                sourceSize.width: 16
+                                sourceSize.height: 16
+                                smooth: true
+                            }
                         }
                         Label {
                             Layout.fillWidth: true
