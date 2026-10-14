@@ -749,13 +749,28 @@ QVector<TagInfo> Database::photoTags(int photoId)
     return out;
 }
 
-QVector<CategoryInfo> Database::loadCategories()
+QVector<CategoryInfo> Database::loadCategories(bool activeOnly)
 {
     QVector<CategoryInfo> out;
+    // When activeOnly, keep a category only if it has no tags yet (a freshly
+    // created, still-empty category stays visible so it can be populated) or at
+    // least one of its tags applies to a photo in an active folder. Mirrors the
+    // active-folder filter loadTags() uses for individual tags.
+    const QString having = activeOnly
+        ? QStringLiteral(
+              "HAVING COUNT(t.id) = 0 OR EXISTS ("
+              "  SELECT 1 FROM tags t2 "
+              "  JOIN photo_tags pt ON pt.tag_id = t2.id "
+              "  JOIN photos p ON p.id = pt.photo_id "
+              "  WHERE t2.category_id = c.id AND %1) ")
+              .arg(activeClause(QStringLiteral("p")))
+        : QString();
     QSqlQuery q(QStringLiteral(
                     "SELECT c.id, c.name, c.color_slot, COUNT(t.id) "
                     "FROM tag_categories c LEFT JOIN tags t ON t.category_id = c.id "
-                    "GROUP BY c.id, c.name, c.color_slot ORDER BY c.name"),
+                    "GROUP BY c.id, c.name, c.color_slot "
+                    "%1"
+                    "ORDER BY c.name").arg(having),
                 m_db);
     while (q.next()) {
         CategoryInfo info;

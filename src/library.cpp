@@ -713,8 +713,11 @@ QVariantList Library::tagSuggestions() const
 
 QVariantList Library::categories() const
 {
+    // Hide categories whose tags are all in hidden/removed folders, mirroring how
+    // the tag list itself drops inactive tags (empty categories stay, so they can
+    // still be populated).
     QVariantList out;
-    for (const CategoryInfo &c : m_db.loadCategories()) {
+    for (const CategoryInfo &c : m_db.loadCategories(/*activeOnly=*/true)) {
         out.append(QVariantMap{
             {QStringLiteral("id"), c.id},
             {QStringLiteral("name"), c.name},
@@ -881,4 +884,8 @@ void Library::refreshTags()
 
     m_tags->setTags(tags);
     emit tagsChanged();
+    // Category visibility in the tag manager depends on the same active set (a
+    // category is hidden once all its tags leave the active folders), so refresh
+    // it in lockstep with the tag list.
+    emit categoriesChanged();
 }

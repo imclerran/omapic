@@ -65,7 +65,11 @@ public:
     QVector<TagInfo> photoTags(int photoId);
 
     // --- Tag categories ---
-    QVector<CategoryInfo> loadCategories();            // all categories, sorted by name
+    // All categories sorted by name. With activeOnly, drop categories whose tags
+    // are all in hidden/removed folders (no tag applies to any active photo),
+    // keeping still-empty categories visible so they can be populated. tagCount
+    // is always the category's total tag count.
+    QVector<CategoryInfo> loadCategories(bool activeOnly = false);
     int insertCategory(const QString &name, int colorSlot); // new id, -1 on error/duplicate
     int categoryIdByName(const QString &name);         // case-insensitive lookup, -1 if none
     QString categoryName(int categoryId);              // current name, empty if unknown
