@@ -112,27 +112,28 @@ Rectangle {
 
                             // Categorized tags take their category's color on the
                             // border, a light tint when idle and a solid fill when
-                            // selected. Uncategorized tags keep the accent look.
+                            // selected. Uncategorized tags keep a neutral grey border
+                            // and, when selected, a matching grey fill — so selection
+                            // never borrows one of the category palette colors.
                             readonly property bool categorized: chip.colorSlot >= 0
                             readonly property color tint: root.categoryColor(chip.colorSlot)
+                            readonly property color selFill: chip.categorized ? chip.tint : sys.mid
 
                             implicitHeight: 24
                             implicitWidth: chipLabel.implicitWidth + 16
                             radius: height / 2
-                            color: chip.selected ? chip.tint
+                            color: chip.selected ? chip.selFill
                                  : chip.categorized ? Qt.alpha(chip.tint, 0.18)
                                  : sys.alternateBase
                             border.width: 1
-                            border.color: chip.selected || chip.categorized ? chip.tint : sys.mid
+                            border.color: chip.categorized ? chip.tint : sys.mid
 
                             Label {
                                 id: chipLabel
                                 anchors.centerIn: parent
                                 text: chip.name + "  " + chip.count
                                 font.pixelSize: 12
-                                color: !chip.selected ? palette.text
-                                     : chip.categorized ? omarchyTheme.textOn(chip.tint)
-                                     : palette.highlightedText
+                                color: chip.selected ? omarchyTheme.textOn(chip.selFill) : palette.text
                             }
 
                             MouseArea {
