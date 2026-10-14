@@ -227,6 +227,38 @@ ApplicationWindow {
         }
     }
 
+    // Keep the gallery in place when applying/removing tags. Small edits update
+    // the model in place and don't move the grid, but a large selection runs on
+    // the worker thread and reloads the whole model (setPhotos) on completion,
+    // which snaps the grid to the top. Capture contentY around the operation and
+    // restore it — immediately for the synchronous (small) case, and again once
+    // the background job finishes (busy returns to false) for the large case.
+    property real galleryTagScrollY: 0
+    property bool galleryTagScrollPending: false
+    function withPreservedGalleryScrollTagging(fn) {
+        const y = grid.contentY
+        galleryTagScrollY = y
+        fn()
+        if (library.busy) {
+            // The edit was handed to the worker; restore after it reloads the model.
+            galleryTagScrollPending = true
+        } else {
+            grid.contentY = y
+            Qt.callLater(function () { grid.contentY = y })
+        }
+    }
+
+    Connections {
+        target: library
+        function onBusyChanged() {
+            if (!library.busy && win.galleryTagScrollPending) {
+                win.galleryTagScrollPending = false
+                grid.contentY = win.galleryTagScrollY
+                Qt.callLater(function () { grid.contentY = win.galleryTagScrollY })
+            }
+        }
+    }
+
     // Drop any selected ids whose photos are no longer visible in the gallery —
     // either gone from the active set (a folder was disabled or removed) or hidden
     // by the current tag/search filter. This keeps context-menu actions and the
@@ -809,6 +841,8 @@ ApplicationWindow {
                 library: library
                 selectedIds: win.selectedIds
                 accent: win.accent
+                // Keep the gallery from jumping when a tag edit reloads the model.
+                tagScrollGuard: win.withPreservedGalleryScrollTagging
             }
 
             TagSidebar {
