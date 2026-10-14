@@ -592,24 +592,26 @@ Dialog {
 
                         readonly property bool active: root.categoryFilter === fchip.filterValue
                         readonly property color tint: root.categoryColor(fchip.colorSlot)
+                        // Active fill: the category color for a category chip, a
+                        // neutral grey for the non-category chips (All / Uncategorized)
+                        // so selection doesn't borrow the accent / a category color.
+                        readonly property color selFill: fchip.colorSlot >= 0 ? fchip.tint : sys.mid
 
                         implicitHeight: 24
                         implicitWidth: fchipLabel.implicitWidth + 16
                         radius: height / 2
-                        color: fchip.active ? fchip.tint
+                        color: fchip.active ? fchip.selFill
                              : fchip.colorSlot >= 0 ? Qt.alpha(fchip.tint, 0.18)
                              : sys.alternateBase
                         border.width: 1
-                        border.color: fchip.active || fchip.colorSlot >= 0 ? fchip.tint : sys.mid
+                        border.color: fchip.colorSlot >= 0 ? fchip.tint : sys.mid
 
                         Label {
                             id: fchipLabel
                             anchors.centerIn: parent
                             text: fchip.label
                             font.pixelSize: 12
-                            color: !fchip.active ? palette.text
-                                 : fchip.colorSlot >= 0 ? omarchyTheme.textOn(fchip.tint)
-                                 : palette.highlightedText
+                            color: fchip.active ? omarchyTheme.textOn(fchip.selFill) : palette.text
                         }
 
                         MouseArea {
