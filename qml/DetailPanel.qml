@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Ian McLerran
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -21,6 +22,14 @@ Rectangle {
     property var appliedLower: []
 
     SystemPalette { id: sys }
+
+    // Remembers whether the collapsible file/EXIF detail is expanded. Collapsed
+    // by default so the tag list isn't crowded.
+    Settings {
+        id: ui
+        category: "details"
+        property bool infoExpanded: false
+    }
 
     color: sys.window
 
@@ -101,88 +110,112 @@ Rectangle {
             font.pixelSize: 15
         }
 
-        // File details (single selection only).
-        Label {
-            visible: root.count === 1
-            text: qsTr("File")
-            font.pixelSize: 11
-            color: palette.placeholderText
-        }
+        // File name (single selection). Shrinks to fit rather than clipping when
+        // a long name would overflow two lines.
+        FontMetrics { id: nameMetrics; font.bold: true; font.pixelSize: 15 }
         Label {
             visible: root.count === 1
             Layout.fillWidth: true
+            Layout.preferredHeight: Math.ceil(nameMetrics.lineSpacing * 2)
             text: root.info.fileName || ""
             font.bold: true
+            font.pixelSize: 15
+            minimumPixelSize: 9
+            fontSizeMode: Text.Fit
             wrapMode: Text.WrapAnywhere
             maximumLineCount: 2
             elide: Text.ElideMiddle
+            verticalAlignment: Text.AlignVCenter
         }
+
+        // Collapsible detail (path + dimensions/EXIF), folded away by default so
+        // it never crowds the tags. A quiet caret-label, matching the other
+        // section labels rather than a heavy header bar.
         Label {
             visible: root.count === 1
             Layout.fillWidth: true
-            text: root.info.path || ""
+            text: (ui.infoExpanded ? "▾  " : "▸  ") + qsTr("Info")
             font.pixelSize: 11
             color: palette.placeholderText
-            wrapMode: Text.WrapAnywhere
-            maximumLineCount: 2
-            elide: Text.ElideMiddle
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: ui.infoExpanded = !ui.infoExpanded
+            }
         }
 
-        // Dimensions and EXIF. Each row hides itself when its value is empty
-        // (missing tag, a video, an unreadable file); invisible layout items take
-        // no cell, so label/value pairs stay aligned as rows drop out.
-        GridLayout {
+        ColumnLayout {
+            visible: root.count === 1 && ui.infoExpanded
             Layout.fillWidth: true
-            Layout.topMargin: 4
-            visible: root.count === 1
-            columns: 2
-            columnSpacing: 12
-            rowSpacing: 4
+            Layout.leftMargin: 8
+            spacing: 4
 
-            component FieldLabel: Label {
+            Label {
+                Layout.fillWidth: true
+                text: root.info.path || ""
                 font.pixelSize: 11
                 color: palette.placeholderText
-            }
-
-            FieldLabel { visible: (root.info.dimensions || "") !== ""; text: qsTr("Dimensions") }
-            Label {
-                visible: (root.info.dimensions || "") !== ""
-                Layout.fillWidth: true
-                text: root.info.dimensions || ""
-                font.pixelSize: 12
-            }
-
-            FieldLabel { visible: (root.info.size || "") !== ""; text: qsTr("Size") }
-            Label {
-                visible: (root.info.size || "") !== ""
-                Layout.fillWidth: true
-                text: root.info.size || ""
-                font.pixelSize: 12
-            }
-
-            FieldLabel { visible: (root.info.taken || "") !== ""; text: qsTr("Taken") }
-            Label {
-                visible: (root.info.taken || "") !== ""
-                Layout.fillWidth: true
-                text: root.info.taken || ""
-                font.pixelSize: 12
-            }
-
-            FieldLabel { visible: (root.info.camera || "") !== ""; text: qsTr("Camera") }
-            Label {
-                visible: (root.info.camera || "") !== ""
-                Layout.fillWidth: true
-                text: root.info.camera || ""
-                font.pixelSize: 12
                 wrapMode: Text.WrapAnywhere
+                maximumLineCount: 3
+                elide: Text.ElideMiddle
             }
 
-            FieldLabel { visible: (root.info.modified || "") !== ""; text: qsTr("Modified") }
-            Label {
-                visible: (root.info.modified || "") !== ""
+            // Dimensions and EXIF. Each row hides itself when its value is empty
+            // (missing tag, a video, an unreadable file); invisible layout items
+            // take no cell, so label/value pairs stay aligned as rows drop out.
+            GridLayout {
                 Layout.fillWidth: true
-                text: root.info.modified || ""
-                font.pixelSize: 12
+                Layout.topMargin: 2
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 4
+
+                component FieldLabel: Label {
+                    font.pixelSize: 11
+                    color: palette.placeholderText
+                }
+
+                FieldLabel { visible: (root.info.dimensions || "") !== ""; text: qsTr("Dimensions") }
+                Label {
+                    visible: (root.info.dimensions || "") !== ""
+                    Layout.fillWidth: true
+                    text: root.info.dimensions || ""
+                    font.pixelSize: 12
+                }
+
+                FieldLabel { visible: (root.info.size || "") !== ""; text: qsTr("Size") }
+                Label {
+                    visible: (root.info.size || "") !== ""
+                    Layout.fillWidth: true
+                    text: root.info.size || ""
+                    font.pixelSize: 12
+                }
+
+                FieldLabel { visible: (root.info.taken || "") !== ""; text: qsTr("Taken") }
+                Label {
+                    visible: (root.info.taken || "") !== ""
+                    Layout.fillWidth: true
+                    text: root.info.taken || ""
+                    font.pixelSize: 12
+                }
+
+                FieldLabel { visible: (root.info.camera || "") !== ""; text: qsTr("Camera") }
+                Label {
+                    visible: (root.info.camera || "") !== ""
+                    Layout.fillWidth: true
+                    text: root.info.camera || ""
+                    font.pixelSize: 12
+                    wrapMode: Text.WrapAnywhere
+                }
+
+                FieldLabel { visible: (root.info.modified || "") !== ""; text: qsTr("Modified") }
+                Label {
+                    visible: (root.info.modified || "") !== ""
+                    Layout.fillWidth: true
+                    text: root.info.modified || ""
+                    font.pixelSize: 12
+                }
             }
         }
 
