@@ -11,6 +11,9 @@
 
 #include <functional>
 
+#include "photo.h"
+#include "photometadata.h"
+
 namespace {
 
 // Image and video globs the scanner picks up. Keep the video set in sync with
@@ -90,6 +93,24 @@ void LibraryWorker::runMigration()
     // Seed the content-tag archive from whatever tags already exist (now that
     // the photos carrying them have hashes). Idempotent on later runs.
     m_db.backfillContentTags();
+
+    // Backfill the capture time (timeline view) for rows that predate the
+    // taken_at column — reads EXIF/mtime once per legacy photo, here on the
+    // worker thread. Idempotent: only NULL rows are revisited.
+    const QVector<QPair<int, QString>> takenTodo = m_db.photosMissingTakenAt();
+    const int takenTotal = takenTodo.size();
+    if (takenTotal > 0) {
+        emit progress(tr("Preparing library…"), 0, takenTotal);
+        const int takenStep = qMax(1, takenTotal / 100);
+        int done = 0;
+        for (const auto &pr : takenTodo) {
+            m_db.setPhotoTakenAt(pr.first, capturedAtEpoch(pr.second, isVideoPath(pr.second)));
+            ++done;
+            if (done % takenStep == 0 || done == takenTotal)
+                emit progress(tr("Preparing library…"), done, takenTotal);
+        }
+    }
+
     emit migrationFinished();
 }
 
@@ -110,7 +131,8 @@ void LibraryWorker::importDirectory(const QString &root)
 
     for (const QString &file : files) {
         const QString hash = Database::hashFile(file);
-        const int id = m_db.insertPhoto(file, hash);
+        const qint64 takenAt = capturedAtEpoch(file, isVideoPath(file));
+        const int id = m_db.insertPhoto(file, hash, takenAt);
         if (id >= 0)
             m_db.applyContentTags(id, hash); // reattach any archived tags for this content
 
@@ -197,7 +219,8 @@ void LibraryWorker::rescan()
         }
 
         if (!didRelocate) {
-            const int id = m_db.insertPhoto(p, hash);
+            const qint64 takenAt = capturedAtEpoch(p, isVideoPath(p));
+            const int id = m_db.insertPhoto(p, hash, takenAt);
             if (id >= 0)
                 m_db.applyContentTags(id, hash);
         }

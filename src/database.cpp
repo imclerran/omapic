@@ -77,6 +77,13 @@ bool Database::open(const QString &path, const QString &connectionName)
             "REFERENCES tag_categories(id) ON DELETE SET NULL"));
     }
 
+    // Capture time in Unix seconds for the timeline view (EXIF date taken, or the
+    // file mtime when there's no EXIF date). NULL until backfilled: the one-time
+    // worker migration fills it for pre-existing rows (see LibraryWorker).
+    if (!hasColumn(QStringLiteral("photos"), QStringLiteral("taken_at")))
+        q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN taken_at INTEGER"));
+    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at)"));
+
     // Hashing existing photos and seeding content_tags is slow on a large
     // library, so it is driven from a worker thread (see LibraryWorker), not here.
     return true;
@@ -150,6 +157,45 @@ void Database::setPhotoHash(int photoId, const QString &hash)
     u.exec();
 }
 
+int Database::photosMissingTakenAtCount()
+{
+    QSqlQuery q(QStringLiteral("SELECT COUNT(*) FROM photos WHERE taken_at IS NULL"), m_db);
+    if (q.next())
+        return q.value(0).toInt();
+    return 0;
+}
+
+QVector<QPair<int, QString>> Database::photosMissingTakenAt()
+{
+    QVector<QPair<int, QString>> todo;
+    QSqlQuery q(QStringLiteral("SELECT id, path FROM photos WHERE taken_at IS NULL"), m_db);
+    while (q.next())
+        todo.append({q.value(0).toInt(), q.value(1).toString()});
+    return todo;
+}
+
+void Database::setPhotoTakenAt(int photoId, qint64 takenAt)
+{
+    // Write the value even when 0 (file unreadable): the row is then no longer
+    // NULL, so the backfill doesn't keep retrying it on every launch.
+    QSqlQuery u(m_db);
+    u.prepare(QStringLiteral("UPDATE photos SET taken_at = ? WHERE id = ?"));
+    u.addBindValue(takenAt);
+    u.addBindValue(photoId);
+    u.exec();
+}
+
+QStringList Database::activePhotoPaths()
+{
+    QStringList paths;
+    QSqlQuery q(QStringLiteral("SELECT p.path FROM photos p WHERE %1 ORDER BY p.path")
+                    .arg(activeClause(QStringLiteral("p"))),
+                m_db);
+    while (q.next())
+        paths.append(q.value(0).toString());
+    return paths;
+}
+
 void Database::backfillContentTags()
 {
     QSqlQuery q(m_db);
@@ -184,7 +230,7 @@ QVector<Photo> Database::loadPhotos()
     // only from photos that are themselves active, so disabling the folder
     // holding the kept copy promotes a still-visible duplicate in its place.
     QSqlQuery q(QStringLiteral(
-                    "SELECT p.id, p.path FROM photos p WHERE %1 "
+                    "SELECT p.id, p.path, p.taken_at FROM photos p WHERE %1 "
                     "AND (p.hash IS NULL OR p.hash = '' OR p.id = ("
                     "  SELECT p2.id FROM photos p2 WHERE p2.hash = p.hash AND %2 "
                     "  ORDER BY p2.added_at, p2.id LIMIT 1)) "
@@ -195,6 +241,7 @@ QVector<Photo> Database::loadPhotos()
         Photo p;
         p.id = q.value(0).toInt();
         p.path = q.value(1).toString();
+        p.takenAt = q.value(2).isNull() ? 0 : q.value(2).toLongLong();
         p.fileName = QFileInfo(p.path).fileName();
         p.isVideo = isVideoPath(p.path);
         indexOf.insert(p.id, photos.size());
@@ -425,13 +472,15 @@ QStringList Database::allTagNames()
     return out;
 }
 
-int Database::insertPhoto(const QString &path, const QString &hash)
+int Database::insertPhoto(const QString &path, const QString &hash, qint64 takenAt)
 {
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("INSERT OR IGNORE INTO photos(path, added_at, hash) VALUES(?, ?, ?)"));
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO photos(path, added_at, hash, taken_at) VALUES(?, ?, ?, ?)"));
     q.addBindValue(path);
     q.addBindValue(QDateTime::currentSecsSinceEpoch());
     q.addBindValue(hash.isEmpty() ? QVariant() : QVariant(hash));
+    q.addBindValue(takenAt > 0 ? QVariant(takenAt) : QVariant());
     q.exec();
 
     // Fill in the hash if the row predated hashing (e.g. legacy import).

@@ -27,13 +27,41 @@ Dialog {
     property int pendingId: -1
     property string pendingPath: ""
 
+    // Keep the folder list from jumping to the top when it refreshes.
+    // library.folders returns a fresh QVariantList on every foldersChanged, so the
+    // ListView's model is reassigned and its scroll resets. Remember the scroll
+    // just before a mutation and restore it when the refresh lands. This covers
+    // both synchronous changes (enable/disable, remove — foldersChanged fires
+    // during the call) and asynchronous ones (add/rescan run on the worker thread
+    // and emit foldersChanged only once it finishes).
+    property real savedScrollY: 0
+    property bool restoreScroll: false
+    function rememberScroll() {
+        savedScrollY = list.contentY
+        restoreScroll = true
+    }
+
+    Connections {
+        target: root.library
+        function onFoldersChanged() {
+            if (!root.restoreScroll)
+                return
+            root.restoreScroll = false
+            // Set now and again after the model reset relayout (the reset may
+            // clamp contentY to 0 on the same tick), mirroring Main's
+            // withPreservedGalleryScroll.
+            list.contentY = root.savedScrollY
+            Qt.callLater(function () { list.contentY = root.savedScrollY })
+        }
+    }
+
     FolderDialog {
         id: addDialog
         title: qsTr("Choose a folder to add")
         // Start browsing from the home directory (keeps the last spot once the
         // user navigates during the session).
         currentFolder: StandardPaths.writableLocation(StandardPaths.HomeLocation)
-        onAccepted: root.library.importDirectory(selectedFolder)
+        onAccepted: { root.rememberScroll(); root.library.importDirectory(selectedFolder) }
     }
 
     Dialog {
@@ -45,6 +73,7 @@ Dialog {
         standardButtons: Dialog.Yes | Dialog.No
 
         onAccepted: {
+            root.rememberScroll()
             root.library.removeFolder(root.pendingId)
             root.pendingId = -1
             root.pendingPath = ""
@@ -114,7 +143,7 @@ Dialog {
                             ToolTip.visible: hovered
                             ToolTip.text: checked ? qsTr("Shown in library — click to hide")
                                                   : qsTr("Hidden from library — click to show")
-                            onToggled: root.library.setFolderEnabled(row.modelData.id, checked)
+                            onToggled: { root.rememberScroll(); root.library.setFolderEnabled(row.modelData.id, checked) }
                         }
 
                         ColumnLayout {
@@ -221,7 +250,7 @@ Dialog {
                 enabled: list.count > 0
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Pick up new, moved, and deleted files on disk")
-                onClicked: root.library.rescan()
+                onClicked: { root.rememberScroll(); root.library.rescan() }
             }
             Item { Layout.fillWidth: true }
             Button {

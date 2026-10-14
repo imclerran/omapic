@@ -20,3 +20,9 @@ struct PhotoMetadata {
 };
 
 PhotoMetadata readPhotoMetadata(const QString &path, bool isVideo);
+
+// The photo's capture time in Unix seconds, for grouping in the timeline view:
+// EXIF DateTimeOriginal, then the generic DateTime tag, then the file's mtime.
+// Videos and EXIF-less images fall back to mtime. Returns 0 only when the file
+// can't be stat'd at all. Reads straight from disk; call it off the UI thread.
+qint64 capturedAtEpoch(const QString &path, bool isVideo);

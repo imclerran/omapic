@@ -35,7 +35,55 @@ QString humanSize(qint64 bytes)
     return QStringLiteral("%1 %2").arg(v, 0, 'f', 1).arg(QLatin1String(units[u]));
 }
 
+// The EXIF capture time as a QDateTime (invalid when absent/unparsable):
+// DateTimeOriginal first, then the generic DateTime tag. EXIF stores
+// "YYYY:MM:DD HH:MM:SS". Returns an invalid QDateTime on any error.
+QDateTime exifCaptureDateTime(const QString &path)
+{
+    try {
+        Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(path.toStdString());
+        if (!image.get())
+            return {};
+        image->readMetadata();
+        const Exiv2::ExifData &exif = image->exifData();
+        if (exif.empty())
+            return {};
+
+        const auto getStr = [&exif](const char *key) -> QString {
+            const auto it = exif.findKey(Exiv2::ExifKey(key));
+            if (it != exif.end())
+                return QString::fromStdString(it->toString()).trimmed();
+            return {};
+        };
+
+        QString taken = getStr("Exif.Photo.DateTimeOriginal");
+        if (taken.isEmpty())
+            taken = getStr("Exif.Image.DateTime");
+        if (taken.isEmpty())
+            return {};
+        return QDateTime::fromString(taken, QStringLiteral("yyyy:MM:dd HH:mm:ss"));
+    } catch (...) {
+        return {};
+    }
+}
+
 } // namespace
+
+qint64 capturedAtEpoch(const QString &path, bool isVideo)
+{
+    // Images: prefer the EXIF capture time; fall back to mtime below. Videos skip
+    // the EXIF read entirely (exiv2 doesn't cover them here) and use mtime.
+    if (!isVideo) {
+        const QDateTime dt = exifCaptureDateTime(path);
+        if (dt.isValid())
+            return dt.toSecsSinceEpoch();
+    }
+
+    const QFileInfo fi(path);
+    if (fi.exists())
+        return fi.lastModified().toSecsSinceEpoch();
+    return 0;
+}
 
 PhotoMetadata readPhotoMetadata(const QString &path, bool isVideo)
 {

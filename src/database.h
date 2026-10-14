@@ -42,7 +42,9 @@ public:
     int orphanPhotoCount();   // photos not under any registered folder
     void deleteOrphanPhotos(); // remove them (content-tag archive is kept)
 
-    int insertPhoto(const QString &path, const QString &hash); // id (existing or new), -1 on error
+    // id (existing or new), -1 on error. takenAt is the capture time in Unix
+    // seconds (0 = unknown; stored as NULL), used by the timeline view.
+    int insertPhoto(const QString &path, const QString &hash, qint64 takenAt = 0);
     void relocatePhoto(int photoId, const QString &newPath);   // move a row to a new path (rescan)
     void deletePhoto(int photoId);                 // delete one photo row (cascades photo_tags)
     QVector<PhotoRef> allPhotoRefs();              // id/path/hash of every row, for rescan
@@ -86,6 +88,16 @@ public:
     QVector<QPair<int, QString>> photosMissingHash();     // (id, path) of those photos
     void setPhotoHash(int photoId, const QString &hash);
     void backfillContentTags(); // seed the archive from current photo tags
+
+    // Capture-time backfill (timeline view), same bite-sized worker pattern as
+    // the hash backfill: fill taken_at from EXIF/mtime for rows that lack it.
+    int photosMissingTakenAtCount();
+    QVector<QPair<int, QString>> photosMissingTakenAt(); // (id, path) of rows with NULL taken_at
+    void setPhotoTakenAt(int photoId, qint64 takenAt);
+
+    // Paths of every photo in the active (shown) set — orphans plus photos under
+    // an enabled folder. Used to build the folder-view navigation tree.
+    QStringList activePhotoPaths();
 
 private:
     bool hasColumn(const QString &table, const QString &column);

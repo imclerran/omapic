@@ -12,6 +12,13 @@ Item {
     property bool crop: true
     property color accent: "#4a90d9"
 
+    // Content, passed in explicitly by the caller so this delegate works both in
+    // a model-backed view (the grid) and when driven by a plain data object (the
+    // timeline's per-month repeaters).
+    property string filePath: ""
+    property bool isVideo: false
+    property int tagCount: 0
+
     signal clicked(int modifiers)
     signal doubleClicked()
     signal rightClicked()
@@ -32,7 +39,7 @@ Item {
         Image {
             anchors.fill: parent
             anchors.margins: 4
-            source: "image://thumbs/" + encodeURIComponent(model.filePath)
+            source: "image://thumbs/" + encodeURIComponent(root.filePath)
             fillMode: root.crop ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
             cache: true
@@ -43,7 +50,7 @@ Item {
 
         // Play indicator for video items: a semi-opaque disc with a triangle.
         Rectangle {
-            visible: model.isVideo === true
+            visible: root.isVideo
             anchors.centerIn: parent
             width: 44
             height: 44
@@ -74,7 +81,7 @@ Item {
 
         // Tag-count badge.
         Rectangle {
-            visible: model.tags.length > 0
+            visible: root.tagCount > 0
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.margins: 8
@@ -86,7 +93,7 @@ Item {
             Label {
                 id: badge
                 anchors.centerIn: parent
-                text: "🏷 " + model.tags.length
+                text: "🏷 " + root.tagCount
                 color: "white"
                 font.pixelSize: 12
             }

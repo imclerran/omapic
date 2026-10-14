@@ -24,6 +24,8 @@ qt_add_qml_module(omapic
         qml/SlideshowView.qml
         qml/LibraryManager.qml
         qml/TagManager.qml
+        qml/TimelineView.qml
+        qml/FolderBand.qml
     SOURCES
         src/photo.h
         src/database.h src/database.cpp
