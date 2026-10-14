@@ -25,6 +25,8 @@ public:
         IsVideoRole,
         TagsRole,
         TagIdsRole,
+        DateTakenRole, // capture time in Unix seconds (0 = unknown)
+        MonthKeyRole,  // "yyyy-MM" of the capture time, the timeline section key
     };
 
     explicit PhotoModel(QObject *parent = nullptr);

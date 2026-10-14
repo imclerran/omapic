@@ -4,6 +4,7 @@
 
 #include "photomodel.h"
 
+#include <QDateTime>
 #include <QUrl>
 
 PhotoModel::PhotoModel(QObject *parent)
@@ -44,6 +45,14 @@ QVariant PhotoModel::data(const QModelIndex &index, int role) const
             ids.append(id);
         return ids;
     }
+    case DateTakenRole:
+        return static_cast<qlonglong>(p.takenAt);
+    case MonthKeyRole: {
+        if (p.takenAt <= 0)
+            return QStringLiteral("0000-00"); // unknown dates group together, last
+        const QDateTime dt = QDateTime::fromSecsSinceEpoch(p.takenAt);
+        return dt.toString(QStringLiteral("yyyy-MM"));
+    }
     default:
         return {};
     }
@@ -59,6 +68,8 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
         {IsVideoRole, "isVideo"},
         {TagsRole, "tags"},
         {TagIdsRole, "tagIds"},
+        {DateTakenRole, "takenAt"},
+        {MonthKeyRole, "monthKey"},
     };
 }
 

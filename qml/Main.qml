@@ -36,6 +36,32 @@ ApplicationWindow {
     property string menuPhotoName: ""
     property bool menuPhotoIsVideo: false
 
+    // Central view mode: "ungrouped", "timeline", or "folder". Restored from and
+    // persisted to gallerySettings (see below). The header button group sets it.
+    property string viewMode: "ungrouped"
+
+    // Folder view: the directory currently shown. "" = the root level (library
+    // root folders as tiles, plus any orphan photos in the grid).
+    property string currentFolder: ""
+    // The navigable entries (up tile + subfolders, or the roots) for currentFolder.
+    // Refreshed explicitly since folderEntries() isn't a notifying property.
+    property var folderEntries: []
+    function refreshFolderEntries() {
+        win.folderEntries = (win.viewMode === "folder") ? library.folderEntries(win.currentFolder) : []
+    }
+
+    onViewModeChanged: {
+        if (win.viewMode === "folder") {
+            win.currentFolder = ""
+            win.refreshFolderEntries()
+        }
+        win.scrollGalleryToTop()
+    }
+    onCurrentFolderChanged: {
+        win.refreshFolderEntries()
+        win.scrollGalleryToTop()
+    }
+
     // Brief, self-dismissing status message (wallpaper added, Aether failed, …).
     function toast(message) {
         toastLabel.text = message
@@ -173,7 +199,10 @@ ApplicationWindow {
     // model has updated, avoiding a GridView originY gap (blank space above the
     // results) when the filter changes while scrolled down.
     function scrollGalleryToTop() {
-        Qt.callLater(function () { grid.positionViewAtBeginning() })
+        Qt.callLater(function () {
+            grid.positionViewAtBeginning()
+            timelineView.toTop()
+        })
     }
 
     // Set while a mutation that must keep the gallery in place is running, so the
@@ -234,11 +263,59 @@ ApplicationWindow {
             anchorIndex = index
             cursorIndex = index
         }
-        grid.forceActiveFocus()
+        // Return keyboard focus to whichever view is showing, so arrow keys and
+        // Space keep working right after a click.
+        if (win.viewMode === "timeline")
+            timelineView.focusView()
+        else
+            grid.forceActiveFocus()
     }
 
-    // Arrow-key navigation. Plain arrows move a single selection; Shift+arrows
-    // extend a contiguous selection from the anchor to a moving cursor.
+    // Open the right-click context menu for a photo, matching the grid's behavior:
+    // a right-click on a photo outside the current multi-selection selects just
+    // that one first; a right-click inside it keeps the whole selection. Shared by
+    // the grid and timeline so both menus behave identically.
+    function openPhotoMenu(index, id, fileName, isVideo) {
+        if (win.selectedIds.length <= 1 || win.selectedIds.indexOf(id) === -1)
+            win.handleClick(index, id, 0)
+        win.menuPhotoId = id
+        win.menuPhotoName = fileName
+        win.menuPhotoIsVideo = isVideo === true
+        if (win.selectedIds.length > 1)
+            multiPhotoMenu.popup()
+        else
+            photoMenu.popup()
+    }
+
+    // Commit the selection cursor to a proxy row. Plain move replaces the
+    // selection; extend (Shift) grows a contiguous range from the anchor. View-
+    // agnostic: the grid and the timeline both drive selection through this, each
+    // handling its own scrolling. Returns true when the move was applied.
+    function moveCursorTo(target, extend) {
+        const count = library.filtered.count
+        if (count === 0)
+            return false
+        target = Math.max(0, Math.min(count - 1, target))
+        if (extend) {
+            if (anchorIndex < 0 || anchorIndex >= count)
+                anchorIndex = target
+            cursorIndex = target
+            selectRange(anchorIndex, cursorIndex)
+        } else {
+            const id = library.filtered.idAt(target)
+            if (id < 0)
+                return false
+            selectedIds = [id]
+            anchorIndex = target
+            cursorIndex = target
+        }
+        return true
+    }
+
+    // Arrow-key navigation for the grid. Plain arrows move a single selection;
+    // Shift+arrows extend a contiguous selection from the anchor to a moving
+    // cursor. (The timeline has its own month-aware navigation; both commit
+    // through moveCursorTo.)
     function navigate(dir, extend) {
         const count = library.filtered.count
         if (count === 0)
@@ -256,20 +333,8 @@ ApplicationWindow {
         }
         target = Math.max(0, Math.min(count - 1, target))
 
-        if (extend) {
-            if (anchorIndex < 0 || anchorIndex >= count)
-                anchorIndex = base
-            cursorIndex = target
-            selectRange(anchorIndex, cursorIndex)
-        } else {
-            const id = library.filtered.idAt(target)
-            if (id < 0)
-                return
-            selectedIds = [id]
-            anchorIndex = target
-            cursorIndex = target
-        }
-        grid.positionViewAtIndex(target, GridView.Contain)
+        if (moveCursorTo(target, extend))
+            grid.positionViewAtIndex(target, GridView.Contain)
     }
 
     // Start a slideshow at the currently focused photo. play=false opens paused.
@@ -407,6 +472,9 @@ ApplicationWindow {
         // true: group photos by containing folder before sorting by file name.
         // false (original): sort by file name across all folders.
         property bool folderFirst: false
+        // Central view mode: "ungrouped" (the flat grid), "timeline" (grouped by
+        // capture month), or "folder" (navigable library folders).
+        property string viewMode: "ungrouped"
     }
 
     // Keep the gallery sort order in step with the saved setting (also applies it
@@ -415,6 +483,32 @@ ApplicationWindow {
         target: library.filtered
         property: "folderFirst"
         value: gallerySettings.folderFirst
+    }
+
+    // Restore the saved view mode at startup, then persist any later change.
+    Component.onCompleted: win.viewMode = gallerySettings.viewMode
+    Binding {
+        target: gallerySettings
+        property: "viewMode"
+        value: win.viewMode
+    }
+
+    // Drive the filter model's mode from the current view: timeline sorts by
+    // capture date; folder view restricts to one directory level (currentFolder).
+    Binding {
+        target: library.filtered
+        property: "sortByDate"
+        value: win.viewMode === "timeline"
+    }
+    Binding {
+        target: library.filtered
+        property: "folderMode"
+        value: win.viewMode === "folder"
+    }
+    Binding {
+        target: library.filtered
+        property: "folderPath"
+        value: win.currentFolder
     }
 
     LibraryManager {
@@ -448,6 +542,10 @@ ApplicationWindow {
         target: library
         function onFoldersChanged() {
             win.pruneSelection()
+            // The folder set or active photos changed; rebuild the folder-view
+            // navigation (handles a now-removed currentFolder too — its photos and
+            // subfolder tiles simply vanish, and Up still walks back by string).
+            win.refreshFolderEntries()
             // A single image delete/remove keeps its scroll position; only broader
             // changes (folders added/removed, rescan, orphan cleanup) re-anchor.
             if (!win.preservingGalleryScroll)
@@ -629,6 +727,43 @@ ApplicationWindow {
                 onClicked: importDialog.open()
             }
 
+            ToolSeparator {}
+
+            // View mode: switch the central area between the flat grid, a
+            // capture-month timeline, and a navigable folder tree. Exclusive, so
+            // exactly one is active; the choice is persisted in gallerySettings.
+            ButtonGroup { id: viewModeGroup; exclusive: true }
+            Row {
+                spacing: 0
+                ToolButton {
+                    text: qsTr("Ungrouped")
+                    checkable: true
+                    ButtonGroup.group: viewModeGroup
+                    checked: win.viewMode === "ungrouped"
+                    onClicked: win.viewMode = "ungrouped"
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("All photos in one grid")
+                }
+                ToolButton {
+                    text: qsTr("Timeline")
+                    checkable: true
+                    ButtonGroup.group: viewModeGroup
+                    checked: win.viewMode === "timeline"
+                    onClicked: win.viewMode = "timeline"
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Grouped by the month each photo was taken")
+                }
+                ToolButton {
+                    text: qsTr("Folders")
+                    checkable: true
+                    ButtonGroup.group: viewModeGroup
+                    checked: win.viewMode === "folder"
+                    onClicked: win.viewMode = "folder"
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Browse your library folders")
+                }
+            }
+
             Item { Layout.fillWidth: true }
 
             TextField {
@@ -696,9 +831,26 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: palette.base
 
+            // Folder-view navigation strip: the Up tile plus the current folder's
+            // subfolders (or the library roots at the top level). Shown only in
+            // folder mode; the grid below drops to make room via its topMargin.
+            FolderBand {
+                id: folderBand
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                visible: win.viewMode === "folder"
+                entries: win.folderEntries
+                currentFolder: win.currentFolder
+                accent: win.accent
+                onNavigate: (path) => win.currentFolder = path
+            }
+
             GridView {
                 id: grid
                 anchors.fill: parent
+                anchors.topMargin: folderBand.visible ? folderBand.height : 0
+                visible: win.viewMode !== "timeline"
                 clip: true
                 cellWidth: win.cellSize
                 cellHeight: win.cellSize
@@ -740,24 +892,13 @@ ApplicationWindow {
                     height: grid.cellHeight
                     accent: win.accent
                     crop: gallerySettings.cropThumbs
+                    filePath: model.filePath
+                    isVideo: model.isVideo === true
+                    tagCount: model.tags.length
                     selected: win.selectedIds.indexOf(model.id) !== -1
                     onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
                     onDoubleClicked: win.startSlideshow(model.id, false)
-                    onRightClicked: {
-                        // Right-clicking a photo that's already part of a
-                        // multi-selection keeps the whole selection and opens the
-                        // multi-photo menu; otherwise select just this one and open
-                        // the full single-photo menu.
-                        if (win.selectedIds.length <= 1 || win.selectedIds.indexOf(model.id) === -1)
-                            win.handleClick(index, model.id, 0)
-                        win.menuPhotoId = model.id
-                        win.menuPhotoName = model.fileName
-                        win.menuPhotoIsVideo = model.isVideo === true
-                        if (win.selectedIds.length > 1)
-                            multiPhotoMenu.popup()
-                        else
-                            photoMenu.popup()
-                    }
+                    onRightClicked: win.openPhotoMenu(index, model.id, model.fileName, model.isVideo === true)
                 }
             }
 
@@ -773,6 +914,9 @@ ApplicationWindow {
 
             MouseArea {
                 anchors.fill: parent
+                anchors.topMargin: folderBand.visible ? folderBand.height : 0
+                visible: grid.visible
+                enabled: grid.visible
                 acceptedButtons: Qt.NoButton
                 propagateComposedEvents: true
                 onWheel: (wheel) => {
@@ -805,6 +949,9 @@ ApplicationWindow {
             // work), only empty-space presses are handled here.
             MouseArea {
                 anchors.fill: parent
+                anchors.topMargin: folderBand.visible ? folderBand.height : 0
+                visible: grid.visible
+                enabled: grid.visible
                 acceptedButtons: Qt.LeftButton
                 onPressed: (mouse) => {
                     const idx = grid.indexAt(grid.contentX + mouse.x, grid.contentY + mouse.y)
@@ -817,12 +964,41 @@ ApplicationWindow {
 
             Label {
                 anchors.centerIn: parent
-                visible: grid.count === 0
+                // Only in the grid modes, and not when the folder band already
+                // gives the view content (subfolders/roots to click into).
+                visible: grid.visible && grid.count === 0
+                         && !(win.viewMode === "folder" && win.folderEntries.length > 0)
                 text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === ""
                        && tagSidebar.tagPresence === 0)
-                      ? qsTr("Import a folder to get started.")
+                      ? (win.viewMode === "folder"
+                         ? qsTr("This folder has no photos.")
+                         : qsTr("Import a folder to get started."))
                       : qsTr("No photos match the current filters.")
                 color: palette.placeholderText
+            }
+
+            // Capture-month timeline. Shares library.filtered (sorted by date in
+            // this mode) and routes selection/slideshow back through the same win
+            // helpers the grid uses, so selection is consistent across views.
+            TimelineView {
+                id: timelineView
+                anchors.fill: parent
+                visible: win.viewMode === "timeline"
+                library: library
+                accent: win.accent
+                crop: gallerySettings.cropThumbs
+                cellSize: win.cellSize
+                selectedIds: win.selectedIds
+                cursorIndex: win.cursorIndex
+                anchorIndex: win.anchorIndex
+                emptyFiltered: library.tags.selectedTagIds.length === 0
+                               && gallerySearch.text.trim() === "" && tagSidebar.tagPresence === 0
+                onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
+                onPhotoDoubleClicked: (id) => win.startSlideshow(id, false)
+                onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)
+                onSelectAllRequested: win.selectAll()
+                onMoveCursorRequested: (target, extend) => win.moveCursorTo(target, extend)
+                onSlideshowFromFocusRequested: (play) => win.slideshowFromFocus(play)
             }
         }
     }

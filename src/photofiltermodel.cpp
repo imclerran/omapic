@@ -4,6 +4,9 @@
 
 #include "photofiltermodel.h"
 
+#include <QDate>
+#include <QDateTime>
+#include <QLocale>
 #include <QString>
 #include <QStringList>
 
@@ -88,6 +91,47 @@ void PhotoFilterModel::setFolderFirst(bool on)
     emit folderFirstChanged();
 }
 
+void PhotoFilterModel::setSortByDate(bool on)
+{
+    if (m_sortByDate == on)
+        return;
+    m_sortByDate = on;
+    invalidate(); // ordering only
+    emit sortByDateChanged();
+}
+
+void PhotoFilterModel::setFolderMode(bool on)
+{
+    if (m_folderMode == on)
+        return;
+    m_folderMode = on;
+    invalidateRowFilter();
+    emit folderModeChanged();
+    emit countChanged();
+}
+
+void PhotoFilterModel::setFolderPath(const QString &path)
+{
+    if (m_folderPath == path)
+        return;
+    m_folderPath = path;
+    invalidateRowFilter();
+    emit folderPathChanged();
+    emit countChanged();
+}
+
+void PhotoFilterModel::setFolderRoots(const QStringList &roots)
+{
+    if (m_folderRoots == roots)
+        return;
+    m_folderRoots = roots;
+    // Only matters at the folder-view root (orphan detection); re-filter there.
+    if (m_folderMode && m_folderPath.isEmpty()) {
+        invalidateRowFilter();
+        emit countChanged();
+    }
+}
+
 QUrl PhotoFilterModel::sourceAt(int row) const
 {
     if (row < 0 || row >= rowCount())
@@ -100,6 +144,52 @@ int PhotoFilterModel::idAt(int row) const
     if (row < 0 || row >= rowCount())
         return -1;
     return data(index(row, 0), PhotoModel::IdRole).toInt();
+}
+
+QVariantMap PhotoFilterModel::photoAt(int row) const
+{
+    if (row < 0 || row >= rowCount())
+        return {};
+    const QModelIndex idx = index(row, 0);
+    return QVariantMap{
+        {QStringLiteral("id"), data(idx, PhotoModel::IdRole).toInt()},
+        {QStringLiteral("filePath"), data(idx, PhotoModel::FilePathRole).toString()},
+        {QStringLiteral("fileName"), data(idx, PhotoModel::FileNameRole).toString()},
+        {QStringLiteral("isVideo"), data(idx, PhotoModel::IsVideoRole).toBool()},
+        {QStringLiteral("tagCount"), data(idx, PhotoModel::TagsRole).toStringList().size()},
+    };
+}
+
+QVariantList PhotoFilterModel::monthGroups() const
+{
+    QVariantList groups;
+    const int n = rowCount();
+    int i = 0;
+    while (i < n) {
+        const QString key = data(index(i, 0), PhotoModel::MonthKeyRole).toString();
+        const qint64 taken = data(index(i, 0), PhotoModel::DateTakenRole).toLongLong();
+        int j = i + 1;
+        while (j < n && data(index(j, 0), PhotoModel::MonthKeyRole).toString() == key)
+            ++j;
+
+        QString label;
+        if (taken <= 0 || key == QStringLiteral("0000-00")) {
+            label = tr("Undated");
+        } else {
+            const QDate d = QDateTime::fromSecsSinceEpoch(taken).date();
+            // Localized "Month Year", e.g. "October 2026".
+            label = QLocale().toString(d, QStringLiteral("MMMM yyyy"));
+        }
+
+        groups.append(QVariantMap{
+            {QStringLiteral("key"), key},
+            {QStringLiteral("label"), label},
+            {QStringLiteral("firstRow"), i},
+            {QStringLiteral("count"), j - i},
+        });
+        i = j;
+    }
+    return groups;
 }
 
 bool PhotoFilterModel::containsId(int id) const
@@ -116,6 +206,19 @@ bool PhotoFilterModel::containsId(int id) const
 
 bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const
 {
+    if (m_sortByDate) {
+        // Timeline: newest first. Fall back to the name (ascending) within the
+        // same instant so the order is stable and photos without a date (0) sort
+        // together at the end.
+        const qint64 lt = sourceModel()->data(left, PhotoModel::DateTakenRole).toLongLong();
+        const qint64 rt = sourceModel()->data(right, PhotoModel::DateTakenRole).toLongLong();
+        if (lt != rt)
+            return lt > rt;
+        const QString ln = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
+        const QString rn = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
+        return m_collator.compare(ln, rn) < 0;
+    }
+
     if (m_folderFirst) {
         // Compare the containing folder first, so files group by folder; within a
         // folder (or when the paths lack a separator) fall through to the name.
@@ -133,9 +236,36 @@ bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &righ
     return m_collator.compare(ln, rn) < 0;
 }
 
+bool PhotoFilterModel::passesFolderGate(const QString &path) const
+{
+    if (!m_folderMode)
+        return true;
+
+    if (m_folderPath.isEmpty()) {
+        // Root level: show orphans only — photos under no registered folder.
+        for (const QString &root : m_folderRoots) {
+            if (path == root || path.startsWith(root + QLatin1Char('/')))
+                return false;
+        }
+        return true;
+    }
+
+    // Inside a folder: immediate children only (photos directly in m_folderPath,
+    // not nested deeper — nested ones are reached by descending into subfolders).
+    const QString dir = path.left(path.lastIndexOf(QLatin1Char('/')));
+    return dir == m_folderPath;
+}
+
 bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
     const QModelIndex idx = sourceModel()->index(sourceRow, 0, sourceParent);
+
+    // Folder-view directory gate (no-op outside folder mode).
+    if (m_folderMode) {
+        const QString path = sourceModel()->data(idx, PhotoModel::FilePathRole).toString();
+        if (!passesFolderGate(path))
+            return false;
+    }
 
     // Tag filter.
     if (!m_selected.isEmpty()) {

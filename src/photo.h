@@ -25,6 +25,9 @@ struct Photo {
     QString path;
     QString fileName;
     bool isVideo = false;
+    // Capture time in Unix seconds: EXIF date taken when available, else the file
+    // mtime. 0 when unknown (not yet backfilled). Drives the timeline grouping.
+    qint64 takenAt = 0;
     QSet<int> tagIds;
     QStringList tagNames;
 };

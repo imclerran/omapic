@@ -79,6 +79,15 @@ public:
     Q_INVOKABLE void deleteTag(int tagId);
     Q_INVOKABLE int renameTag(int tagId, const QString &newName); // returns a RenameResult
     Q_INVOKABLE QVariantMap photoInfo(int photoId) const;
+
+    // Navigable entries for the folder view at `path`. When `path` is empty
+    // (the root), returns one {type:"folder", name, path, count} per enabled
+    // root library folder. Otherwise returns a leading {type:"up", name, path}
+    // entry (path = the parent dir, or "" to return to the root listing) followed
+    // by the immediate subfolders of `path` that hold active photos. Orphan
+    // photos (under no folder) aren't listed here — they appear as photos in the
+    // grid at the root level.
+    Q_INVOKABLE QVariantList folderEntries(const QString &path) const;
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
     // Tags relevant to the active set as {name, colorSlot, categoryName}, for the
@@ -149,6 +158,9 @@ private:
 
     void applyTags(int photoId);
     void refreshTags();
+    // Keep the filter model's list of registered folder roots in step with the
+    // DB, so the folder view can tell orphan photos from foldered ones.
+    void updateFolderRoots();
     // Ref-counted so overlapping worker jobs (e.g. a bulk tag started mid-import)
     // don't fight over one busy flag: the indicator stays up until every job has
     // called its matching endBusy. Pass the same `modal` to endBusy as to beginBusy.

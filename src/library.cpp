@@ -9,6 +9,8 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QProcess>
+#include <QSet>
+#include <QStringList>
 #include <QUrl>
 #include <QStandardPaths>
 
@@ -73,6 +75,9 @@ Library::Library(QObject *parent)
 
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
+    updateFolderRoots();
+    // Keep the folder-view's orphan detection in step as folders come and go.
+    connect(this, &Library::foldersChanged, this, &Library::updateFolderRoots);
 
     // Hashing runs on a worker thread so the window stays responsive. The worker
     // owns its own DB connection; we only touch the models here on the GUI thread.
@@ -92,9 +97,9 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     m_workerThread.start();
 
-    // Kick off the one-time hash backfill. Only show the progress UI when there
-    // is actually a backlog to chew through.
-    if (m_db.unhashedPhotoCount() > 0)
+    // Kick off the one-time hash + capture-time backfill. Only show the progress
+    // UI when there is actually a backlog to chew through.
+    if (m_db.unhashedPhotoCount() > 0 || m_db.photosMissingTakenAtCount() > 0)
         beginBusy(tr("Preparing library…"));
     emit requestMigration();
 }
@@ -173,6 +178,11 @@ void Library::onWorkerProgress(const QString &phase, int done, int total)
 
 void Library::onMigrationFinished()
 {
+    // The backfill wrote hashes (affecting duplicate collapse) and capture times
+    // (driving the timeline) on the worker's connection; reload so the in-memory
+    // views reflect them without needing a restart.
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
     endBusy(/*modal=*/true);
 }
 
@@ -222,6 +232,87 @@ QVariantList Library::folders() const
             {QStringLiteral("enabled"), f.enabled},
         });
     }
+    return out;
+}
+
+void Library::updateFolderRoots()
+{
+    QStringList roots;
+    for (const FolderInfo &f : m_db.loadFolders())
+        roots.append(f.path);
+    m_filtered->setFolderRoots(roots);
+}
+
+QVariantList Library::folderEntries(const QString &path) const
+{
+    QVariantList out;
+    const QStringList paths = m_db.activePhotoPaths();
+
+    // A folder tile, with the count of active photos at or under `dir`.
+    const auto makeFolder = [&](const QString &dir) -> QVariantMap {
+        int count = 0;
+        const QString prefix = dir + QLatin1Char('/');
+        for (const QString &p : paths) {
+            if (p == dir || p.startsWith(prefix))
+                ++count;
+        }
+        QString name = QFileInfo(dir).fileName();
+        if (name.isEmpty())
+            name = dir;
+        return QVariantMap{
+            {QStringLiteral("type"), QStringLiteral("folder")},
+            {QStringLiteral("name"), name},
+            {QStringLiteral("path"), dir},
+            {QStringLiteral("count"), count},
+        };
+    };
+
+    if (path.isEmpty()) {
+        // Root level: one tile per enabled root library folder. (Orphan photos
+        // show as photos in the grid here, not as tiles.)
+        for (const FolderInfo &f : m_db.loadFolders()) {
+            if (f.enabled)
+                out.append(makeFolder(f.path));
+        }
+        return out;
+    }
+
+    // Inside a folder: a leading "up" entry, then the immediate subfolders that
+    // hold at least one active photo.
+    bool isRoot = false;
+    for (const FolderInfo &f : m_db.loadFolders()) {
+        if (f.path == path) {
+            isRoot = true;
+            break;
+        }
+    }
+    const QString parent = isRoot ? QString() : path.left(path.lastIndexOf(QLatin1Char('/')));
+    out.append(QVariantMap{
+        {QStringLiteral("type"), QStringLiteral("up")},
+        {QStringLiteral("name"), QFileInfo(path).fileName()}, // parent name shown by QML
+        {QStringLiteral("path"), parent},
+    });
+
+    const QString prefix = path + QLatin1Char('/');
+    QStringList childDirs; // immediate subdirectories, in first-seen order
+    QSet<QString> seen;
+    for (const QString &p : paths) {
+        if (!p.startsWith(prefix))
+            continue;
+        const QString rest = p.mid(prefix.size());
+        const int slash = rest.indexOf(QLatin1Char('/'));
+        if (slash < 0)
+            continue; // a photo directly in `path`, not a subfolder
+        const QString child = path + QLatin1Char('/') + rest.left(slash);
+        if (!seen.contains(child)) {
+            seen.insert(child);
+            childDirs.append(child);
+        }
+    }
+    childDirs.sort(Qt::CaseInsensitive);
+    for (const QString &child : childDirs)
+        out.append(makeFolder(child));
+
     return out;
 }
 
