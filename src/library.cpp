@@ -52,7 +52,11 @@ Library::Library(QObject *parent)
     , m_filtered(new PhotoFilterModel(this))
     , m_tags(new TagModel(this))
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    // Pinned to ~/.local/share/omapic regardless of organizationName (which is
+    // set for QSettings' sake); AppDataLocation would otherwise nest this under a
+    // second "omapic" once an org name exists.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+                        + QStringLiteral("/omapic");
     QDir().mkpath(dir);
     const QString dbPath = dir + QStringLiteral("/library.db");
     m_db.open(dbPath);

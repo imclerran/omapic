@@ -15,6 +15,11 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("omapic"));
+    // So QSettings lands in ~/.config/omapic/ (not an "Unknown Organization"
+    // folder) and groups values by category. The data and cache dirs are pinned
+    // to Generic*Location + "/omapic" (see library.cpp / thumbnailprovider.cpp)
+    // so setting this does not nest or move them.
+    QGuiApplication::setOrganizationName(QStringLiteral("omapic"));
     // Ties the window to omapic.desktop so Wayland compositors show the right
     // icon and name in docks, alt-tab, etc. (the app_id becomes "omapic").
     QGuiApplication::setDesktopFileName(QStringLiteral("omapic"));

@@ -126,8 +126,11 @@ private:
 
 ThumbnailProvider::ThumbnailProvider()
 {
-    m_cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
-                 + QStringLiteral("/thumbnails");
+    // Pinned to ~/.cache/omapic regardless of organizationName (set for
+    // QSettings), which would otherwise nest CacheLocation under a second
+    // "omapic". Thumbnails are regenerable, so no migration is needed either way.
+    m_cacheDir = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)
+                 + QStringLiteral("/omapic/thumbnails");
     QDir().mkpath(m_cacheDir);
     m_pool.setMaxThreadCount(qMax(2, QThread::idealThreadCount()));
 }
