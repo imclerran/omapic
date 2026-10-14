@@ -13,6 +13,9 @@ Rectangle {
     property var library
     property var selectedIds: []
     property color accent: "#4a90d9"
+    // Optional wrapper that preserves the gallery scroll across a tag edit (a
+    // large edit reloads the photo model, which would otherwise jump the grid).
+    property var tagScrollGuard: null
 
     readonly property int count: selectedIds.length
 
@@ -71,20 +74,33 @@ Rectangle {
         }
     }
 
+    // Run a tag mutation through the scroll guard when one is set, so the gallery
+    // stays put even if the edit reloads the photo model on a worker thread.
+    function runGuarded(fn) {
+        if (root.tagScrollGuard)
+            root.tagScrollGuard(fn)
+        else
+            fn()
+    }
+
     function commitTag(name) {
         if (!name || name.trim().length === 0)
             return
-        if (selectedIds.length === 1)
-            library.addTag(selectedIds[0], name)
-        else if (selectedIds.length > 1)
-            library.addTagToPhotos(selectedIds, name)
+        runGuarded(function () {
+            if (selectedIds.length === 1)
+                library.addTag(selectedIds[0], name)
+            else if (selectedIds.length > 1)
+                library.addTagToPhotos(selectedIds, name)
+        })
     }
 
     function removeTag(tagId) {
-        if (selectedIds.length === 1)
-            library.removeTag(selectedIds[0], tagId)
-        else if (selectedIds.length > 1)
-            library.removeTagFromPhotos(selectedIds, tagId)
+        runGuarded(function () {
+            if (selectedIds.length === 1)
+                library.removeTag(selectedIds[0], tagId)
+            else if (selectedIds.length > 1)
+                library.removeTagFromPhotos(selectedIds, tagId)
+        })
     }
 
     onSelectedIdsChanged: refresh()
