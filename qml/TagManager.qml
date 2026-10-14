@@ -55,6 +55,20 @@ Dialog {
         return n
     }
 
+    // Active (shown) tags in a category — those in allTags, which already excludes
+    // tags that only touch hidden/removed folders. Used for the Tags-tab category
+    // pills so their counts match the "All" pill and the filtered tag list rather
+    // than including hidden tags. (The Categories tab shows the total instead.)
+    function activeCategoryCount(categoryId) {
+        let n = 0
+        const all = root.library.allTags
+        for (let i = 0; i < all.length; ++i) {
+            if (all[i].categoryId === categoryId)
+                ++n
+        }
+        return n
+    }
+
     // The tag list, filtered by the search box and the category chips (filter the
     // model, not visibility — a ListView leaves gaps for hidden delegates).
     readonly property var filteredTags: {
@@ -618,7 +632,7 @@ Dialog {
                         delegate: FilterChip {
                             required property var modelData
                             filterValue: modelData.id
-                            label: modelData.name + "  " + modelData.tagCount
+                            label: modelData.name + "  " + root.activeCategoryCount(modelData.id)
                             colorSlot: modelData.colorSlot
                         }
                     }
