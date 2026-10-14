@@ -731,8 +731,15 @@ QVariantList Library::categories() const
 int Library::createCategory(const QString &name, int paletteSize)
 {
     const QString trimmed = name.trimmed();
-    if (trimmed.isEmpty() || m_db.categoryIdByName(trimmed) >= 0)
+    if (trimmed.isEmpty())
         return -1;
+    // Resolve-or-create: if a category with this name already exists (including
+    // one currently hidden because its tags are all in disabled folders), reuse
+    // it rather than failing. The caller assigns the tag to it, which reveals it
+    // again — so typing an existing name in "New category…" just adds to it.
+    const int existing = m_db.categoryIdByName(trimmed);
+    if (existing >= 0)
+        return existing;
 
     // Pick the first slot no category uses; once every slot is taken, the one
     // used least (lowest index on ties), so colors spread as evenly as possible.

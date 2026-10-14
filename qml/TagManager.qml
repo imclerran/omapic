@@ -592,24 +592,26 @@ Dialog {
 
                         readonly property bool active: root.categoryFilter === fchip.filterValue
                         readonly property color tint: root.categoryColor(fchip.colorSlot)
+                        // Active fill: the category color for a category chip, a
+                        // neutral grey for the non-category chips (All / Uncategorized)
+                        // so selection doesn't borrow the accent / a category color.
+                        readonly property color selFill: fchip.colorSlot >= 0 ? fchip.tint : sys.mid
 
                         implicitHeight: 24
                         implicitWidth: fchipLabel.implicitWidth + 16
                         radius: height / 2
-                        color: fchip.active ? fchip.tint
+                        color: fchip.active ? fchip.selFill
                              : fchip.colorSlot >= 0 ? Qt.alpha(fchip.tint, 0.18)
                              : sys.alternateBase
                         border.width: 1
-                        border.color: fchip.active || fchip.colorSlot >= 0 ? fchip.tint : sys.mid
+                        border.color: fchip.colorSlot >= 0 ? fchip.tint : sys.mid
 
                         Label {
                             id: fchipLabel
                             anchors.centerIn: parent
                             text: fchip.label
                             font.pixelSize: 12
-                            color: !fchip.active ? palette.text
-                                 : fchip.colorSlot >= 0 ? omarchyTheme.textOn(fchip.tint)
-                                 : palette.highlightedText
+                            color: fchip.active ? omarchyTheme.textOn(fchip.selFill) : palette.text
                         }
 
                         MouseArea {
@@ -746,49 +748,11 @@ Dialog {
             }
 
             // ---------------------------------------------------- Categories tab
+            // View-and-manage only (rename, recolor, delete). Categories are
+            // created from a tag's "New category…" menu on the Tags tab, so every
+            // category is born attached to a tag and never ends up empty/invisible.
             ColumnLayout {
                 spacing: 10
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    TextField {
-                        id: newCategoryField
-                        Layout.fillWidth: true
-                        placeholderText: qsTr("New category (e.g. Place, Event, Artist)…")
-                        selectByMouse: true
-
-                        readonly property string trimmed: text.trim()
-                        readonly property bool conflict: trimmed.length > 0 && root.categoryNameTaken(trimmed, -1)
-                        readonly property bool canCreate: trimmed.length > 0 && !conflict
-
-                        function create() {
-                            if (!canCreate)
-                                return
-                            const name = trimmed
-                            root.library.createCategory(name, omarchyTheme.categoryPalette.length)
-                            text = ""
-                        }
-
-                        onAccepted: create()
-                        Keys.onEscapePressed: text = ""
-                    }
-                    Button {
-                        text: qsTr("Add")
-                        enabled: newCategoryField.canCreate
-                        onClicked: newCategoryField.create()
-                    }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    visible: newCategoryField.conflict
-                    text: qsTr("A category named “%1” already exists.").arg(newCategoryField.trimmed)
-                    color: "#d64545"
-                    font.pixelSize: 12
-                }
 
                 Frame {
                     Layout.fillWidth: true
@@ -869,8 +833,8 @@ Dialog {
                             visible: categoryList.count === 0
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
-                            text: qsTr("No categories yet. Create one above to color-code your tags, "
-                                       + "then assign tags to it from the Tags tab.")
+                            text: qsTr("No categories yet. Create one from the Tags tab by opening a "
+                                       + "tag's category menu and choosing “New category…”.")
                             color: palette.placeholderText
                         }
                     }
