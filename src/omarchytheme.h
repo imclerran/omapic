@@ -10,6 +10,7 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QVariantList>
 
 // Reads the active Omarchy theme's colors.toml, applies it as the application
 // QPalette (so Qt Quick Controls + SystemPalette follow it), and exposes the
@@ -22,6 +23,10 @@ class OmarchyTheme : public QObject {
     Q_PROPERTY(QColor surface READ surface NOTIFY changed)
     Q_PROPERTY(QColor dimText READ dimText NOTIFY changed)
     Q_PROPERTY(bool dark READ dark NOTIFY changed)
+    // Colors available to tag categories, as a list of QColor. A category stores
+    // a slot index into this list (not a color), so the chips follow the theme.
+    // Built from the theme's named colors when present, else a built-in set.
+    Q_PROPERTY(QVariantList categoryPalette READ categoryPalette NOTIFY changed)
 
 public:
     explicit OmarchyTheme(QObject *parent = nullptr);
@@ -41,6 +46,12 @@ public:
     QColor surface() const;
     QColor dimText() const;
     bool dark() const { return m_mode != QStringLiteral("light"); }
+    QVariantList categoryPalette() const;
+    // Color for a category palette slot (wraps when the slot exceeds the palette).
+    // Returns `fallback` for a negative slot (an uncategorized tag).
+    Q_INVOKABLE QColor categoryColor(int slot, const QColor &fallback) const;
+    // Near-black or near-white, whichever reads better on `background`.
+    Q_INVOKABLE QColor textOn(const QColor &background) const;
 
 signals:
     void changed();

@@ -27,6 +27,8 @@ class Library : public QObject {
     Q_PROPERTY(PhotoFilterModel *filtered READ filtered CONSTANT)
     Q_PROPERTY(TagModel *tags READ tags CONSTANT)
     Q_PROPERTY(QVariantList allTags READ allTags NOTIFY tagsChanged)
+    // Tag categories: {id, name, colorSlot, tagCount}, sorted by name.
+    Q_PROPERTY(QVariantList categories READ categories NOTIFY categoriesChanged)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY foldersChanged)
     Q_PROPERTY(int orphanPhotoCount READ orphanPhotoCount NOTIFY foldersChanged)
     // A long-running background job (startup migration or folder import) is in
@@ -54,6 +56,7 @@ public:
     PhotoFilterModel *filtered() const { return m_filtered; }
     TagModel *tags() const { return m_tags; }
     QVariantList allTags() const;
+    QVariantList categories() const;
     QVariantList folders() const;
     int orphanPhotoCount() const;
     bool busy() const { return m_busy; }
@@ -78,6 +81,20 @@ public:
     Q_INVOKABLE QVariantMap photoInfo(int photoId) const;
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
+    // Tags relevant to the active set as {name, colorSlot, categoryName}, for the
+    // color-coded autocomplete.
+    Q_INVOKABLE QVariantList tagSuggestions() const;
+
+    // --- Tag categories ---
+    // Create a category, auto-picking the first palette slot no other category
+    // uses (the least-used slot once all are taken). `paletteSize` is the number
+    // of slots available (OmarchyTheme::categoryPalette). Returns the new id, or
+    // -1 when the name is blank or already taken (case-insensitive).
+    Q_INVOKABLE int createCategory(const QString &name, int paletteSize);
+    Q_INVOKABLE int renameCategory(int categoryId, const QString &newName); // RenameResult
+    Q_INVOKABLE void setCategoryColor(int categoryId, int colorSlot);
+    Q_INVOKABLE void deleteCategory(int categoryId); // its tags become uncategorized
+    Q_INVOKABLE void setTagCategory(int tagId, int categoryId); // categoryId < 0 clears
 
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.
@@ -111,6 +128,7 @@ signals:
     void photoChanged(int photoId);
     void foldersChanged();
     void tagsChanged();
+    void categoriesChanged();
     void busyChanged();
     void progressChanged();
     void statusChanged();

@@ -31,6 +31,12 @@ QVariant TagModel::data(const QModelIndex &index, int role) const
         return t.count;
     case SelectedRole:
         return m_selected.contains(t.id);
+    case CategoryIdRole:
+        return t.categoryId;
+    case CategoryNameRole:
+        return t.categoryName;
+    case ColorSlotRole:
+        return t.colorSlot;
     default:
         return {};
     }
@@ -43,6 +49,9 @@ QHash<int, QByteArray> TagModel::roleNames() const
         {NameRole, "name"},
         {CountRole, "count"},
         {SelectedRole, "selected"},
+        {CategoryIdRole, "categoryId"},
+        {CategoryNameRole, "categoryName"},
+        {ColorSlotRole, "colorSlot"},
     };
 }
 

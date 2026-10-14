@@ -512,28 +512,32 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
 QVariantList Library::commonTags(const QVariantList &photoIds) const
 {
     QHash<int, int> counts;
-    QHash<int, QString> names;
+    QHash<int, TagInfo> infos;
     for (const QVariant &v : photoIds) {
         const int pid = v.toInt();
         if (pid < 0)
             continue;
-        for (const auto &pr : m_db.photoTagPairs(pid)) {
-            counts[pr.first] += 1;
-            names[pr.first] = pr.second;
+        for (const TagInfo &t : m_db.photoTags(pid)) {
+            counts[t.id] += 1;
+            infos[t.id] = t;
         }
     }
 
     QList<int> ids = counts.keys();
     std::sort(ids.begin(), ids.end(), [&](int a, int b) {
-        return names.value(a).compare(names.value(b), Qt::CaseInsensitive) < 0;
+        return infos.value(a).name.compare(infos.value(b).name, Qt::CaseInsensitive) < 0;
     });
 
     QVariantList out;
     for (int id : ids) {
+        const TagInfo &t = infos[id];
         out.append(QVariantMap{
             {QStringLiteral("id"), id},
-            {QStringLiteral("name"), names.value(id)},
+            {QStringLiteral("name"), t.name},
             {QStringLiteral("count"), counts.value(id)},
+            {QStringLiteral("categoryId"), t.categoryId},
+            {QStringLiteral("categoryName"), t.categoryName},
+            {QStringLiteral("colorSlot"), t.colorSlot},
         });
     }
     return out;
@@ -550,11 +554,13 @@ QVariantMap Library::photoInfo(int photoId) const
         return info;
 
     QVariantList tags;
-    const auto pairs = m_db.photoTagPairs(photoId);
-    for (const auto &pr : pairs) {
+    for (const TagInfo &t : m_db.photoTags(photoId)) {
         tags.append(QVariantMap{
-            {QStringLiteral("id"), pr.first},
-            {QStringLiteral("name"), pr.second},
+            {QStringLiteral("id"), t.id},
+            {QStringLiteral("name"), t.name},
+            {QStringLiteral("categoryId"), t.categoryId},
+            {QStringLiteral("categoryName"), t.categoryName},
+            {QStringLiteral("colorSlot"), t.colorSlot},
         });
     }
 
@@ -591,9 +597,110 @@ QVariantList Library::allTags() const
             {QStringLiteral("id"), t.id},
             {QStringLiteral("name"), t.name},
             {QStringLiteral("count"), t.count},
+            {QStringLiteral("categoryId"), t.categoryId},
+            {QStringLiteral("categoryName"), t.categoryName},
+            {QStringLiteral("colorSlot"), t.colorSlot},
         });
     }
     return out;
+}
+
+QVariantList Library::tagSuggestions() const
+{
+    // Same set as allTagNames (tags on the active photos), with the category so
+    // the autocomplete rows can show the tag's color.
+    QVariantList out;
+    for (const TagInfo &t : m_db.activeTags()) {
+        out.append(QVariantMap{
+            {QStringLiteral("name"), t.name},
+            {QStringLiteral("colorSlot"), t.colorSlot},
+            {QStringLiteral("categoryName"), t.categoryName},
+        });
+    }
+    return out;
+}
+
+QVariantList Library::categories() const
+{
+    QVariantList out;
+    for (const CategoryInfo &c : m_db.loadCategories()) {
+        out.append(QVariantMap{
+            {QStringLiteral("id"), c.id},
+            {QStringLiteral("name"), c.name},
+            {QStringLiteral("colorSlot"), c.colorSlot},
+            {QStringLiteral("tagCount"), c.tagCount},
+        });
+    }
+    return out;
+}
+
+int Library::createCategory(const QString &name, int paletteSize)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty() || m_db.categoryIdByName(trimmed) >= 0)
+        return -1;
+
+    // Pick the first slot no category uses; once every slot is taken, the one
+    // used least (lowest index on ties), so colors spread as evenly as possible.
+    const int slotCount = qMax(1, paletteSize); // ("slots" is a Qt keyword)
+    QVector<int> uses(slotCount, 0);
+    for (const CategoryInfo &c : m_db.loadCategories())
+        uses[((c.colorSlot % slotCount) + slotCount) % slotCount] += 1;
+    int slot = 0;
+    for (int i = 1; i < slotCount; ++i) {
+        if (uses[i] < uses[slot])
+            slot = i;
+    }
+
+    const int id = m_db.insertCategory(trimmed, slot);
+    if (id >= 0)
+        emit categoriesChanged();
+    return id;
+}
+
+int Library::renameCategory(int categoryId, const QString &newName)
+{
+    const QString trimmed = newName.trimmed();
+    if (categoryId < 0 || trimmed.isEmpty())
+        return RenameEmpty;
+    if (m_db.categoryName(categoryId) == trimmed)
+        return RenameOk;
+    // Another category with this name is a conflict; this one is just a casing change.
+    const int existing = m_db.categoryIdByName(trimmed);
+    if (existing >= 0 && existing != categoryId)
+        return RenameConflict;
+
+    m_db.renameCategory(categoryId, trimmed);
+    emit categoriesChanged();
+    refreshTags(); // tag payloads carry the category name
+    return RenameOk;
+}
+
+void Library::setCategoryColor(int categoryId, int colorSlot)
+{
+    if (categoryId < 0 || colorSlot < 0)
+        return;
+    m_db.setCategoryColor(categoryId, colorSlot);
+    emit categoriesChanged();
+    refreshTags(); // chips re-resolve their color from the slot
+}
+
+void Library::deleteCategory(int categoryId)
+{
+    if (categoryId < 0)
+        return;
+    m_db.deleteCategory(categoryId); // tags are kept, now uncategorized
+    emit categoriesChanged();
+    refreshTags();
+}
+
+void Library::setTagCategory(int tagId, int categoryId)
+{
+    if (tagId < 0)
+        return;
+    m_db.setTagCategory(tagId, categoryId);
+    emit categoriesChanged(); // per-category tag counts
+    refreshTags();            // tagsChanged refreshes the manager and the detail pane
 }
 
 void Library::deleteTag(int tagId)
@@ -628,12 +735,11 @@ int Library::renameTag(int tagId, const QString &newName)
 
 void Library::applyTags(int photoId)
 {
-    const auto pairs = m_db.photoTagPairs(photoId);
     QSet<int> ids;
     QStringList names;
-    for (const auto &pr : pairs) {
-        ids.insert(pr.first);
-        names.append(pr.second);
+    for (const TagInfo &t : m_db.photoTags(photoId)) {
+        ids.insert(t.id);
+        names.append(t.name);
     }
     m_photos->setTagsForId(photoId, ids, names);
 }
@@ -657,9 +763,9 @@ void Library::refreshTags()
     // that could only ever yield an empty result disappear.
     const QList<int> sel = m_tags->selectedTagIds();
     const QVector<TagInfo> active = m_db.activeTags();
-    QSet<int> activeIds;
+    QHash<int, TagInfo> activeById;
     for (const TagInfo &t : active)
-        activeIds.insert(t.id);
+        activeById.insert(t.id, t);
 
     QVector<TagInfo> tags =
         (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel) : active;
@@ -672,10 +778,8 @@ void Library::refreshTags()
     for (const TagInfo &t : tags)
         have.insert(t.id);
     for (int id : sel) {
-        if (!have.contains(id) && activeIds.contains(id)) {
-            TagInfo t;
-            t.id = id;
-            t.name = m_db.tagName(id);
+        if (!have.contains(id) && activeById.contains(id)) {
+            TagInfo t = activeById.value(id); // keeps the category for coloring
             t.count = 0;
             tags.append(t);
         }

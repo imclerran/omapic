@@ -15,6 +15,16 @@ Rectangle {
     property alias matchAll: matchAllSwitch.checked
     property int tagPresence: 0 // 0 all, 1 tagged only, 2 untagged only
 
+    // Color for a tag's category palette slot; the accent for uncategorized tags.
+    // Reads the palette property (not just the invokable) so chips re-color when
+    // the Omarchy theme changes.
+    function categoryColor(slot) {
+        const pal = omarchyTheme.categoryPalette
+        if (slot < 0 || pal.length === 0)
+            return root.accent
+        return pal[slot % pal.length]
+    }
+
     // How many chips match the current search text (all of them when empty).
     function matchCount(q) {
         const s = q.trim().toLowerCase()
@@ -90,6 +100,8 @@ Rectangle {
                             required property string name
                             required property int count
                             required property bool selected
+                            required property int colorSlot
+                            required property string categoryName
 
                             // Hide (and drop from the flow) chips that don't match
                             // the search text.
@@ -98,25 +110,41 @@ Rectangle {
                                 return q === "" || chip.name.toLowerCase().indexOf(q) !== -1
                             }
 
+                            // Categorized tags take their category's color on the
+                            // border, a light tint when idle and a solid fill when
+                            // selected. Uncategorized tags keep the accent look.
+                            readonly property bool categorized: chip.colorSlot >= 0
+                            readonly property color tint: root.categoryColor(chip.colorSlot)
+
                             implicitHeight: 24
                             implicitWidth: chipLabel.implicitWidth + 16
                             radius: height / 2
-                            color: chip.selected ? root.accent : sys.alternateBase
+                            color: chip.selected ? chip.tint
+                                 : chip.categorized ? Qt.alpha(chip.tint, 0.18)
+                                 : sys.alternateBase
                             border.width: 1
-                            border.color: chip.selected ? root.accent : sys.mid
+                            border.color: chip.selected || chip.categorized ? chip.tint : sys.mid
 
                             Label {
                                 id: chipLabel
                                 anchors.centerIn: parent
                                 text: chip.name + "  " + chip.count
                                 font.pixelSize: 12
-                                color: chip.selected ? palette.highlightedText : palette.text
+                                color: !chip.selected ? palette.text
+                                     : chip.categorized ? omarchyTheme.textOn(chip.tint)
+                                     : palette.highlightedText
                             }
 
                             MouseArea {
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: root.tagModel.toggle(chip.index)
+                                // Color alone shouldn't carry the meaning; name the
+                                // category on hover.
+                                ToolTip.visible: containsMouse && chip.categorized
+                                ToolTip.delay: 500
+                                ToolTip.text: chip.categoryName
                             }
                         }
                     }

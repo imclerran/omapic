@@ -6,6 +6,9 @@ A photo gallery with tagging, tag filtering, and slideshows — built with C++ a
 
 - **Import** a folder (recursively) of images into a local library.
 - **Tag** photos; tags are stored in SQLite and persist across runs.
+- **Categorize** tags (place, event, character, artist, …) from *Manage → Tags*; each
+  category gets a color from the active Omarchy theme's palette, and tag chips in the
+  details pane, the filter sidebar, and autocomplete are color-coded by it.
 - **Filter** the gallery by selecting tags in the sidebar, with a *Match all* / *Match any* toggle.
 - **Slideshow** the currently filtered set in fullscreen (`←/→` navigate, `Space` pause, `Esc` exit).
 
@@ -13,7 +16,7 @@ A photo gallery with tagging, tag filtering, and slideshows — built with C++ a
 
 | Component | Role |
 |-----------|------|
-| `Database` | SQLite wrapper: `photos`, `tags`, and a `photo_tags` join table |
+| `Database` | SQLite wrapper: `photos`, `tags`, `tag_categories`, and a `photo_tags` join table |
 | `PhotoModel` | `QAbstractListModel`, the in-memory source of truth |
 | `PhotoFilterModel` | `QSortFilterProxyModel` doing the tag filtering |
 | `TagModel` | tag list with counts + selection state (drives the filter) |

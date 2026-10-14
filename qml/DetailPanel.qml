@@ -23,6 +23,15 @@ Rectangle {
 
     SystemPalette { id: sys }
 
+    // Color for a tag's category palette slot; the accent for uncategorized tags.
+    // Reads the palette property so chips re-color when the theme changes.
+    function categoryColor(slot) {
+        const pal = omarchyTheme.categoryPalette
+        if (slot === undefined || slot < 0 || pal.length === 0)
+            return root.accent
+        return pal[slot % pal.length]
+    }
+
     // Remembers whether the collapsible file/EXIF detail is expanded. Collapsed
     // by default so the tag list isn't crowded.
     Settings {
@@ -38,7 +47,10 @@ Rectangle {
         if (n === 1) {
             info = library.photoInfo(selectedIds[0])
             const ts = info.tags || []
-            chips = ts.map(function (t) { return { id: t.id, name: t.name, label: t.name, partial: false } })
+            chips = ts.map(function (t) {
+                return { id: t.id, name: t.name, label: t.name, partial: false,
+                         colorSlot: t.colorSlot, categoryName: t.categoryName }
+            })
             appliedLower = ts.map(function (t) { return t.name.toLowerCase() })
         } else if (n > 1) {
             info = ({})
@@ -46,7 +58,8 @@ Rectangle {
             chips = ct.map(function (t) {
                 return { id: t.id, name: t.name,
                          label: t.name + "  (" + t.count + "/" + n + ")",
-                         partial: t.count < n } // on some but not all selected
+                         partial: t.count < n, // on some but not all selected
+                         colorSlot: t.colorSlot, categoryName: t.categoryName }
             })
             // Only hide tags already on every selected photo.
             appliedLower = ct.filter(function (t) { return t.count === n })
@@ -241,26 +254,40 @@ Rectangle {
             Repeater {
                 model: root.chips
                 delegate: Rectangle {
+                    id: chip
                     required property var modelData
+                    readonly property bool categorized: modelData.colorSlot >= 0
+                    readonly property color tint: root.categoryColor(modelData.colorSlot)
                     radius: height / 2
                     height: 24
                     width: chipRow.implicitWidth + 12
                     // Partial tags (on only some of the selection) read as
                     // "unfilled" to hint they can be completed with a click.
-                    color: modelData.partial ? "transparent" : sys.alternateBase
-                    border.color: root.accent
+                    // Categorized tags carry their category's color on the border
+                    // and as a light tint; uncategorized ones keep the accent.
+                    color: modelData.partial ? "transparent"
+                         : chip.categorized ? Qt.alpha(chip.tint, 0.18)
+                         : sys.alternateBase
+                    border.color: chip.categorized ? chip.tint : root.accent
 
                     // Click a partial chip to apply the tag to every selected photo.
                     // Sits below the row so the ✕ button still gets its own clicks.
                     MouseArea {
                         anchors.fill: parent
                         enabled: modelData.partial === true
-                        hoverEnabled: enabled
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onClicked: root.commitTag(modelData.name)
-                        ToolTip.visible: enabled && containsMouse
-                        ToolTip.text: qsTr("Apply to all %1 selected").arg(root.count)
                     }
+
+                    // One tooltip for both hints: the apply-to-all nudge on a
+                    // partial chip, else the category name (color alone shouldn't
+                    // carry the meaning).
+                    HoverHandler { id: chipHover }
+                    ToolTip.visible: chipHover.hovered && (modelData.partial === true || chip.categorized)
+                    ToolTip.delay: modelData.partial === true ? 0 : 500
+                    ToolTip.text: modelData.partial === true
+                                  ? qsTr("Apply to all %1 selected").arg(root.count)
+                                  : modelData.categoryName
 
                     RowLayout {
                         id: chipRow
@@ -311,10 +338,11 @@ Rectangle {
                         return
                     }
                     const applied = root.appliedLower
-                    const all = root.library.allTagNames()
+                    // {name, colorSlot, categoryName} so rows can show the color.
+                    const all = root.library.tagSuggestions()
                     const matches = []
                     for (var i = 0; i < all.length && matches.length < 8; ++i) {
-                        const ln = all[i].toLowerCase()
+                        const ln = all[i].name.toLowerCase()
                         if (ln.indexOf(q) !== -1 && ln !== q && applied.indexOf(ln) === -1)
                             matches.push(all[i])
                     }
@@ -335,7 +363,7 @@ Rectangle {
                 onTextEdited: updateSuggestions()
                 onAccepted: {
                     if (suggestionPopup.visible && highlighted >= 0 && highlighted < suggestions.length)
-                        commit(suggestions[highlighted])
+                        commit(suggestions[highlighted].name)
                     else
                         commit(text)
                 }
@@ -359,13 +387,38 @@ Rectangle {
                         currentIndex: tagInput.highlighted
 
                         delegate: ItemDelegate {
+                            id: suggestion
                             required property int index
                             required property var modelData
                             width: ListView.view.width
                             height: 32
-                            text: modelData
                             highlighted: index === tagInput.highlighted
-                            onClicked: tagInput.commit(modelData)
+                            onClicked: tagInput.commit(modelData.name)
+
+                            contentItem: RowLayout {
+                                spacing: 8
+                                // Category swatch; kept (transparent) for
+                                // uncategorized tags so names stay aligned.
+                                Rectangle {
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+                                    color: suggestion.modelData.colorSlot >= 0
+                                           ? root.categoryColor(suggestion.modelData.colorSlot)
+                                           : "transparent"
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: suggestion.modelData.name
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    visible: suggestion.modelData.categoryName !== ""
+                                    text: suggestion.modelData.categoryName
+                                    font.pixelSize: 11
+                                    color: palette.placeholderText
+                                }
+                            }
                         }
                     }
                 }
