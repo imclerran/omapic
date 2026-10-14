@@ -543,11 +543,26 @@ ApplicationWindow {
         value: win.currentFolder
     }
 
-    LibraryManager {
-        id: libraryManager
-        library: library
-        accent: win.accent
-        gallerySettings: gallerySettings
+    // The modal dialogs are lazy-loaded: their (sizable) content is only built
+    // the first time each is opened, instead of instantiating and laying out at
+    // startup where it dominated launch time. openX() activates the Loader (a
+    // synchronous Loader instantiates immediately) and opens the dialog; the
+    // built instance is kept for subsequent opens.
+    Loader {
+        id: libraryManagerLoader
+        // Fill the window so the dialog's `anchors.centerIn: parent` still centers
+        // on the window (the Loader is this dialog's parent). Empty while inactive.
+        anchors.fill: parent
+        active: false
+        sourceComponent: LibraryManager {
+            library: library
+            accent: win.accent
+            gallerySettings: gallerySettings
+        }
+    }
+    function openLibraryManager() {
+        libraryManagerLoader.active = true
+        libraryManagerLoader.item.open()
     }
 
     // Folder picker for the header's Import button (the Library dialog has its
@@ -559,13 +574,21 @@ ApplicationWindow {
         onAccepted: library.importDirectory(selectedFolder)
     }
 
-    TagManager {
-        id: tagManager
-        library: library
-        accent: win.accent
-        // Renaming or deleting a tag refreshes the photo model, which would drop
-        // the gallery's scroll; keep it in place across the mutation.
-        galleryScrollGuard: win.withPreservedGalleryScroll
+    Loader {
+        id: tagManagerLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: TagManager {
+            library: library
+            accent: win.accent
+            // Renaming or deleting a tag refreshes the photo model, which would
+            // drop the gallery's scroll; keep it in place across the mutation.
+            galleryScrollGuard: win.withPreservedGalleryScroll
+        }
+    }
+    function openTagManager() {
+        tagManagerLoader.active = true
+        tagManagerLoader.item.open()
     }
 
     // When the active photo set changes (folder enabled/disabled/removed, rescan,
@@ -743,11 +766,11 @@ ApplicationWindow {
                     y: parent.height
                     MenuItem {
                         text: qsTr("Library…")
-                        onTriggered: libraryManager.open()
+                        onTriggered: win.openLibraryManager()
                     }
                     MenuItem {
                         text: qsTr("Tags…")
-                        onTriggered: tagManager.open()
+                        onTriggered: win.openTagManager()
                     }
                 }
             }
