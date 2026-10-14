@@ -22,6 +22,13 @@ Dialog {
     width: Math.min(640, (parent ? parent.width : 640) - 80)
     standardButtons: Dialog.Close
 
+    // Reopen with the full list: a leftover search or category filter from the
+    // previous visit is easy to miss and makes tags look missing.
+    onClosed: {
+        searchField.text = ""
+        root.categoryFilter = -2
+    }
+
     SystemPalette { id: sys }
 
     // Tag awaiting delete confirmation; -1 when none is pending.
@@ -471,42 +478,59 @@ Dialog {
             root.withPreservedScroll(function () { root.library.setTagCategory(tagId, categoryId) })
         }
 
+        // A menu row with a color swatch and our own check mark. Not `checkable`:
+        // the style's check indicator would sit under the swatch and keep its own
+        // box color when the row is highlighted.
+        component CategoryMenuItem: MenuItem {
+            id: cmi
+            property color swatch: "transparent"
+            property bool current: false
+
+            readonly property color textColor: cmi.down || cmi.highlighted
+                                               ? cmi.palette.highlightedText : cmi.palette.text
+
+            contentItem: RowLayout {
+                spacing: 8
+                Rectangle {
+                    width: 12
+                    height: 12
+                    radius: 6
+                    color: cmi.swatch
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: cmi.text
+                    elide: Text.ElideRight
+                    color: cmi.textColor
+                }
+                Label {
+                    text: "✓"
+                    visible: cmi.current
+                    color: cmi.textColor
+                }
+            }
+        }
+
         Instantiator {
             model: root.library.categories
-            delegate: MenuItem {
-                id: catItem
+            delegate: CategoryMenuItem {
                 required property var modelData
-                checkable: true
-                checked: catItem.modelData.id === categoryMenu.currentCategoryId
-                onTriggered: categoryMenu.assign(catItem.modelData.id)
-
-                contentItem: RowLayout {
-                    spacing: 8
-                    Rectangle {
-                        width: 12
-                        height: 12
-                        radius: 6
-                        color: root.categoryColor(catItem.modelData.colorSlot)
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: catItem.modelData.name
-                        elide: Text.ElideRight
-                    }
-                }
+                text: modelData.name
+                swatch: root.categoryColor(modelData.colorSlot)
+                current: modelData.id === categoryMenu.currentCategoryId
+                onTriggered: categoryMenu.assign(modelData.id)
             }
             onObjectAdded: (index, object) => categoryMenu.insertItem(index, object)
             onObjectRemoved: (index, object) => categoryMenu.removeItem(object)
         }
 
-        MenuItem {
+        CategoryMenuItem {
             text: qsTr("None")
-            checkable: true
-            checked: categoryMenu.currentCategoryId < 0
+            current: categoryMenu.currentCategoryId < 0
             onTriggered: categoryMenu.assign(-1)
         }
         MenuSeparator {}
-        MenuItem {
+        CategoryMenuItem {
             text: qsTr("New category…")
             onTriggered: newCategoryDialog.openFor(categoryMenu.targetTagId)
         }
