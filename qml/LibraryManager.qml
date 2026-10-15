@@ -138,7 +138,7 @@ Dialog {
                     contentItem: RowLayout {
                         spacing: 12
 
-                        Switch {
+                        CheckBox {
                             checked: row.modelData.enabled
                             ToolTip.visible: hovered
                             ToolTip.text: checked ? qsTr("Shown in library — click to hide")
@@ -219,19 +219,11 @@ Dialog {
             Layout.fillWidth: true
             spacing: 2
 
-            CheckBox {
+            Switch {
                 id: folderFirstCheck
-                text: qsTr("Group by folder")
+                text: qsTr("Sort by folder in ungrouped view")
                 checked: root.gallerySettings ? root.gallerySettings.folderFirst : false
                 onToggled: if (root.gallerySettings) root.gallerySettings.folderFirst = checked
-            }
-            Label {
-                Layout.fillWidth: true
-                Layout.leftMargin: 8
-                wrapMode: Text.WordWrap
-                text: qsTr("Keep each folder's photos together, sorted by name within the folder. When off, photos from all folders are sorted by name together.")
-                font.pixelSize: 12
-                color: palette.placeholderText
             }
         }
 
