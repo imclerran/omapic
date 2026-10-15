@@ -283,22 +283,8 @@ QVariantList Library::folderEntries(const QString &path) const
         return out;
     }
 
-    // Inside a folder: a leading "up" entry, then the immediate subfolders that
-    // hold at least one active photo.
-    bool isRoot = false;
-    for (const FolderInfo &f : m_db.loadFolders()) {
-        if (f.path == path) {
-            isRoot = true;
-            break;
-        }
-    }
-    const QString parent = isRoot ? QString() : path.left(path.lastIndexOf(QLatin1Char('/')));
-    out.append(QVariantMap{
-        {QStringLiteral("type"), QStringLiteral("up")},
-        {QStringLiteral("name"), QFileInfo(path).fileName()}, // parent name shown by QML
-        {QStringLiteral("path"), parent},
-    });
-
+    // Inside a folder: the immediate subfolders that hold at least one active
+    // photo. (Going up is handled by the folder view's title bar, not a cell.)
     const QString prefix = path + QLatin1Char('/');
     QStringList childDirs; // immediate subdirectories, in first-seen order
     QSet<QString> seen;
@@ -320,6 +306,16 @@ QVariantList Library::folderEntries(const QString &path) const
         out.append(makeFolder(child));
 
     return out;
+}
+
+QString Library::upFolder(const QString &path) const
+{
+    if (path.isEmpty())
+        return {}; // already at the root listing
+    for (const FolderInfo &f : m_db.loadFolders())
+        if (f.path == path)
+            return {}; // a registered root -> up returns to the root listing
+    return path.left(path.lastIndexOf(QLatin1Char('/'))); // parent directory
 }
 
 QStringList Library::folderSlideshowSources(const QStringList &folderPaths,

@@ -343,9 +343,7 @@ ApplicationWindow {
         const fc = folderView.folderCount
         if (gridIndex < fc) {
             const e = folderView.entries[gridIndex]
-            if (!e || e.type === "up")
-                return null
-            return { type: "folder", path: e.path }
+            return e ? { type: "folder", path: e.path } : null
         }
         const id = library.filtered.idAt(gridIndex - fc)
         return id >= 0 ? { type: "photo", id: id } : null
@@ -395,12 +393,12 @@ ApplicationWindow {
         folderView.focusView()
     }
 
-    // Double-click: enter a folder (or go up), or start the slideshow on a photo.
+    // Double-click: enter a folder, or start the slideshow on a photo.
     function fvDoubleClick(gridIndex) {
         const fc = folderView.folderCount
         if (gridIndex < fc) {
             const e = folderView.entries[gridIndex]
-            if (e && (e.type === "folder" || e.type === "up"))
+            if (e)
                 win.currentFolder = e.path
         } else {
             const id = library.filtered.idAt(gridIndex - fc)

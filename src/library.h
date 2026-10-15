@@ -88,6 +88,9 @@ public:
     // photos (under no folder) aren't listed here — they appear as photos in the
     // grid at the root level.
     Q_INVOKABLE QVariantList folderEntries(const QString &path) const;
+    // The folder to navigate to when going "up" from `path`: empty for the root
+    // listing or when `path` is itself a registered root, otherwise the parent dir.
+    Q_INVOKABLE QString upFolder(const QString &path) const;
     // Slideshow source URLs for a folder-view selection: every active photo under
     // each folder in `folderPaths` (recursively, in path order), followed by the
     // photos named by `photoIds`. Used to play selected folders (all their

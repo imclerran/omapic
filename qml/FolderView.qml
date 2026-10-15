@@ -37,21 +37,50 @@ Item {
     function toTop() { if (fgrid) fgrid.positionViewAtBeginning() }
     function focusView() { fgrid.forceActiveFocus() }
 
+    // "#rrggbb" for a color, for embedding in the Up button's SVG.
+    function hex(c) {
+        function h(v) { const s = Math.round(v * 255).toString(16); return s.length < 2 ? "0" + s : s }
+        return "#" + h(c.r) + h(c.g) + h(c.b)
+    }
+
     Column {
         anchors.fill: parent
         spacing: 0
 
-        // Breadcrumb for context (the folder cells handle navigation).
+        // Title bar: an Up/back button (hidden at the root) plus the current path.
         Rectangle {
             width: parent.width
-            height: crumb.implicitHeight + 12
+            height: 36
             color: palette.alternateBase
+
+            ToolButton {
+                id: upButton
+                anchors.left: parent.left
+                anchors.leftMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                width: 30
+                height: 30
+                visible: fv.currentFolder !== ""
+                onClicked: { if (fv.library) fv.navigate(fv.library.upFolder(fv.currentFolder)) }
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Up")
+                contentItem: Image {
+                    anchors.centerIn: parent
+                    source: "data:image/svg+xml," + encodeURIComponent(
+                        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='"
+                        + fv.hex(fv.accent)
+                        + "' d='M12 3 L20 11 L15 11 L15 20 L9 20 L9 11 L4 11 Z'/></svg>")
+                    sourceSize.width: 16
+                    sourceSize.height: 16
+                    smooth: true
+                }
+            }
             Label {
                 id: crumb
                 anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
+                anchors.left: upButton.visible ? upButton.right : parent.left
+                anchors.leftMargin: upButton.visible ? 6 : 10
                 anchors.right: parent.right
-                anchors.leftMargin: 10
                 anchors.rightMargin: 10
                 text: fv.currentFolder === "" ? qsTr("Library") : fv.currentFolder
                 elide: Text.ElideMiddle
@@ -110,20 +139,10 @@ Item {
                     FolderMosaicCell {
                         entry: cell.entry
                         accent: fv.accent
-                        selected: cell.entry && cell.entry.type === "folder"
-                                  && fv.selectedFolders.indexOf(cell.entry.path) !== -1
-                        // Up: single click navigates; folder: click selects,
-                        // double-click enters.
-                        onClicked: (modifiers) => {
-                            if (cell.entry && cell.entry.type === "up")
-                                fv.navigate(cell.entry.path)
-                            else
-                                fv.cellClicked(cell.index, modifiers)
-                        }
-                        onDoubleClicked: {
-                            if (cell.entry && cell.entry.type === "folder")
-                                fv.cellDoubleClicked(cell.index)
-                        }
+                        selected: cell.entry && fv.selectedFolders.indexOf(cell.entry.path) !== -1
+                        // Click selects (Ctrl/Shift extend); double-click enters.
+                        onClicked: (modifiers) => fv.cellClicked(cell.index, modifiers)
+                        onDoubleClicked: fv.cellDoubleClicked(cell.index)
                     }
                 }
                 Component {
