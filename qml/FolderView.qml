@@ -55,8 +55,8 @@ Item {
 
             ToolButton {
                 id: upButton
-                anchors.left: parent.left
-                anchors.leftMargin: 4
+                anchors.right: parent.right
+                anchors.rightMargin: 4
                 anchors.verticalCenter: parent.verticalCenter
                 width: 30
                 height: 30
@@ -78,10 +78,10 @@ Item {
             Label {
                 id: crumb
                 anchors.verticalCenter: parent.verticalCenter
-                anchors.left: upButton.visible ? upButton.right : parent.left
-                anchors.leftMargin: upButton.visible ? 6 : 10
-                anchors.right: parent.right
-                anchors.rightMargin: 10
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.right: upButton.visible ? upButton.left : parent.right
+                anchors.rightMargin: upButton.visible ? 6 : 10
                 text: fv.currentFolder === "" ? qsTr("Library") : fv.currentFolder
                 elide: Text.ElideMiddle
                 font.pixelSize: 12
