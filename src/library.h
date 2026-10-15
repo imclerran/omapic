@@ -72,6 +72,9 @@ public:
     // Tells the library whether the gallery filter is in "match all" mode, so the
     // sidebar can narrow its tags to those on the currently-matching photos.
     Q_INVOKABLE void setMatchAll(bool matchAll);
+    // Scope the filter sidebar's tag chips to a folder subtree (folder view). Empty
+    // string = the whole active library (flat / timeline views).
+    Q_INVOKABLE void setTagFolderScope(const QString &path);
     Q_INVOKABLE void addTag(int photoId, const QString &name);
     Q_INVOKABLE void removeTag(int photoId, int tagId);
     Q_INVOKABLE void addTagToPhotos(const QVariantList &photoIds, const QString &name);
@@ -192,6 +195,7 @@ private:
     LibraryWorker *m_worker = nullptr;
 
     bool m_matchAll = true; // mirrors the gallery's "match all tags" toggle
+    QString m_tagFolderScope; // folder-view subtree the tag chips are scoped to ("" = all)
     int m_busyCount = 0;    // active jobs; m_busy mirrors (m_busyCount > 0)
     int m_modalCount = 0;   // active jobs that want the blocking overlay
     bool m_busy = false;
