@@ -937,7 +937,9 @@ ApplicationWindow {
                 onClicked: importDialog.open()
             }
 
-            ToolSeparator {}
+            // Equal flex spacers on either side center the view-mode switch in the
+            // gap between the Import button and the search box.
+            Item { Layout.fillWidth: true }
 
             // View mode: switch the central area between the flat grid, a
             // capture-month timeline, and a navigable folder tree. Exclusive, so
