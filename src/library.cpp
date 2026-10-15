@@ -248,13 +248,18 @@ QVariantList Library::folderEntries(const QString &path) const
     QVariantList out;
     const QStringList paths = m_db.activePhotoPaths();
 
-    // A folder tile, with the count of active photos at or under `dir`.
+    // A folder tile, with the count of active photos at or under `dir` and the
+    // first (by path) up-to-4 of them for the cover mosaic.
     const auto makeFolder = [&](const QString &dir) -> QVariantMap {
         int count = 0;
+        QStringList thumbs;
         const QString prefix = dir + QLatin1Char('/');
         for (const QString &p : paths) {
-            if (p == dir || p.startsWith(prefix))
+            if (p == dir || p.startsWith(prefix)) {
                 ++count;
+                if (thumbs.size() < 4)
+                    thumbs.append(p);
+            }
         }
         QString name = QFileInfo(dir).fileName();
         if (name.isEmpty())
@@ -264,6 +269,7 @@ QVariantList Library::folderEntries(const QString &path) const
             {QStringLiteral("name"), name},
             {QStringLiteral("path"), dir},
             {QStringLiteral("count"), count},
+            {QStringLiteral("thumbs"), thumbs},
         };
     };
 
@@ -277,22 +283,8 @@ QVariantList Library::folderEntries(const QString &path) const
         return out;
     }
 
-    // Inside a folder: a leading "up" entry, then the immediate subfolders that
-    // hold at least one active photo.
-    bool isRoot = false;
-    for (const FolderInfo &f : m_db.loadFolders()) {
-        if (f.path == path) {
-            isRoot = true;
-            break;
-        }
-    }
-    const QString parent = isRoot ? QString() : path.left(path.lastIndexOf(QLatin1Char('/')));
-    out.append(QVariantMap{
-        {QStringLiteral("type"), QStringLiteral("up")},
-        {QStringLiteral("name"), QFileInfo(path).fileName()}, // parent name shown by QML
-        {QStringLiteral("path"), parent},
-    });
-
+    // Inside a folder: the immediate subfolders that hold at least one active
+    // photo. (Going up is handled by the folder view's title bar, not a cell.)
     const QString prefix = path + QLatin1Char('/');
     QStringList childDirs; // immediate subdirectories, in first-seen order
     QSet<QString> seen;
@@ -313,6 +305,36 @@ QVariantList Library::folderEntries(const QString &path) const
     for (const QString &child : childDirs)
         out.append(makeFolder(child));
 
+    return out;
+}
+
+QString Library::upFolder(const QString &path) const
+{
+    if (path.isEmpty())
+        return {}; // already at the root listing
+    for (const FolderInfo &f : m_db.loadFolders())
+        if (f.path == path)
+            return {}; // a registered root -> up returns to the root listing
+    return path.left(path.lastIndexOf(QLatin1Char('/'))); // parent directory
+}
+
+QStringList Library::folderSlideshowSources(const QStringList &folderPaths,
+                                            const QVariantList &photoIds) const
+{
+    QStringList out;
+    const QStringList active = m_db.activePhotoPaths(); // sorted by path
+    for (const QString &dir : folderPaths) {
+        const QString prefix = dir + QLatin1Char('/');
+        for (const QString &p : active) {
+            if (p == dir || p.startsWith(prefix))
+                out.append(QUrl::fromLocalFile(p).toString());
+        }
+    }
+    for (const QVariant &v : photoIds) {
+        const Photo ph = m_photos->photoById(v.toInt());
+        if (ph.id >= 0)
+            out.append(QUrl::fromLocalFile(ph.path).toString());
+    }
     return out;
 }
 
