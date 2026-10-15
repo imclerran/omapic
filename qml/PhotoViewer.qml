@@ -27,6 +27,15 @@ Window {
 
     property bool showName: false
 
+    // The control bar auto-hides when the pointer is still, like the slideshow's
+    // hint. Shown on any pointer movement, hidden after a quiet spell, and kept up
+    // while the pointer is over the bar so it never vanishes mid-click.
+    property bool controlsShown: true
+    function pokeControls() {
+        controlsShown = true
+        controlsTimer.restart()
+    }
+
     // Visibility to show at on open: windowed for the standalone viewer, full
     // screen when it stands in for the gallery slideshow.
     property int preferredVisibility: Window.Windowed
@@ -54,6 +63,7 @@ Window {
             visibility = preferredVisibility
         requestActivate()
         keyCatcher.forceActiveFocus()
+        pokeControls()
     }
 
     function go(i) {
@@ -148,8 +158,9 @@ Window {
             id: panArea
             anchors.fill: parent
             enabled: root.zoomable
-            cursorShape: (img.width > stage.width || img.height > stage.height)
-                         ? Qt.OpenHandCursor : Qt.ArrowCursor
+            cursorShape: !root.controlsShown ? Qt.BlankCursor
+                         : (img.width > stage.width || img.height > stage.height)
+                           ? Qt.OpenHandCursor : Qt.ArrowCursor
             property real startX: 0
             property real startY: 0
             property real imgStartX: 0
@@ -215,21 +226,129 @@ Window {
         }
     }
 
-    // Zoom readout, shown briefly while not at fit.
+    // Hide the controls after a quiet spell (same dwell as the slideshow hint);
+    // stay up while the pointer is over the bar.
+    Timer {
+        id: controlsTimer
+        interval: 3000
+        onTriggered: if (!barHover.hovered) root.controlsShown = false
+    }
+    // Any pointer movement over the window brings the controls back. A passive
+    // handler, so it never steals clicks/wheel/hover from the image or the bar.
+    HoverHandler {
+        onPointChanged: root.pokeControls()
+    }
+
+    // Auto-hiding control bar: navigation, zoom (fit / 1:1 / ± with a readout),
+    // slideshow, and close — mirroring the keyboard shortcuts.
     Rectangle {
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 16
-        radius: 6
-        color: Qt.rgba(0, 0, 0, 0.6)
-        visible: root.zoomable && !root.atFit
-        width: zoomLabel.implicitWidth + 20
-        height: zoomLabel.implicitHeight + 10
-        Label {
-            id: zoomLabel
+        id: controlBar
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 24
+        radius: 8
+        color: Qt.rgba(0, 0, 0, 0.72)
+        opacity: root.controlsShown ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+        implicitWidth: barRow.implicitWidth + 20
+        implicitHeight: barRow.implicitHeight + 12
+        width: implicitWidth
+        height: implicitHeight
+
+        // Keep the bar up while the pointer rests on it; restart the dwell on exit.
+        HoverHandler {
+            id: barHover
+            onHoveredChanged: hovered ? root.pokeControls() : controlsTimer.restart()
+        }
+
+        // Flat, white-on-dark button that never steals keyboard focus from the
+        // key handler (so the arrow keys keep working after a click).
+        component Ctl: ToolButton {
+            id: ctl
+            flat: true
+            focusPolicy: Qt.NoFocus
+            implicitHeight: 32
+            padding: 8
+            contentItem: Label {
+                text: ctl.text
+                color: ctl.enabled ? "white" : Qt.rgba(1, 1, 1, 0.35)
+                font.pixelSize: 13
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle {
+                radius: 5
+                color: ctl.down ? Qt.rgba(1, 1, 1, 0.25)
+                     : ctl.hovered ? Qt.rgba(1, 1, 1, 0.14) : "transparent"
+            }
+        }
+
+        Row {
+            id: barRow
             anchors.centerIn: parent
-            color: "white"
-            text: Math.round(root.zoom * 100) + "%"
+            spacing: 2
+
+            Ctl {
+                text: "‹"
+                enabled: root.count > 1
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Previous  (←)")
+                onClicked: { root.prev(); root.pokeControls() }
+            }
+            Ctl {
+                text: "›"
+                enabled: root.count > 1
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Next  (→)")
+                onClicked: { root.next(); root.pokeControls() }
+            }
+
+            Rectangle { width: 1; height: 22; anchors.verticalCenter: parent.verticalCenter; color: Qt.rgba(1, 1, 1, 0.18) }
+
+            Ctl {
+                text: "−"
+                enabled: root.zoomable
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Zoom out  (-)")
+                onClicked: { root.zoomAtCenter(root.zoom / 1.25); root.pokeControls() }
+            }
+            Label {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 46
+                horizontalAlignment: Text.AlignHCenter
+                text: root.zoomable ? Math.round(root.zoom * 100) + "%" : "—"
+                color: "white"
+                font.pixelSize: 12
+            }
+            Ctl {
+                text: "+"
+                enabled: root.zoomable
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Zoom in  (+)")
+                onClicked: { root.zoomAtCenter(root.zoom * 1.25); root.pokeControls() }
+            }
+            Ctl {
+                text: qsTr("Fit")
+                enabled: root.zoomable && !root.atFit
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Fit to window  (F)")
+                onClicked: { root.fit(); root.pokeControls() }
+            }
+            Ctl {
+                text: qsTr("1:1")
+                enabled: root.zoomable
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Actual size  (1)")
+                onClicked: { root.oneToOne(); root.pokeControls() }
+            }
+
+            Rectangle { width: 1; height: 22; anchors.verticalCenter: parent.verticalCenter; color: Qt.rgba(1, 1, 1, 0.18) }
+
+            Ctl {
+                text: "▶"
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Start slideshow  (S)")
+                onClicked: root.slideshowRequested()
+            }
+            Ctl {
+                text: "✕"
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Close  (Esc)")
+                onClicked: root.closeRequested()
+            }
         }
     }
 
@@ -257,8 +376,8 @@ Window {
         anchors.fill: parent
         focus: true
         Keys.onEscapePressed: root.closeRequested()
-        Keys.onLeftPressed: root.prev()
-        Keys.onRightPressed: root.next()
+        Keys.onLeftPressed: { root.prev(); root.pokeControls() }
+        Keys.onRightPressed: { root.next(); root.pokeControls() }
         Keys.onPressed: (event) => {
             switch (event.key) {
             case Qt.Key_Plus:
@@ -294,5 +413,5 @@ Window {
     onWidthChanged: atFit ? fit() : clampPan()
     onHeightChanged: atFit ? fit() : clampPan()
 
-    onVisibleChanged: if (visible) keyCatcher.forceActiveFocus()
+    onVisibleChanged: if (visible) { keyCatcher.forceActiveFocus(); pokeControls() }
 }
