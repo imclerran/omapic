@@ -480,10 +480,18 @@ Dialog {
 
         property int targetTagId: -1
         property int currentCategoryId: -1
+        // Snapshot of the categories taken when the menu opens. The list is NOT
+        // bound live to library.categories: assigning a category changes the
+        // per-category counts and re-emits categoriesChanged, which — if the
+        // Instantiator tracked it live — would rebuild (and destroy) the very menu
+        // item being clicked, so the pick wouldn't register. The menu is transient,
+        // so a snapshot is fine; the next open refreshes it.
+        property var menuCategories: []
 
         function openFor(tag, anchorItem) {
             targetTagId = tag.id
             currentCategoryId = tag.categoryId
+            menuCategories = root.library.categories
             popup(anchorItem, 0, anchorItem.height)
         }
 
@@ -526,7 +534,7 @@ Dialog {
         }
 
         Instantiator {
-            model: root.library.categories
+            model: categoryMenu.menuCategories
             delegate: CategoryMenuItem {
                 required property var modelData
                 text: modelData.name
