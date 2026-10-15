@@ -4,6 +4,7 @@
 
 import QtCore
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
@@ -432,7 +433,7 @@ ApplicationWindow {
         folderView.focusView()
     }
 
-    // Double-click: enter a folder, or start the slideshow on a photo.
+    // Double-click: enter a folder, or view a photo.
     function fvDoubleClick(gridIndex) {
         const fc = folderView.folderCount
         if (gridIndex < fc) {
@@ -441,7 +442,7 @@ ApplicationWindow {
                 win.fvEnterFolder(e.path)
         } else {
             const id = library.filtered.idAt(gridIndex - fc)
-            if (id >= 0) win.startFolderSlideshow(id, false)
+            if (id >= 0) win.openViewer(id)
         }
     }
 
@@ -595,6 +596,70 @@ ApplicationWindow {
         const startId = (anchorIndex >= 0 && anchorIndex < library.filtered.count)
                         ? library.filtered.idAt(anchorIndex) : -1
         startSlideshow(startId, play)
+    }
+
+    // Open the single-item viewer (fit/pan/zoom, left/right nav) over the same set
+    // a slideshow would use — the selection when several are selected, otherwise
+    // the whole view — in grid order (unshuffled), positioned at startId. This is
+    // the Enter / double-click "view" action; the viewer offers its own slideshow.
+    function openViewer(startId) {
+        let srcs = []
+        let startSrc = ""
+        if (win.viewMode === "folder") {
+            let folderPaths = []
+            let photoIds = []
+            const selectedCount = win.selectedFolders.length + win.selectedIds.length
+            if (selectedCount > 1) {
+                folderPaths = win.selectedFolders.slice()
+                photoIds = win.selectedIds.slice()
+            } else {
+                for (let i = 0; i < folderView.entries.length; ++i) {
+                    const e = folderView.entries[i]
+                    if (e && e.type === "folder")
+                        folderPaths.push(e.path)
+                }
+                for (let r = 0; r < library.filtered.count; ++r)
+                    photoIds.push(library.filtered.idAt(r))
+            }
+            srcs = library.folderSlideshowSources(folderPaths, photoIds)
+            if (startId >= 0) {
+                for (let r = 0; r < library.filtered.count; ++r) {
+                    if (library.filtered.idAt(r) === startId) {
+                        startSrc = "" + library.filtered.sourceAt(r)
+                        break
+                    }
+                }
+            }
+        } else {
+            const selectedOnly = selectedIds.length > 1
+            const n = library.filtered.count
+            for (let r = 0; r < n; ++r) {
+                const id = library.filtered.idAt(r)
+                if (selectedOnly && selectedIds.indexOf(id) === -1)
+                    continue
+                const s = "" + library.filtered.sourceAt(r)
+                if (id === startId)
+                    startSrc = s
+                srcs.push(s)
+            }
+        }
+        if (srcs.length === 0)
+            return
+        photoViewer.sources = srcs
+        photoViewer.openAt(Math.max(0, srcs.indexOf(startSrc)))
+    }
+
+    // Enter in the grid/timeline: view the focused photo. (Folder view routes its
+    // own Enter — a selected folder is entered, a photo opens here.)
+    function openViewerFromFocus() {
+        if (win.viewMode === "folder") {
+            // Open at the focused photo when a single one is selected, else the set.
+            win.openViewer(win.selectedIds.length === 1 ? win.selectedIds[0] : -1)
+            return
+        }
+        const startId = (anchorIndex >= 0 && anchorIndex < library.filtered.count)
+                        ? library.filtered.idAt(anchorIndex) : -1
+        win.openViewer(startId)
     }
 
     // Build the slideshow set for the grid/timeline: the selection when more than
@@ -1194,8 +1259,8 @@ ApplicationWindow {
                 Keys.onUpPressed: (event) => { win.navigate("up", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
                 Keys.onDownPressed: (event) => { win.navigate("down", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
                 Keys.onSpacePressed: (event) => { win.slideshowFromFocus(true); event.accepted = true }
-                Keys.onReturnPressed: (event) => { win.slideshowFromFocus(false); event.accepted = true }
-                Keys.onEnterPressed: (event) => { win.slideshowFromFocus(false); event.accepted = true }
+                Keys.onReturnPressed: (event) => { win.openViewerFromFocus(); event.accepted = true }
+                Keys.onEnterPressed: (event) => { win.openViewerFromFocus(); event.accepted = true }
                 // Tab cycle: gallery → main search; Shift+Tab → tag filter.
                 Keys.onTabPressed: (event) => { win.tabStepTo(3, true); event.accepted = true }
                 Keys.onBacktabPressed: (event) => { win.tabStepTo(1, false); event.accepted = true }
@@ -1221,7 +1286,7 @@ ApplicationWindow {
                     tagCount: model.tags.length
                     selected: win.selectedIds.indexOf(model.id) !== -1
                     onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
-                    onDoubleClicked: win.startSlideshow(model.id, false)
+                    onDoubleClicked: win.openViewer(model.id)
                     onRightClicked: win.openPhotoMenu(index, model.id, model.fileName, model.isVideo === true)
                 }
             }
@@ -1317,7 +1382,7 @@ ApplicationWindow {
                 onCellRightClicked: (gridIndex) => win.fvRightClick(gridIndex)
                 onSelectAllRequested: win.fvSelectAll()
                 onCursorMove: (dir, extend) => win.fvNavigate(dir, extend)
-                onSlideshowRequested: (play) => win.slideshowFromFocus(play)
+                onSlideshowRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
                 // Tab cycle: gallery → main search; Shift+Tab → tag filter.
                 onTabForward: win.tabStepTo(3, true)
                 onTabBackward: win.tabStepTo(1, false)
@@ -1340,11 +1405,11 @@ ApplicationWindow {
                 emptyFiltered: library.tags.selectedTagIds.length === 0
                                && gallerySearch.text.trim() === "" && tagSidebar.tagPresence === 0
                 onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
-                onPhotoDoubleClicked: (id) => win.startSlideshow(id, false)
+                onPhotoDoubleClicked: (id) => win.openViewer(id)
                 onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)
                 onSelectAllRequested: win.selectAll()
                 onMoveCursorRequested: (target, extend) => win.moveCursorTo(target, extend)
-                onSlideshowFromFocusRequested: (play) => win.slideshowFromFocus(play)
+                onSlideshowFromFocusRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
                 // Tab cycle: gallery → main search; Shift+Tab → tag filter.
                 onTabForward: win.tabStepTo(3, true)
                 onTabBackward: win.tabStepTo(1, false)
@@ -1378,6 +1443,22 @@ ApplicationWindow {
         onSetAetherThemeRequested: (source) => {
             if (!library.setAetherThemeUrl(source))
                 slideshow.flashMessage(qsTr("Couldn't launch Aether"))
+        }
+    }
+
+    // Single-item viewer (fit/pan/zoom), the Enter / double-click "view" action.
+    // Full screen here so it reads like the slideshow it replaces; its own "start
+    // slideshow" hands the current set to the SlideshowView above.
+    PhotoViewer {
+        id: photoViewer
+        preferredVisibility: Window.FullScreen
+        onSlideshowRequested: {
+            photoViewer.visibility = Window.Hidden
+            win.playSlideshow(photoViewer.sources.slice(), photoViewer.currentSource, true, true)
+        }
+        onCloseRequested: {
+            photoViewer.visibility = Window.Hidden
+            win.focusGalleryView()
         }
     }
 
@@ -1568,7 +1649,7 @@ ApplicationWindow {
         }
         MenuItem {
             text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
-            onTriggered: win.startSlideshow(win.menuPhotoId, false)
+            onTriggered: win.openViewer(win.menuPhotoId)
         }
 
         // Theme actions apply to still images only.
