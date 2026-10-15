@@ -178,8 +178,18 @@ Window {
                     root.fit()                        // anything -> fit
             }
             onWheel: (wheel) => {
-                const factor = wheel.angleDelta.y > 0 ? 1.15 : (1 / 1.15)
-                root.zoomAt(root.zoom * factor, wheel.x, wheel.y)
+                // Scale the zoom step by the actual wheel delta rather than a fixed
+                // factor per event: a mouse notch is one event of 120 (→ 1.15x, the
+                // old feel), while a trackpad streams many small deltas per gesture —
+                // with a fixed factor each of those zoomed a full step, which made
+                // trackpad zoom run away. angleDelta is used when present; some
+                // trackpads report only high-res pixels, so fall back to those.
+                let notches = wheel.angleDelta.y / 120
+                if (notches === 0 && wheel.pixelDelta.y !== 0)
+                    notches = wheel.pixelDelta.y / 120
+                if (notches === 0)
+                    return
+                root.zoomAt(root.zoom * Math.pow(1.15, notches), wheel.x, wheel.y)
             }
         }
 
