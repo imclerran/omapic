@@ -18,9 +18,9 @@ ApplicationWindow {
 
     readonly property color accent: omarchyTheme.accent
 
-    // Grid thumbnail sizes (square cell edge, px): xs, sm, md, lg. "md" is the
-    // original default. The chosen index is persisted in gallerySettings.
-    readonly property var thumbSizes: [120, 152, 184, 240]
+    // Grid thumbnail sizes (square cell edge, px): xs, sm, md, lg, xl. "md" is
+    // the original default. The chosen index is persisted in gallerySettings.
+    readonly property var thumbSizes: [120, 152, 184, 240, 320]
     readonly property int thumbIndex: Math.max(0, Math.min(thumbSizes.length - 1, gallerySettings.thumbIndex))
     readonly property int cellSize: thumbSizes[thumbIndex]
 
@@ -202,6 +202,7 @@ ApplicationWindow {
         Qt.callLater(function () {
             grid.positionViewAtBeginning()
             timelineView.toTop()
+            folderView.toTop()
         })
     }
 
@@ -299,6 +300,8 @@ ApplicationWindow {
         // Space keep working right after a click.
         if (win.viewMode === "timeline")
             timelineView.focusView()
+        else if (win.viewMode === "folder")
+            folderView.focusView()
         else
             grid.forceActiveFocus()
     }
@@ -722,8 +725,8 @@ ApplicationWindow {
                               : qsTr("Fit whole image in thumbnail")
             }
 
-            // Thumbnail size control: drag to pick xs / sm / md / lg. Flanked by
-            // small and large glyphs so the direction reads at a glance.
+            // Thumbnail size control: drag to pick xs / sm / md / lg / xl. Flanked
+            // by small and large glyphs so the direction reads at a glance.
             Label {
                 text: "▪"
                 color: palette.placeholderText
@@ -741,7 +744,7 @@ ApplicationWindow {
                 onMoved: gallerySettings.thumbIndex = Math.round(value)
 
                 ToolTip.visible: hovered || pressed
-                ToolTip.text: ["Extra small", "Small", "Medium", "Large"][win.thumbIndex]
+                ToolTip.text: ["Extra small", "Small", "Medium", "Large", "Extra large"][win.thumbIndex]
             }
             Label {
                 text: "◼"
@@ -888,26 +891,10 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: palette.base
 
-            // Folder-view navigation strip: the Up tile plus the current folder's
-            // subfolders (or the library roots at the top level). Shown only in
-            // folder mode; the grid below drops to make room via its topMargin.
-            FolderBand {
-                id: folderBand
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                visible: win.viewMode === "folder"
-                entries: win.folderEntries
-                currentFolder: win.currentFolder
-                accent: win.accent
-                onNavigate: (path) => win.currentFolder = path
-            }
-
             GridView {
                 id: grid
                 anchors.fill: parent
-                anchors.topMargin: folderBand.visible ? folderBand.height : 0
-                visible: win.viewMode !== "timeline"
+                visible: win.viewMode === "ungrouped"
                 clip: true
                 cellWidth: win.cellSize
                 cellHeight: win.cellSize
@@ -971,7 +958,6 @@ ApplicationWindow {
 
             MouseArea {
                 anchors.fill: parent
-                anchors.topMargin: folderBand.visible ? folderBand.height : 0
                 visible: grid.visible
                 enabled: grid.visible
                 acceptedButtons: Qt.NoButton
@@ -1006,7 +992,6 @@ ApplicationWindow {
             // work), only empty-space presses are handled here.
             MouseArea {
                 anchors.fill: parent
-                anchors.topMargin: folderBand.visible ? folderBand.height : 0
                 visible: grid.visible
                 enabled: grid.visible
                 acceptedButtons: Qt.LeftButton
@@ -1021,17 +1006,34 @@ ApplicationWindow {
 
             Label {
                 anchors.centerIn: parent
-                // Only in the grid modes, and not when the folder band already
-                // gives the view content (subfolders/roots to click into).
                 visible: grid.visible && grid.count === 0
-                         && !(win.viewMode === "folder" && win.folderEntries.length > 0)
                 text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === ""
                        && tagSidebar.tagPresence === 0)
-                      ? (win.viewMode === "folder"
-                         ? qsTr("This folder has no photos.")
-                         : qsTr("Import a folder to get started."))
+                      ? qsTr("Import a folder to get started.")
                       : qsTr("No photos match the current filters.")
                 color: palette.placeholderText
+            }
+
+            // Folder browser: folders (2x2 cover mosaics) and the current folder's
+            // photos in one photo-style grid. Photos share library.filtered (the
+            // folderMode/folderPath bindings restrict it to the current folder), so
+            // selection/slideshow route through the same win helpers.
+            FolderView {
+                id: folderView
+                anchors.fill: parent
+                visible: win.viewMode === "folder"
+                library: library
+                entries: win.folderEntries
+                currentFolder: win.currentFolder
+                accent: win.accent
+                crop: gallerySettings.cropThumbs
+                cellSize: win.cellSize
+                selectedIds: win.selectedIds
+                onNavigate: (path) => win.currentFolder = path
+                onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
+                onPhotoDoubleClicked: (id) => win.startSlideshow(id, false)
+                onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)
+                onSelectAllRequested: win.selectAll()
             }
 
             // Capture-month timeline. Shares library.filtered (sorted by date in

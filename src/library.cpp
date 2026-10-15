@@ -248,13 +248,18 @@ QVariantList Library::folderEntries(const QString &path) const
     QVariantList out;
     const QStringList paths = m_db.activePhotoPaths();
 
-    // A folder tile, with the count of active photos at or under `dir`.
+    // A folder tile, with the count of active photos at or under `dir` and the
+    // first (by path) up-to-4 of them for the cover mosaic.
     const auto makeFolder = [&](const QString &dir) -> QVariantMap {
         int count = 0;
+        QStringList thumbs;
         const QString prefix = dir + QLatin1Char('/');
         for (const QString &p : paths) {
-            if (p == dir || p.startsWith(prefix))
+            if (p == dir || p.startsWith(prefix)) {
                 ++count;
+                if (thumbs.size() < 4)
+                    thumbs.append(p);
+            }
         }
         QString name = QFileInfo(dir).fileName();
         if (name.isEmpty())
@@ -264,6 +269,7 @@ QVariantList Library::folderEntries(const QString &path) const
             {QStringLiteral("name"), name},
             {QStringLiteral("path"), dir},
             {QStringLiteral("count"), count},
+            {QStringLiteral("thumbs"), thumbs},
         };
     };
 
