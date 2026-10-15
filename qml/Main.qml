@@ -62,6 +62,7 @@ ApplicationWindow {
             win.currentFolder = ""
             win.refreshFolderEntries()
         }
+        win.applyViewFilter() // batch dedup/sort/folder changes into one re-filter
         win.scrollGalleryToTop()
     }
     onCurrentFolderChanged: {
@@ -70,6 +71,7 @@ ApplicationWindow {
         win.selectedFolders = []
         win.fvAnchor = -1
         win.fvCursor = -1
+        win.applyViewFilter() // restrict to the new directory in one pass
         win.refreshFolderEntries()
         win.scrollGalleryToTop()
     }
@@ -848,36 +850,24 @@ ApplicationWindow {
     }
 
     // Restore the saved view mode at startup, then persist any later change.
-    Component.onCompleted: win.viewMode = gallerySettings.viewMode
+    Component.onCompleted: { win.viewMode = gallerySettings.viewMode; win.applyViewFilter() }
     Binding {
         target: gallerySettings
         property: "viewMode"
         value: win.viewMode
     }
 
-    // Drive the filter model's mode from the current view: timeline sorts by
-    // capture date; folder view restricts to one directory level (currentFolder).
-    Binding {
-        target: library.filtered
-        property: "sortByDate"
-        value: win.viewMode === "timeline"
-    }
-    Binding {
-        target: library.filtered
-        property: "folderMode"
-        value: win.viewMode === "folder"
-    }
-    Binding {
-        target: library.filtered
-        property: "folderPath"
-        value: win.currentFolder
-    }
-    // Duplicates are collapsed only in the ungrouped view; timeline and folder
-    // views show every copy.
-    Binding {
-        target: library.filtered
-        property: "dedupe"
-        value: win.viewMode === "ungrouped"
+    // Drive the filter model's mode from the current view in one batched call, so
+    // a switch re-filters and re-sorts just once. Setting these one at a time made
+    // the proxy re-sort per property — e.g. a wasted full name-sort when opening
+    // the timeline, right before the date-sort redid it. timeline sorts by capture
+    // date; folder view restricts to one directory level (currentFolder); only the
+    // ungrouped (flat) view collapses duplicate files.
+    function applyViewFilter() {
+        library.filtered.applyView(win.viewMode === "ungrouped",  // dedupe
+                                   win.viewMode === "timeline",    // sortByDate
+                                   win.viewMode === "folder",      // folderMode
+                                   win.currentFolder)              // folderPath
     }
 
     // The modal dialogs are lazy-loaded: their (sizable) content is only built

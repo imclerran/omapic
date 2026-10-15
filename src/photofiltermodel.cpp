@@ -130,6 +130,21 @@ void PhotoFilterModel::setDedupe(bool on)
     emit countChanged();
 }
 
+void PhotoFilterModel::applyView(bool dedupe, bool sortByDate, bool folderMode,
+                                 const QString &folderPath)
+{
+    bool changed = false;
+    if (m_dedupe != dedupe) { m_dedupe = dedupe; emit dedupeChanged(); changed = true; }
+    if (m_sortByDate != sortByDate) { m_sortByDate = sortByDate; emit sortByDateChanged(); changed = true; }
+    if (m_folderMode != folderMode) { m_folderMode = folderMode; emit folderModeChanged(); changed = true; }
+    if (m_folderPath != folderPath) { m_folderPath = folderPath; emit folderPathChanged(); changed = true; }
+    if (!changed)
+        return;
+    // One re-filter + re-sort against the final mode, rather than one per setter.
+    invalidate();
+    emit countChanged();
+}
+
 void PhotoFilterModel::setFolderRoots(const QStringList &roots)
 {
     if (m_folderRoots == roots)
