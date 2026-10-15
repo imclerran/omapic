@@ -1130,15 +1130,6 @@ ApplicationWindow {
             Row {
                 spacing: 0
                 ToolButton {
-                    text: qsTr("Ungrouped")
-                    checkable: true
-                    ButtonGroup.group: viewModeGroup
-                    checked: win.viewMode === "ungrouped"
-                    onClicked: win.viewMode = "ungrouped"
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("All photos in one grid")
-                }
-                ToolButton {
                     text: qsTr("Timeline")
                     checkable: true
                     ButtonGroup.group: viewModeGroup
@@ -1155,6 +1146,15 @@ ApplicationWindow {
                     onClicked: win.viewMode = "folder"
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Browse your library folders")
+                }
+                ToolButton {
+                    text: qsTr("Flat")
+                    checkable: true
+                    ButtonGroup.group: viewModeGroup
+                    checked: win.viewMode === "ungrouped"
+                    onClicked: win.viewMode = "ungrouped"
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("All photos in one grid")
                 }
             }
 

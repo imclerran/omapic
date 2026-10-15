@@ -221,7 +221,7 @@ Dialog {
 
             Switch {
                 id: folderFirstCheck
-                text: qsTr("Sort by folder in ungrouped view")
+                text: qsTr("Sort by folder in flat view")
                 checked: root.gallerySettings ? root.gallerySettings.folderFirst : false
                 onToggled: if (root.gallerySettings) root.gallerySettings.folderFirst = checked
             }
