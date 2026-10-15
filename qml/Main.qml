@@ -1130,7 +1130,7 @@ ApplicationWindow {
             Row {
                 spacing: 0
                 ToolButton {
-                    text: qsTr("Ungrouped")
+                    text: qsTr("Flat")
                     checkable: true
                     ButtonGroup.group: viewModeGroup
                     checked: win.viewMode === "ungrouped"
