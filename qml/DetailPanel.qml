@@ -57,19 +57,31 @@ Rectangle {
 
     color: sys.window
 
+    // Full refresh: the file metadata (dimensions/EXIF/camera — read from disk)
+    // plus the tag chips. Only needed when the selection changes; a tag edit
+    // leaves the file untouched, so it uses refreshChips() to skip the disk read.
     function refresh() {
+        info = (selectedIds.length === 1) ? library.photoInfo(selectedIds[0]) : ({})
+        refreshChips()
+    }
+
+    // Rebuild just the tag chips / applied set from the DB (no file I/O). Safe to
+    // run on every tag or category change, where the metadata is unchanged.
+    function refreshChips() {
         const n = selectedIds.length
+        if (n === 0) {
+            chips = []
+            appliedLower = []
+            return
+        }
+        const ct = library.commonTags(selectedIds)
         if (n === 1) {
-            info = library.photoInfo(selectedIds[0])
-            const ts = info.tags || []
-            chips = ts.map(function (t) {
+            chips = ct.map(function (t) {
                 return { id: t.id, name: t.name, label: t.name, partial: false,
                          colorSlot: t.colorSlot, categoryName: t.categoryName }
             })
-            appliedLower = ts.map(function (t) { return t.name.toLowerCase() })
-        } else if (n > 1) {
-            info = ({})
-            const ct = library.commonTags(selectedIds)
+            appliedLower = ct.map(function (t) { return t.name.toLowerCase() })
+        } else {
             chips = ct.map(function (t) {
                 return { id: t.id, name: t.name,
                          label: t.name + "  (" + t.count + "/" + n + ")",
@@ -79,10 +91,6 @@ Rectangle {
             // Only hide tags already on every selected photo.
             appliedLower = ct.filter(function (t) { return t.count === n })
                              .map(function (t) { return t.name.toLowerCase() })
-        } else {
-            info = ({})
-            chips = []
-            appliedLower = []
         }
     }
 
@@ -121,10 +129,10 @@ Rectangle {
         target: root.library
         function onPhotoChanged(id) {
             if (root.selectedIds.indexOf(id) !== -1)
-                root.refresh()
+                root.refreshChips() // tags changed, not the file — skip the disk read
         }
         // A tag deleted from the manager can affect any selected photo's chips.
-        function onTagsChanged() { root.refresh() }
+        function onTagsChanged() { root.refreshChips() }
     }
 
     // Empty state.

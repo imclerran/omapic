@@ -45,9 +45,19 @@ Dialog {
     // otherwise only the tags in that category.
     property int categoryFilter: -2
 
+    // One cached read of library.allTags (an expensive query) per change. The many
+    // consumers below — the filter chips' counts, the filtered list, the empty
+    // state — read this instead of hitting the getter each time, which otherwise
+    // re-ran the query ~once per category chip and froze the UI on a category edit.
+    readonly property var allTags: root.library.allTags
+    // Same single-read caching for the (also query-backed) category list, so the
+    // two category list models and the visibility check below don't each re-run
+    // the query every time categoriesChanged fires.
+    readonly property var categories: root.library.categories
+
     readonly property int uncategorizedCount: {
         let n = 0
-        const all = root.library.allTags
+        const all = root.allTags
         for (let i = 0; i < all.length; ++i) {
             if (all[i].categoryId < 0)
                 ++n
@@ -61,7 +71,7 @@ Dialog {
     // than including hidden tags. (The Categories tab shows the total instead.)
     function activeCategoryCount(categoryId) {
         let n = 0
-        const all = root.library.allTags
+        const all = root.allTags
         for (let i = 0; i < all.length; ++i) {
             if (all[i].categoryId === categoryId)
                 ++n
@@ -74,7 +84,7 @@ Dialog {
     readonly property var filteredTags: {
         const q = searchField.text.trim().toLowerCase()
         const cf = root.categoryFilter
-        const all = root.library.allTags
+        const all = root.allTags
         return all.filter(function (t) {
             if (q !== "" && t.name.toLowerCase().indexOf(q) === -1)
                 return false
@@ -225,7 +235,7 @@ Dialog {
         // that differs from the original only in casing is NOT a conflict.
         function tagNameTaken(name) {
             const n = name.trim().toLowerCase()
-            const all = root.library.allTags
+            const all = root.allTags
             for (let i = 0; i < all.length; ++i) {
                 if (all[i].id !== renameDialog.targetId && all[i].name.toLowerCase() === n)
                     return true
@@ -590,7 +600,7 @@ Dialog {
                 Flow {
                     Layout.fillWidth: true
                     spacing: 4
-                    visible: root.library.categories.length > 0
+                    visible: root.categories.length > 0
 
                     component FilterChip: Rectangle {
                         id: fchip
@@ -631,14 +641,14 @@ Dialog {
 
                     FilterChip {
                         filterValue: -2
-                        label: qsTr("All") + "  " + root.library.allTags.length
+                        label: qsTr("All") + "  " + root.allTags.length
                     }
                     FilterChip {
                         filterValue: -1
                         label: qsTr("Uncategorized") + "  " + root.uncategorizedCount
                     }
                     Repeater {
-                        model: root.library.categories
+                        model: root.categories
                         delegate: FilterChip {
                             required property var modelData
                             filterValue: modelData.id
@@ -741,7 +751,7 @@ Dialog {
                             wrapMode: Text.WordWrap
                             text: {
                                 const q = searchField.text.trim()
-                                if (root.library.allTags.length === 0)
+                                if (root.allTags.length === 0)
                                     return qsTr("No tags yet. Select a photo and add some.")
                                 if (q !== "")
                                     return qsTr("No tags match “%1”.").arg(q)
@@ -772,7 +782,7 @@ Dialog {
                         id: categoryList
                         anchors.fill: parent
                         clip: true
-                        model: root.library.categories
+                        model: root.categories
                         boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar {}
 

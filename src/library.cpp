@@ -794,8 +794,7 @@ int Library::renameCategory(int categoryId, const QString &newName)
         return RenameConflict;
 
     m_db.renameCategory(categoryId, trimmed);
-    emit categoriesChanged();
-    refreshTags(); // tag payloads carry the category name
+    refreshTags(); // emits categoriesChanged + tagsChanged (tag payloads carry the name)
     return RenameOk;
 }
 
@@ -804,8 +803,7 @@ void Library::setCategoryColor(int categoryId, int colorSlot)
     if (categoryId < 0 || colorSlot < 0)
         return;
     m_db.setCategoryColor(categoryId, colorSlot);
-    emit categoriesChanged();
-    refreshTags(); // chips re-resolve their color from the slot
+    refreshTags(); // emits categoriesChanged + tagsChanged (chips re-resolve their color)
 }
 
 void Library::deleteCategory(int categoryId)
@@ -813,8 +811,7 @@ void Library::deleteCategory(int categoryId)
     if (categoryId < 0)
         return;
     m_db.deleteCategory(categoryId); // tags are kept, now uncategorized
-    emit categoriesChanged();
-    refreshTags();
+    refreshTags(); // emits categoriesChanged + tagsChanged
 }
 
 void Library::setTagCategory(int tagId, int categoryId)
@@ -822,8 +819,7 @@ void Library::setTagCategory(int tagId, int categoryId)
     if (tagId < 0)
         return;
     m_db.setTagCategory(tagId, categoryId);
-    emit categoriesChanged(); // per-category tag counts
-    refreshTags();            // tagsChanged refreshes the manager and the detail pane
+    refreshTags(); // emits categoriesChanged (per-category counts) + tagsChanged
 }
 
 void Library::deleteTag(int tagId)

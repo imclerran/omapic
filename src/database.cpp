@@ -42,6 +42,10 @@ bool Database::open(const QString &path, const QString &connectionName)
         "  photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,"
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
         "  PRIMARY KEY (photo_id, tag_id))"));
+    // The PK indexes (photo_id, tag_id); add the reverse so tag->photo lookups
+    // (every tag/category query joins photo_tags by tag_id) don't scan the table.
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_photo_tags_tag ON photo_tags(tag_id)"));
     q.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS folders ("
         "  id INTEGER PRIMARY KEY,"
@@ -272,14 +276,21 @@ QVector<TagInfo> Database::loadTags()
     // folder, so the tag manager hides tags living only on hidden-folder or
     // removed-folder images. The count is still the tag's total across all
     // photos, so the delete confirmation reflects everything it would remove.
+    // Resolve the active-photo set once (over the photos table), then the active
+    // tags from it, rather than testing the active-folder clause per tag with a
+    // correlated EXISTS: that clause uses substr() (not index-friendly), so the
+    // old form re-scanned photo_tags for every tag and was very slow on large
+    // libraries. The count is still the tag's total across all photos (outer LEFT
+    // JOIN). Relies on idx_photo_tags_tag for the tag->photo lookups.
     QVector<TagInfo> tags;
     QSqlQuery q(QStringLiteral(
+                    "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1), "
+                    "active_tags AS (SELECT DISTINCT pt.tag_id FROM photo_tags pt "
+                    "  WHERE pt.photo_id IN (SELECT id FROM active_photos)) "
                     "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
                     "FROM tags t LEFT JOIN photo_tags pt ON pt.tag_id = t.id "
                     "%3"
-                    "WHERE EXISTS (SELECT 1 FROM photo_tags pt2 "
-                    "              JOIN photos p ON p.id = pt2.photo_id "
-                    "              WHERE pt2.tag_id = t.id AND %1) "
+                    "WHERE t.id IN (SELECT tag_id FROM active_tags) "
                     "GROUP BY t.id, t.name ORDER BY t.name")
                     .arg(activeClause(QStringLiteral("p")),
                          QLatin1String(kTagCategoryColumns),
@@ -300,14 +311,17 @@ QVector<TagInfo> Database::activeTags()
 {
     // Tags that apply to at least one photo in the active (shown) set, counted
     // over that set only. Drives the filter sidebar and tag autocomplete.
+    // Active-photo set first (10.6k-row photos scan), then the tags on it — much
+    // cheaper than joining photos and testing the substr() clause across all of
+    // photo_tags. Counts are over the active set. Uses idx_photo_tags_tag.
     QVector<TagInfo> tags;
     QSqlQuery q(QStringLiteral(
+                    "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1) "
                     "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
                     "FROM tags t "
                     "JOIN photo_tags pt ON pt.tag_id = t.id "
-                    "JOIN photos p ON p.id = pt.photo_id "
                     "%3"
-                    "WHERE %1 "
+                    "WHERE pt.photo_id IN (SELECT id FROM active_photos) "
                     "GROUP BY t.id, t.name HAVING COUNT(pt.photo_id) > 0 "
                     "ORDER BY t.name")
                     .arg(activeClause(QStringLiteral("p")),
@@ -339,12 +353,12 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected)
     // Matching photos: active photos that carry every selected tag. Then return
     // the tags present on those photos, counted over that matching set.
     const QString sql = QStringLiteral(
+        "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1) "
         "SELECT t.id, t.name, COUNT(DISTINCT pt.photo_id), %4 "
         "FROM tags t "
         "JOIN photo_tags pt ON pt.tag_id = t.id "
-        "JOIN photos p ON p.id = pt.photo_id "
         "%5"
-        "WHERE %1 AND p.id IN ("
+        "WHERE pt.photo_id IN (SELECT id FROM active_photos) AND pt.photo_id IN ("
         "  SELECT pt2.photo_id FROM photo_tags pt2 "
         "  WHERE pt2.tag_id IN (%2) "
         "  GROUP BY pt2.photo_id HAVING COUNT(DISTINCT pt2.tag_id) = %3) "
@@ -756,21 +770,29 @@ QVector<CategoryInfo> Database::loadCategories(bool activeOnly)
     // to a photo in an active folder — mirroring the active-folder filter
     // loadTags() uses for individual tags. Categories are always created attached
     // to a tag (from the Tags tab), so there are no empty categories to special-case.
-    const QString having = activeOnly
+    // When activeOnly, restrict to categories that have a tag on an active photo.
+    // Resolve the active categories up front (one photos-table scan + a tag_id
+    // join via idx_photo_tags_tag) instead of a correlated EXISTS per category.
+    const QString cte = activeOnly
         ? QStringLiteral(
-              "HAVING EXISTS ("
-              "  SELECT 1 FROM tags t2 "
+              "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1), "
+              "active_categories AS ("
+              "  SELECT DISTINCT t2.category_id FROM tags t2 "
               "  JOIN photo_tags pt ON pt.tag_id = t2.id "
-              "  JOIN photos p ON p.id = pt.photo_id "
-              "  WHERE t2.category_id = c.id AND %1) ")
+              "  WHERE pt.photo_id IN (SELECT id FROM active_photos) "
+              "    AND t2.category_id IS NOT NULL) ")
               .arg(activeClause(QStringLiteral("p")))
         : QString();
+    const QString where = activeOnly
+        ? QStringLiteral("WHERE c.id IN (SELECT category_id FROM active_categories) ")
+        : QString();
     QSqlQuery q(QStringLiteral(
+                    "%1"
                     "SELECT c.id, c.name, c.color_slot, COUNT(t.id) "
                     "FROM tag_categories c LEFT JOIN tags t ON t.category_id = c.id "
+                    "%2"
                     "GROUP BY c.id, c.name, c.color_slot "
-                    "%1"
-                    "ORDER BY c.name").arg(having),
+                    "ORDER BY c.name").arg(cte, where),
                 m_db);
     while (q.next()) {
         CategoryInfo info;
