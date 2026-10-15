@@ -35,13 +35,16 @@ Item {
         function onDataChanged() { fv.dataRevision++ }
     }
 
-    signal navigate(string path)             // go to a folder path (Up button / Alt+Up, or Enter on a folder)
+    signal goUp()                            // climb one level (Up button / Alt+Up)
+    signal enterFolder(string path)          // descend into a folder (Enter on a selected folder)
     signal cellClicked(int gridIndex, int modifiers)
     signal cellDoubleClicked(int gridIndex)  // folder -> enter, photo -> slideshow
     signal cellRightClicked(int gridIndex)
     signal selectAllRequested()
     signal slideshowRequested(bool play)
     signal cursorMove(string dir, bool extend)  // arrow-key navigation over the combined grid
+    signal tabForward()                          // Tab / Shift+Tab focus cycle (routed by Main)
+    signal tabBackward()
 
     // Columns currently shown, so arrow Up/Down can step a whole row.
     readonly property int columns: fgrid ? Math.max(1, Math.floor(fgrid.width / fgrid.cellWidth)) : 1
@@ -55,7 +58,7 @@ Item {
     // folder and no photos are selected; otherwise start the slideshow as before.
     function activateSelection() {
         if (fv.selectedFolders.length === 1 && fv.selectedIds.length === 0)
-            fv.navigate(fv.selectedFolders[0])
+            fv.enterFolder(fv.selectedFolders[0])
         else
             fv.slideshowRequested(false)
     }
@@ -84,7 +87,7 @@ Item {
                 width: 30
                 height: 30
                 visible: fv.currentFolder !== ""
-                onClicked: { if (fv.library) fv.navigate(fv.library.upFolder(fv.currentFolder)) }
+                onClicked: fv.goUp()
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Up")
                 contentItem: Image {
@@ -148,6 +151,8 @@ Item {
             Keys.onSpacePressed: (event) => { fv.slideshowRequested(true); event.accepted = true }
             Keys.onReturnPressed: (event) => { fv.activateSelection(); event.accepted = true }
             Keys.onEnterPressed: (event) => { fv.activateSelection(); event.accepted = true }
+            Keys.onTabPressed: (event) => { fv.tabForward(); event.accepted = true }
+            Keys.onBacktabPressed: (event) => { fv.tabBackward(); event.accepted = true }
 
             delegate: Item {
                 id: cell

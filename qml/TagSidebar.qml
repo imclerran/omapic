@@ -15,6 +15,18 @@ Rectangle {
     property alias matchAll: matchAllSwitch.checked
     property int tagPresence: 0 // 0 all, 1 tagged only, 2 untagged only
 
+    // Tab focus cycle (routed by Main): forward from / back to the filter field.
+    signal tabForward()
+    signal tabBackward()
+    // Focus the tag-filter field. Returns false when it's hidden (no tags), so
+    // the cycle can skip this stop.
+    function focusSearch() {
+        if (!searchField.visible)
+            return false
+        searchField.forceActiveFocus()
+        return true
+    }
+
     // Color for a tag's category palette slot; the accent for uncategorized tags.
     // Reads the palette property (not just the invokable) so chips re-color when
     // the Omarchy theme changes.
@@ -73,6 +85,8 @@ Rectangle {
             visible: rep.count > 0
             placeholderText: qsTr("Search tags…")
             Keys.onEscapePressed: text = ""
+            Keys.onTabPressed: (event) => { root.tabForward(); event.accepted = true }
+            Keys.onBacktabPressed: (event) => { root.tabBackward(); event.accepted = true }
         }
 
         Item {
