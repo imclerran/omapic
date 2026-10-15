@@ -120,6 +120,16 @@ void PhotoFilterModel::setFolderPath(const QString &path)
     emit countChanged();
 }
 
+void PhotoFilterModel::setDedupe(bool on)
+{
+    if (m_dedupe == on)
+        return;
+    m_dedupe = on;
+    invalidateRowFilter();
+    emit dedupeChanged();
+    emit countChanged();
+}
+
 void PhotoFilterModel::setFolderRoots(const QStringList &roots)
 {
     if (m_folderRoots == roots)
@@ -259,6 +269,10 @@ bool PhotoFilterModel::passesFolderGate(const QString &path) const
 bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
     const QModelIndex idx = sourceModel()->index(sourceRow, 0, sourceParent);
+
+    // Duplicate gate: hide non-representative copies in the ungrouped view only.
+    if (m_dedupe && sourceModel()->data(idx, PhotoModel::IsDuplicateRole).toBool())
+        return false;
 
     // Folder-view directory gate (no-op outside folder mode).
     if (m_folderMode) {

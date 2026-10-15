@@ -872,6 +872,13 @@ ApplicationWindow {
         property: "folderPath"
         value: win.currentFolder
     }
+    // Duplicates are collapsed only in the ungrouped view; timeline and folder
+    // views show every copy.
+    Binding {
+        target: library.filtered
+        property: "dedupe"
+        value: win.viewMode === "ungrouped"
+    }
 
     // The modal dialogs are lazy-loaded: their (sizable) content is only built
     // the first time each is opened, instead of instantiating and laying out at

@@ -28,6 +28,10 @@ struct Photo {
     // Capture time in Unix seconds: EXIF date taken when available, else the file
     // mtime. 0 when unknown (not yet backfilled). Drives the timeline grouping.
     qint64 takenAt = 0;
+    // True when this is a non-representative duplicate: another active photo with
+    // the same content hash was added earlier. Hidden only in the ungrouped view
+    // (timeline and folder views show every copy). See Database::loadPhotos.
+    bool isDuplicate = false;
     QSet<int> tagIds;
     QStringList tagNames;
 };

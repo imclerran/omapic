@@ -33,6 +33,9 @@ class PhotoFilterModel : public QSortFilterProxyModel {
     // The directory currently shown in folder view. Empty = the root level,
     // which shows orphan photos (those under no registered folder).
     Q_PROPERTY(QString folderPath READ folderPath WRITE setFolderPath NOTIFY folderPathChanged)
+    // Hide non-representative duplicates (same content hash). On for the ungrouped
+    // view; off for timeline and folder views, which show every copy.
+    Q_PROPERTY(bool dedupe READ dedupe WRITE setDedupe NOTIFY dedupeChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
 
 public:
@@ -66,6 +69,9 @@ public:
     QString folderPath() const { return m_folderPath; }
     void setFolderPath(const QString &path);
 
+    bool dedupe() const { return m_dedupe; }
+    void setDedupe(bool on); // hide duplicates (ungrouped view only)
+
     // The registered folder roots, used to tell orphan photos (shown at the
     // folder-view root) from foldered ones. Set by Library; not a QML property.
     void setFolderRoots(const QStringList &roots);
@@ -96,6 +102,7 @@ signals:
     void sortByDateChanged();
     void folderModeChanged();
     void folderPathChanged();
+    void dedupeChanged();
     void countChanged();
 
 protected:
@@ -123,6 +130,7 @@ private:
     bool m_sortByDate = false;
     bool m_folderMode = false;
     QString m_folderPath;
+    bool m_dedupe = true; // ungrouped is the default view, which dedupes
     QStringList m_folderRoots;
     QCollator m_collator;
 };

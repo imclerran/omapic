@@ -227,25 +227,32 @@ QVector<Photo> Database::loadPhotos()
     QHash<int, int> indexOf;
     QVector<Photo> photos;
 
-    // Collapse duplicates: among the active photos, show at most one row per
-    // content hash — the earliest added (by added_at, then id). Rows whose hash
-    // isn't computed yet (NULL/empty) are always shown, so nothing disappears
-    // before the background hashing catches up, and the representative is chosen
-    // only from photos that are themselves active, so disabling the folder
-    // holding the kept copy promotes a still-visible duplicate in its place.
+    // Load every active photo, ordered by (added_at, id). Duplicates are not
+    // dropped here: each photo is tagged isDuplicate when an earlier active photo
+    // shares its content hash, and only the ungrouped view hides those — timeline
+    // and folder views show every copy. Walking in added order, the first photo
+    // seen for a hash is the representative and the rest are duplicates; this
+    // mirrors the old SQL (earliest by added_at, then id) while keeping the copies
+    // in the model. Photos whose hash isn't computed yet (NULL/empty) are never
+    // duplicates, so nothing hides before background hashing catches up. Because
+    // only active photos are loaded, disabling the folder holding the kept copy
+    // promotes a still-visible duplicate to representative on the next reload.
+    QSet<QString> seenHashes;
     QSqlQuery q(QStringLiteral(
-                    "SELECT p.id, p.path, p.taken_at FROM photos p WHERE %1 "
-                    "AND (p.hash IS NULL OR p.hash = '' OR p.id = ("
-                    "  SELECT p2.id FROM photos p2 WHERE p2.hash = p.hash AND %2 "
-                    "  ORDER BY p2.added_at, p2.id LIMIT 1)) "
+                    "SELECT p.id, p.path, p.taken_at, p.hash FROM photos p WHERE %1 "
                     "ORDER BY p.added_at, p.id")
-                    .arg(activeClause(QStringLiteral("p")), activeClause(QStringLiteral("p2"))),
+                    .arg(activeClause(QStringLiteral("p"))),
                 m_db);
     while (q.next()) {
         Photo p;
         p.id = q.value(0).toInt();
         p.path = q.value(1).toString();
         p.takenAt = q.value(2).isNull() ? 0 : q.value(2).toLongLong();
+        const QString hash = q.value(3).toString();
+        if (!hash.isEmpty()) {
+            p.isDuplicate = seenHashes.contains(hash); // an earlier copy was seen
+            seenHashes.insert(hash);
+        }
         p.fileName = QFileInfo(p.path).fileName();
         p.isVideo = isVideoPath(p.path);
         indexOf.insert(p.id, photos.size());
