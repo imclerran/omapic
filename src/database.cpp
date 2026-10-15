@@ -314,27 +314,38 @@ QVector<TagInfo> Database::loadTags()
     return tags;
 }
 
-QVector<TagInfo> Database::activeTags()
+QVector<TagInfo> Database::activeTags(const QString &folderScope)
 {
     // Tags that apply to at least one photo in the active (shown) set, counted
     // over that set only. Drives the filter sidebar and tag autocomplete.
     // Active-photo set first (10.6k-row photos scan), then the tags on it — much
     // cheaper than joining photos and testing the substr() clause across all of
     // photo_tags. Counts are over the active set. Uses idx_photo_tags_tag.
+    //
+    // folderScope (folder view) additionally restricts the active photos to those
+    // at or under that directory — the subtree prefix match mirrors activeClause.
+    const QString scope = folderScope.isEmpty()
+        ? QString()
+        : QStringLiteral(" AND substr(p.path, 1, length(?) + 1) = ? || '/'");
     QVector<TagInfo> tags;
-    QSqlQuery q(QStringLiteral(
-                    "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1) "
-                    "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
-                    "FROM tags t "
-                    "JOIN photo_tags pt ON pt.tag_id = t.id "
-                    "%3"
-                    "WHERE pt.photo_id IN (SELECT id FROM active_photos) "
-                    "GROUP BY t.id, t.name HAVING COUNT(pt.photo_id) > 0 "
-                    "ORDER BY t.name")
-                    .arg(activeClause(QStringLiteral("p")),
-                         QLatin1String(kTagCategoryColumns),
-                         QLatin1String(kTagCategoryJoin)),
-                m_db);
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+                  "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1%4) "
+                  "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
+                  "FROM tags t "
+                  "JOIN photo_tags pt ON pt.tag_id = t.id "
+                  "%3"
+                  "WHERE pt.photo_id IN (SELECT id FROM active_photos) "
+                  "GROUP BY t.id, t.name HAVING COUNT(pt.photo_id) > 0 "
+                  "ORDER BY t.name")
+                  .arg(activeClause(QStringLiteral("p")),
+                       QLatin1String(kTagCategoryColumns),
+                       QLatin1String(kTagCategoryJoin), scope));
+    if (!folderScope.isEmpty()) {
+        q.addBindValue(folderScope);
+        q.addBindValue(folderScope);
+    }
+    q.exec();
     while (q.next()) {
         TagInfo info;
         info.id = q.value(0).toInt();
@@ -346,21 +357,28 @@ QVector<TagInfo> Database::activeTags()
     return tags;
 }
 
-QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected)
+QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QString &folderScope)
 {
     QVector<TagInfo> tags;
     if (selected.isEmpty())
-        return activeTags();
+        return activeTags(folderScope);
 
     QStringList ph;
     for (int i = 0; i < selected.size(); ++i)
         ph.append(QStringLiteral("?"));
     const QString inList = ph.join(QLatin1Char(','));
 
+    // The folder-view scope restricts the active photos to a directory subtree;
+    // its bind lives in the active_photos CTE, which precedes the selected-tag
+    // placeholders in the SQL, so it is bound first.
+    const QString scope = folderScope.isEmpty()
+        ? QString()
+        : QStringLiteral(" AND substr(p.path, 1, length(?) + 1) = ? || '/'");
+
     // Matching photos: active photos that carry every selected tag. Then return
     // the tags present on those photos, counted over that matching set.
     const QString sql = QStringLiteral(
-        "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1) "
+        "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1%6) "
         "SELECT t.id, t.name, COUNT(DISTINCT pt.photo_id), %4 "
         "FROM tags t "
         "JOIN photo_tags pt ON pt.tag_id = t.id "
@@ -372,10 +390,14 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected)
         "GROUP BY t.id, t.name HAVING COUNT(DISTINCT pt.photo_id) > 0 "
         "ORDER BY t.name")
         .arg(activeClause(QStringLiteral("p")), inList, QString::number(selected.size()),
-             QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin));
+             QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin), scope);
 
     QSqlQuery q(m_db);
     q.prepare(sql);
+    if (!folderScope.isEmpty()) {
+        q.addBindValue(folderScope);
+        q.addBindValue(folderScope);
+    }
     for (int id : selected)
         q.addBindValue(id);
     q.exec();

@@ -871,6 +871,14 @@ void Library::setMatchAll(bool matchAll)
     refreshTags(); // the sidebar's tag set depends on the filter mode
 }
 
+void Library::setTagFolderScope(const QString &path)
+{
+    if (m_tagFolderScope == path)
+        return;
+    m_tagFolderScope = path;
+    refreshTags(); // the sidebar now lists only tags in this folder subtree
+}
+
 void Library::refreshTags()
 {
     // The filter sidebar shows only tags relevant to the active (shown) set, with
@@ -881,13 +889,22 @@ void Library::refreshTags()
     // co-occur on the currently-matching photos (faceted drill-down), so chips
     // that could only ever yield an empty result disappear.
     const QList<int> sel = m_tags->selectedTagIds();
-    const QVector<TagInfo> active = m_db.activeTags();
+    // In folder view the chips are scoped to the current folder subtree.
+    const QVector<TagInfo> active = m_db.activeTags(m_tagFolderScope);
     QHash<int, TagInfo> activeById;
     for (const TagInfo &t : active)
         activeById.insert(t.id, t);
+    // A selected tag whose photos are all outside the current folder scope won't
+    // be in `active`; pull it from the unscoped active set so it stays visible
+    // (and deselectable) rather than vanishing from under the selection.
+    if (!m_tagFolderScope.isEmpty() && !sel.isEmpty()) {
+        for (const TagInfo &t : m_db.activeTags())
+            if (!activeById.contains(t.id))
+                activeById.insert(t.id, t);
+    }
 
     QVector<TagInfo> tags =
-        (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel) : active;
+        (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel, m_tagFolderScope) : active;
 
     // Keep a selected tag visible only while it still applies to some active
     // photo. This keeps an incompatible match-all pick deselectable, but lets a

@@ -868,6 +868,9 @@ ApplicationWindow {
                                    win.viewMode === "timeline",    // sortByDate
                                    win.viewMode === "folder",      // folderMode
                                    win.currentFolder)              // folderPath
+        // Scope the filter sidebar's tag chips to the current folder subtree while
+        // browsing folders; the whole library otherwise (and at the folder root).
+        library.setTagFolderScope(win.viewMode === "folder" ? win.currentFolder : "")
     }
 
     // The modal dialogs are lazy-loaded: their (sizable) content is only built

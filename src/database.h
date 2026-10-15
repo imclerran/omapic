@@ -26,10 +26,13 @@ public:
 
     QVector<Photo> loadPhotos();         // only photos in the active (shown) set
     QVector<TagInfo> loadTags();         // tags with >=1 active-folder photo, total count (tag manager)
-    QVector<TagInfo> activeTags();       // tags applying to >=1 active photo, with active counts
+    // Tags applying to >=1 active photo, with active counts. When folderScope is
+    // non-empty, restricts to photos at or under that directory (the folder-view
+    // tag filter, scoped to the current folder and its subfolders).
+    QVector<TagInfo> activeTags(const QString &folderScope = {});
     // Tags on the active photos that carry ALL of `selected` (faceted drill-down),
     // counted over that matching set. Used for the "match all" filter sidebar.
-    QVector<TagInfo> coOccurringTags(const QList<int> &selected);
+    QVector<TagInfo> coOccurringTags(const QList<int> &selected, const QString &folderScope = {});
     QStringList allTagNames();           // tag names relevant to the active set, for autocomplete
     QVector<FolderInfo> loadFolders(); // registered library folders, with photo counts + enabled
 
