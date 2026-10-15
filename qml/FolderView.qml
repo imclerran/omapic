@@ -41,9 +41,15 @@ Item {
     signal cellRightClicked(int gridIndex)
     signal selectAllRequested()
     signal slideshowRequested(bool play)
+    signal cursorMove(string dir, bool extend)  // arrow-key navigation over the combined grid
+
+    // Columns currently shown, so arrow Up/Down can step a whole row.
+    readonly property int columns: fgrid ? Math.max(1, Math.floor(fgrid.width / fgrid.cellWidth)) : 1
 
     function toTop() { if (fgrid) fgrid.positionViewAtBeginning() }
     function focusView() { fgrid.forceActiveFocus() }
+    // Scroll so the given grid index (used by arrow navigation) stays on screen.
+    function ensureVisible(index) { if (fgrid) fgrid.positionViewAtIndex(index, GridView.Contain) }
 
     // Enter/Return: open the selected folder (descend into it) when exactly one
     // folder and no photos are selected; otherwise start the slideshow as before.
@@ -130,6 +136,15 @@ Item {
                     event.accepted = true
                 }
             }
+            // Arrow keys move the selection cursor over the combined folder+photo
+            // grid. Alt+Up is the "go up a folder" shortcut, so let it fall through.
+            Keys.onLeftPressed: (event) => { fv.cursorMove("left", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+            Keys.onRightPressed: (event) => { fv.cursorMove("right", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+            Keys.onUpPressed: (event) => {
+                if (event.modifiers & Qt.AltModifier) { event.accepted = false; return }
+                fv.cursorMove("up", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true
+            }
+            Keys.onDownPressed: (event) => { fv.cursorMove("down", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
             Keys.onSpacePressed: (event) => { fv.slideshowRequested(true); event.accepted = true }
             Keys.onReturnPressed: (event) => { fv.activateSelection(); event.accepted = true }
             Keys.onEnterPressed: (event) => { fv.activateSelection(); event.accepted = true }

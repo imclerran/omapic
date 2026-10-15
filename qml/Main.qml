@@ -434,6 +434,39 @@ ApplicationWindow {
         fvAnchor = 0; fvCursor = total - 1
     }
 
+    // Arrow-key navigation over the folder grid (folders then photos). Plain
+    // arrows move a single selection; Shift+arrows extend a range from the
+    // anchor. Mirrors the gallery's navigate(), but spans both item kinds.
+    function fvNavigate(dir, extend) {
+        const total = folderView.folderCount + library.filtered.count
+        if (total === 0)
+            return
+        const cols = Math.max(1, folderView.columns)
+        let base = (fvCursor >= 0 && fvCursor < total) ? fvCursor
+                 : (fvAnchor >= 0 && fvAnchor < total) ? fvAnchor : 0
+        let target = base
+        if (selectedFolders.length > 0 || selectedIds.length > 0) {
+            if (dir === "left")       target = base - 1
+            else if (dir === "right") target = base + 1
+            else if (dir === "up")    target = base - cols
+            else if (dir === "down")  target = base + cols
+        }
+        target = Math.max(0, Math.min(total - 1, target))
+        const it = fvItemAt(target)
+        if (!it)
+            return
+        if (extend) {
+            if (fvAnchor < 0 || fvAnchor >= total) fvAnchor = target
+            fvCursor = target
+            fvApplyRange(fvAnchor, fvCursor)
+        } else {
+            if (it.type === "folder") { selectedFolders = [it.path]; selectedIds = [] }
+            else { selectedIds = [it.id]; selectedFolders = [] }
+            fvAnchor = target; fvCursor = target
+        }
+        folderView.ensureVisible(target)
+    }
+
     // Commit the selection cursor to a proxy row. Plain move replaces the
     // selection; extend (Shift) grows a contiguous range from the anchor. View-
     // agnostic: the grid and the timeline both drive selection through this, each
@@ -1200,6 +1233,7 @@ ApplicationWindow {
                 onCellDoubleClicked: (gridIndex) => win.fvDoubleClick(gridIndex)
                 onCellRightClicked: (gridIndex) => win.fvRightClick(gridIndex)
                 onSelectAllRequested: win.fvSelectAll()
+                onCursorMove: (dir, extend) => win.fvNavigate(dir, extend)
                 onSlideshowRequested: (play) => win.slideshowFromFocus(play)
             }
 
