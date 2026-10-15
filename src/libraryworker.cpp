@@ -4,56 +4,20 @@
 
 #include "libraryworker.h"
 
-#include <QDirIterator>
 #include <QFileInfo>
-#include <QHash>
 #include <QSet>
 
-#include <functional>
-
+#include "mediascan.h"
 #include "photo.h"
 #include "photometadata.h"
 
 namespace {
 
-// Image and video globs the scanner picks up. Keep the video set in sync with
-// Photo::isVideo (database.cpp), the thumbnail provider, and SlideshowView.qml.
-const QStringList kMediaGlobs = {
-    QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.png"),
-    QStringLiteral("*.gif"), QStringLiteral("*.bmp"), QStringLiteral("*.webp"),
-    QStringLiteral("*.tif"), QStringLiteral("*.tiff"),
-    QStringLiteral("*.mp4"), QStringLiteral("*.m4v"), QStringLiteral("*.webm"),
-    QStringLiteral("*.mkv"), QStringLiteral("*.mov"), QStringLiteral("*.avi"),
-};
-
-// Collect every media file under `root`, skipping folders (and their subtrees)
-// marked with a .nomedia file. Results are added to `out`.
+// Collect every media file under `root`, .nomedia-aware, into `out`. Thin alias
+// over the shared scanner so the library and the standalone viewer stay in step.
 void collectImages(const QString &root, QSet<QString> &out)
 {
-    if (root.isEmpty())
-        return;
-
-    QHash<QString, bool> excluded;
-    const std::function<bool(const QString &)> isExcluded = [&](const QString &dirPath) -> bool {
-        auto cached = excluded.constFind(dirPath);
-        if (cached != excluded.constEnd())
-            return cached.value();
-        bool ex = QFileInfo::exists(dirPath + QStringLiteral("/.nomedia"));
-        if (!ex && QFileInfo(dirPath).canonicalFilePath() != QFileInfo(root).canonicalFilePath()) {
-            const QString parent = QFileInfo(dirPath).path();
-            if (!parent.isEmpty() && parent != dirPath)
-                ex = isExcluded(parent);
-        }
-        excluded.insert(dirPath, ex);
-        return ex;
-    };
-
-    QDirIterator it(root, kMediaGlobs, QDir::Files, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        const QString file = it.next();
-        if (!isExcluded(QFileInfo(file).path()))
-            out.insert(file);
-    }
+    mediascan::collect(root, out);
 }
 
 } // namespace
