@@ -49,6 +49,9 @@ Item {
     signal moveCursorRequested(int target, bool extend)
     // Start the slideshow from the focused photo (play = autoplay vs. open paused).
     signal slideshowFromFocusRequested(bool play)
+    // Tab / Shift+Tab focus cycle (routed by the window).
+    signal tabForward()
+    signal tabBackward()
 
     function toTop() {
         if (list)
@@ -202,6 +205,8 @@ Item {
         Keys.onSpacePressed: (event) => { tv.slideshowFromFocusRequested(true); event.accepted = true }
         Keys.onReturnPressed: (event) => { tv.slideshowFromFocusRequested(false); event.accepted = true }
         Keys.onEnterPressed: (event) => { tv.slideshowFromFocusRequested(false); event.accepted = true }
+        Keys.onTabPressed: (event) => { tv.tabForward(); event.accepted = true }
+        Keys.onBacktabPressed: (event) => { tv.tabBackward(); event.accepted = true }
 
         delegate: Column {
             id: monthSection

@@ -35,15 +35,33 @@ Item {
         function onDataChanged() { fv.dataRevision++ }
     }
 
-    signal navigate(string path)             // the Up cell was clicked (single click)
+    signal goUp()                            // climb one level (Up button / Alt+Up)
+    signal enterFolder(string path)          // descend into a folder (Enter on a selected folder)
     signal cellClicked(int gridIndex, int modifiers)
     signal cellDoubleClicked(int gridIndex)  // folder -> enter, photo -> slideshow
     signal cellRightClicked(int gridIndex)
     signal selectAllRequested()
     signal slideshowRequested(bool play)
+    signal cursorMove(string dir, bool extend)  // arrow-key navigation over the combined grid
+    signal tabForward()                          // Tab / Shift+Tab focus cycle (routed by Main)
+    signal tabBackward()
+
+    // Columns currently shown, so arrow Up/Down can step a whole row.
+    readonly property int columns: fgrid ? Math.max(1, Math.floor(fgrid.width / fgrid.cellWidth)) : 1
 
     function toTop() { if (fgrid) fgrid.positionViewAtBeginning() }
     function focusView() { fgrid.forceActiveFocus() }
+    // Scroll so the given grid index (used by arrow navigation) stays on screen.
+    function ensureVisible(index) { if (fgrid) fgrid.positionViewAtIndex(index, GridView.Contain) }
+
+    // Enter/Return: open the selected folder (descend into it) when exactly one
+    // folder and no photos are selected; otherwise start the slideshow as before.
+    function activateSelection() {
+        if (fv.selectedFolders.length === 1 && fv.selectedIds.length === 0)
+            fv.enterFolder(fv.selectedFolders[0])
+        else
+            fv.slideshowRequested(false)
+    }
 
     // "#rrggbb" for a color, for embedding in the Up button's SVG.
     function hex(c) {
@@ -69,7 +87,7 @@ Item {
                 width: 30
                 height: 30
                 visible: fv.currentFolder !== ""
-                onClicked: { if (fv.library) fv.navigate(fv.library.upFolder(fv.currentFolder)) }
+                onClicked: fv.goUp()
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Up")
                 contentItem: Image {
@@ -121,9 +139,20 @@ Item {
                     event.accepted = true
                 }
             }
+            // Arrow keys move the selection cursor over the combined folder+photo
+            // grid. Alt+Up is the "go up a folder" shortcut, so let it fall through.
+            Keys.onLeftPressed: (event) => { fv.cursorMove("left", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+            Keys.onRightPressed: (event) => { fv.cursorMove("right", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+            Keys.onUpPressed: (event) => {
+                if (event.modifiers & Qt.AltModifier) { event.accepted = false; return }
+                fv.cursorMove("up", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true
+            }
+            Keys.onDownPressed: (event) => { fv.cursorMove("down", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
             Keys.onSpacePressed: (event) => { fv.slideshowRequested(true); event.accepted = true }
-            Keys.onReturnPressed: (event) => { fv.slideshowRequested(false); event.accepted = true }
-            Keys.onEnterPressed: (event) => { fv.slideshowRequested(false); event.accepted = true }
+            Keys.onReturnPressed: (event) => { fv.activateSelection(); event.accepted = true }
+            Keys.onEnterPressed: (event) => { fv.activateSelection(); event.accepted = true }
+            Keys.onTabPressed: (event) => { fv.tabForward(); event.accepted = true }
+            Keys.onBacktabPressed: (event) => { fv.tabBackward(); event.accepted = true }
 
             delegate: Item {
                 id: cell

@@ -24,6 +24,18 @@ Rectangle {
     property var chips: []
     property var appliedLower: []
 
+    // Tab focus cycle (routed by Main): forward from / back to the add-a-tag field.
+    signal tabForward()
+    signal tabBackward()
+    // Focus the add-a-tag field. Returns false when no photo is selected (the
+    // field is hidden), so the cycle can skip this stop.
+    function focusTagInput() {
+        if (root.count < 1)
+            return false
+        tagInput.forceActiveFocus()
+        return true
+    }
+
     SystemPalette { id: sys }
 
     // Color for a tag's category palette slot; the accent for uncategorized tags.
@@ -387,6 +399,8 @@ Rectangle {
                                         highlighted = Math.min(highlighted + 1, suggestions.length - 1)
                 Keys.onUpPressed: highlighted = Math.max(highlighted - 1, -1)
                 Keys.onEscapePressed: suggestionPopup.close()
+                Keys.onTabPressed: (event) => { suggestionPopup.close(); root.tabForward(); event.accepted = true }
+                Keys.onBacktabPressed: (event) => { suggestionPopup.close(); root.tabBackward(); event.accepted = true }
 
                 Popup {
                     id: suggestionPopup

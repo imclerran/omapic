@@ -73,6 +73,45 @@ ApplicationWindow {
         win.scrollGalleryToTop()
     }
 
+    // Alt+Up climbs one folder level while browsing folders, mirroring the Up
+    // button. Disabled at the root (nothing to climb to).
+    Shortcut {
+        sequence: "Alt+Up"
+        enabled: win.viewMode === "folder" && win.currentFolder !== ""
+        onActivated: win.fvGoUp()
+    }
+
+    // --- Tab focus cycle: add-a-tag field → tag filter → gallery → main search ---
+    // Four stops. focusStop(i) returns false when stop i is currently unavailable
+    // (the add-tag field with no photo selected, or the tag filter with no tags),
+    // so tabStepTo skips it and keeps going the same direction. The gallery stop
+    // routes to whichever of the three views is active.
+    function focusGalleryView() {
+        // Deferred: moving focus to the view synchronously from the text field's
+        // own Tab key event doesn't stick (the GridView/ListView ends up handing
+        // focus to an internal item). Run it after the key event settles.
+        Qt.callLater(function () {
+            if (win.viewMode === "timeline") timelineView.focusView()
+            else if (win.viewMode === "folder") folderView.focusView()
+            else grid.forceActiveFocus()
+        })
+    }
+    function focusStop(i) {
+        if (i === 0) return detailPanel.focusTagInput()   // false: no photo selected
+        if (i === 1) return tagSidebar.focusSearch()      // false: no tags to filter
+        if (i === 2) { win.focusGalleryView(); return true }
+        if (i === 3) { gallerySearch.forceActiveFocus(); return true }
+        return false
+    }
+    function tabStepTo(index, forward) {
+        for (let k = 0; k < 4; ++k) {
+            const i = ((index % 4) + 4) % 4
+            if (win.focusStop(i))
+                return
+            index += forward ? 1 : -1
+        }
+    }
+
     // Brief, self-dismissing status message (wallpaper added, Aether failed, …).
     function toast(message) {
         toastLabel.text = message
@@ -399,7 +438,7 @@ ApplicationWindow {
         if (gridIndex < fc) {
             const e = folderView.entries[gridIndex]
             if (e)
-                win.currentFolder = e.path
+                win.fvEnterFolder(e.path)
         } else {
             const id = library.filtered.idAt(gridIndex - fc)
             if (id >= 0) win.startFolderSlideshow(id, false)
@@ -424,6 +463,77 @@ ApplicationWindow {
         if (total === 0) return
         fvApplyRange(0, total - 1)
         fvAnchor = 0; fvCursor = total - 1
+    }
+
+    // Arrow-key navigation over the folder grid (folders then photos). Plain
+    // arrows move a single selection; Shift+arrows extend a range from the
+    // anchor. Mirrors the gallery's navigate(), but spans both item kinds.
+    function fvNavigate(dir, extend) {
+        const total = folderView.folderCount + library.filtered.count
+        if (total === 0)
+            return
+        const cols = Math.max(1, folderView.columns)
+        let base = (fvCursor >= 0 && fvCursor < total) ? fvCursor
+                 : (fvAnchor >= 0 && fvAnchor < total) ? fvAnchor : 0
+        let target = base
+        if (selectedFolders.length > 0 || selectedIds.length > 0) {
+            if (dir === "left")       target = base - 1
+            else if (dir === "right") target = base + 1
+            else if (dir === "up")    target = base - cols
+            else if (dir === "down")  target = base + cols
+        }
+        target = Math.max(0, Math.min(total - 1, target))
+        if (extend) {
+            if (!fvItemAt(target)) return
+            if (fvAnchor < 0 || fvAnchor >= total) fvAnchor = target
+            fvCursor = target
+            fvApplyRange(fvAnchor, fvCursor)
+            folderView.ensureVisible(target)
+        } else {
+            win.fvSelectGridIndex(target)
+        }
+    }
+
+    // Select just the item at grid index `i` (a folder or a photo), move the
+    // cursor/anchor there, and scroll it into view.
+    function fvSelectGridIndex(i) {
+        const it = fvItemAt(i)
+        if (!it)
+            return
+        if (it.type === "folder") { selectedFolders = [it.path]; selectedIds = [] }
+        else { selectedIds = [it.id]; selectedFolders = [] }
+        fvAnchor = i; fvCursor = i
+        folderView.ensureVisible(i)
+    }
+
+    // Grid index of the folder entry with this path, or -1.
+    function fvFolderIndexOf(path) {
+        for (let i = 0; i < folderView.folderCount; ++i) {
+            const e = folderView.entries[i]
+            if (e && e.path === path)
+                return i
+        }
+        return -1
+    }
+
+    // Descend into a folder, landing with its first item selected and the grid
+    // focused so arrow keys work immediately.
+    function fvEnterFolder(path) {
+        win.currentFolder = path        // onCurrentFolderChanged clears selection + refreshes entries
+        win.fvSelectGridIndex(0)
+        win.focusGalleryView()
+    }
+
+    // Climb one level, landing with the folder just left selected and the grid
+    // focused. No-op at the root.
+    function fvGoUp() {
+        if (win.currentFolder === "")
+            return
+        const from = win.currentFolder
+        win.currentFolder = library.upFolder(from)
+        const idx = win.fvFolderIndexOf(from)
+        win.fvSelectGridIndex(idx >= 0 ? idx : 0)
+        win.focusGalleryView()
     }
 
     // Commit the selection cursor to a proxy row. Plain move replaces the
@@ -988,6 +1098,9 @@ ApplicationWindow {
                     win.scrollGalleryToTop()
                 }
                 Keys.onEscapePressed: text = ""
+                // Tab cycle: main search → add-a-tag (wrap); Shift+Tab → gallery.
+                Keys.onTabPressed: (event) => { win.tabStepTo(0, true); event.accepted = true }
+                Keys.onBacktabPressed: (event) => { win.tabStepTo(2, false); event.accepted = true }
             }
 
             ToolButton {
@@ -1019,6 +1132,7 @@ ApplicationWindow {
             Layout.fillHeight: true
 
             DetailPanel {
+                id: detailPanel
                 SplitView.preferredHeight: 340
                 SplitView.minimumHeight: 160
                 library: library
@@ -1026,6 +1140,9 @@ ApplicationWindow {
                 accent: win.accent
                 // Keep the gallery from jumping when a tag edit reloads the model.
                 tagScrollGuard: win.withPreservedGalleryScrollTagging
+                // Tab cycle: add-a-tag → tag filter; Shift+Tab → main search.
+                onTabForward: win.tabStepTo(1, true)
+                onTabBackward: win.tabStepTo(3, false)
             }
 
             TagSidebar {
@@ -1040,6 +1157,9 @@ ApplicationWindow {
                 Component.onCompleted: library.setMatchAll(matchAll)
                 // The tagged/untagged filter also re-anchors the gallery.
                 onTagPresenceChanged: win.scrollGalleryToTop()
+                // Tab cycle: tag filter → gallery; Shift+Tab → add-a-tag.
+                onTabForward: win.tabStepTo(2, true)
+                onTabBackward: win.tabStepTo(0, false)
             }
         }
 
@@ -1076,6 +1196,9 @@ ApplicationWindow {
                 Keys.onSpacePressed: (event) => { win.slideshowFromFocus(true); event.accepted = true }
                 Keys.onReturnPressed: (event) => { win.slideshowFromFocus(false); event.accepted = true }
                 Keys.onEnterPressed: (event) => { win.slideshowFromFocus(false); event.accepted = true }
+                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                Keys.onTabPressed: (event) => { win.tabStepTo(3, true); event.accepted = true }
+                Keys.onBacktabPressed: (event) => { win.tabStepTo(1, false); event.accepted = true }
 
                 // Keep delegates alive and recycle them so fast scrolling
                 // doesn't thrash delegate creation / image decoding.
@@ -1187,12 +1310,17 @@ ApplicationWindow {
                 cellSize: win.cellSize
                 selectedIds: win.selectedIds
                 selectedFolders: win.selectedFolders
-                onNavigate: (path) => win.currentFolder = path
+                onGoUp: win.fvGoUp()
+                onEnterFolder: (path) => win.fvEnterFolder(path)
                 onCellClicked: (gridIndex, modifiers) => win.fvClick(gridIndex, modifiers)
                 onCellDoubleClicked: (gridIndex) => win.fvDoubleClick(gridIndex)
                 onCellRightClicked: (gridIndex) => win.fvRightClick(gridIndex)
                 onSelectAllRequested: win.fvSelectAll()
+                onCursorMove: (dir, extend) => win.fvNavigate(dir, extend)
                 onSlideshowRequested: (play) => win.slideshowFromFocus(play)
+                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                onTabForward: win.tabStepTo(3, true)
+                onTabBackward: win.tabStepTo(1, false)
             }
 
             // Capture-month timeline. Shares library.filtered (sorted by date in
@@ -1217,6 +1345,9 @@ ApplicationWindow {
                 onSelectAllRequested: win.selectAll()
                 onMoveCursorRequested: (target, extend) => win.moveCursorTo(target, extend)
                 onSlideshowFromFocusRequested: (play) => win.slideshowFromFocus(play)
+                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                onTabForward: win.tabStepTo(3, true)
+                onTabBackward: win.tabStepTo(1, false)
             }
         }
     }
