@@ -322,6 +322,26 @@ QVariantList Library::folderEntries(const QString &path) const
     return out;
 }
 
+QStringList Library::folderSlideshowSources(const QStringList &folderPaths,
+                                            const QVariantList &photoIds) const
+{
+    QStringList out;
+    const QStringList active = m_db.activePhotoPaths(); // sorted by path
+    for (const QString &dir : folderPaths) {
+        const QString prefix = dir + QLatin1Char('/');
+        for (const QString &p : active) {
+            if (p == dir || p.startsWith(prefix))
+                out.append(QUrl::fromLocalFile(p).toString());
+        }
+    }
+    for (const QVariant &v : photoIds) {
+        const Photo ph = m_photos->photoById(v.toInt());
+        if (ph.id >= 0)
+            out.append(QUrl::fromLocalFile(ph.path).toString());
+    }
+    return out;
+}
+
 void Library::removeFolder(int folderId)
 {
     const QString path = m_db.folderPath(folderId);

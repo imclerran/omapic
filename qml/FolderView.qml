@@ -21,16 +21,18 @@ Item {
     property bool crop: true
     property int cellSize: 184
     property var selectedIds: []
+    property var selectedFolders: []
 
     // Folder cells occupy the first `folderCount` grid indices; the rest are
     // photos at proxy row (index - folderCount).
     readonly property int folderCount: entries.length
 
-    signal navigate(string path) // a folder/Up cell was clicked
-    signal photoClicked(int index, int id, int modifiers)
-    signal photoDoubleClicked(int id)
-    signal photoRightClicked(int index, int id, string fileName, bool isVideo)
+    signal navigate(string path)             // the Up cell was clicked (single click)
+    signal cellClicked(int gridIndex, int modifiers)
+    signal cellDoubleClicked(int gridIndex)  // folder -> enter, photo -> slideshow
+    signal cellRightClicked(int gridIndex)
     signal selectAllRequested()
+    signal slideshowRequested(bool play)
 
     function toTop() { if (fgrid) fgrid.positionViewAtBeginning() }
     function focusView() { fgrid.forceActiveFocus() }
@@ -82,6 +84,9 @@ Item {
                     event.accepted = true
                 }
             }
+            Keys.onSpacePressed: (event) => { fv.slideshowRequested(true); event.accepted = true }
+            Keys.onReturnPressed: (event) => { fv.slideshowRequested(false); event.accepted = true }
+            Keys.onEnterPressed: (event) => { fv.slideshowRequested(false); event.accepted = true }
 
             delegate: Item {
                 id: cell
@@ -105,7 +110,20 @@ Item {
                     FolderMosaicCell {
                         entry: cell.entry
                         accent: fv.accent
-                        onClicked: { if (cell.entry) fv.navigate(cell.entry.path) }
+                        selected: cell.entry && cell.entry.type === "folder"
+                                  && fv.selectedFolders.indexOf(cell.entry.path) !== -1
+                        // Up: single click navigates; folder: click selects,
+                        // double-click enters.
+                        onClicked: (modifiers) => {
+                            if (cell.entry && cell.entry.type === "up")
+                                fv.navigate(cell.entry.path)
+                            else
+                                fv.cellClicked(cell.index, modifiers)
+                        }
+                        onDoubleClicked: {
+                            if (cell.entry && cell.entry.type === "folder")
+                                fv.cellDoubleClicked(cell.index)
+                        }
                     }
                 }
                 Component {
@@ -117,12 +135,9 @@ Item {
                         isVideo: cell.photo ? (cell.photo.isVideo === true) : false
                         tagCount: cell.photo ? cell.photo.tagCount : 0
                         selected: cell.photo ? (fv.selectedIds.indexOf(cell.photo.id) !== -1) : false
-                        onClicked: (modifiers) => { if (cell.photo) fv.photoClicked(cell.proxyRow, cell.photo.id, modifiers) }
-                        onDoubleClicked: { if (cell.photo) fv.photoDoubleClicked(cell.photo.id) }
-                        onRightClicked: {
-                            if (cell.photo)
-                                fv.photoRightClicked(cell.proxyRow, cell.photo.id, cell.photo.fileName, cell.photo.isVideo === true)
-                        }
+                        onClicked: (modifiers) => { if (cell.photo) fv.cellClicked(cell.index, modifiers) }
+                        onDoubleClicked: { if (cell.photo) fv.cellDoubleClicked(cell.index) }
+                        onRightClicked: { if (cell.photo) fv.cellRightClicked(cell.index) }
                     }
                 }
             }

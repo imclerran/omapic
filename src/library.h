@@ -88,6 +88,12 @@ public:
     // photos (under no folder) aren't listed here — they appear as photos in the
     // grid at the root level.
     Q_INVOKABLE QVariantList folderEntries(const QString &path) const;
+    // Slideshow source URLs for a folder-view selection: every active photo under
+    // each folder in `folderPaths` (recursively, in path order), followed by the
+    // photos named by `photoIds`. Used to play selected folders (all their
+    // contents) together with selected loose photos.
+    Q_INVOKABLE QStringList folderSlideshowSources(const QStringList &folderPaths,
+                                                   const QVariantList &photoIds) const;
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
     // Tags relevant to the active set as {name, colorSlot, categoryName}, for the

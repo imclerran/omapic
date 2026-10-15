@@ -13,7 +13,9 @@ Item {
 
     property var entry: ({})
     property color accent: "#4a90d9"
-    signal clicked()
+    property bool selected: false
+    signal clicked(int modifiers)
+    signal doubleClicked()
 
     readonly property bool isUp: entry && entry.type === "up"
     readonly property var thumbs: (entry && entry.thumbs) ? entry.thumbs : []
@@ -32,8 +34,8 @@ Item {
         anchors.margins: 4
         radius: 6
         color: sys.alternateBase
-        border.color: mouse.containsMouse ? root.accent : sys.mid
-        border.width: mouse.containsMouse ? 2 : 1
+        border.color: (root.selected || mouse.containsMouse) ? root.accent : sys.mid
+        border.width: root.selected ? 3 : 1
         clip: true
 
         // --- Folder: 2x2 cover mosaic of the first four images ---
@@ -130,6 +132,7 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.clicked()
+        onClicked: (mouse) => root.clicked(mouse.modifiers)
+        onDoubleClicked: root.doubleClicked()
     }
 }

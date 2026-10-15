@@ -30,6 +30,12 @@ ApplicationWindow {
     property int anchorIndex: -1
     property int cursorIndex: -1
 
+    // Folder-view selection: paths of selected folders (photos reuse selectedIds),
+    // with a grid-index anchor/cursor spanning folders and photos for Shift-range.
+    property var selectedFolders: []
+    property int fvAnchor: -1
+    property int fvCursor: -1
+
     // The photo the right-click context menu currently targets. Set when the
     // menu opens and read by the menu items and the remove/delete confirm dialogs.
     property int menuPhotoId: -1
@@ -58,6 +64,11 @@ ApplicationWindow {
         win.scrollGalleryToTop()
     }
     onCurrentFolderChanged: {
+        // Entering a new folder is a fresh context; drop the previous selection.
+        win.selectedIds = []
+        win.selectedFolders = []
+        win.fvAnchor = -1
+        win.fvCursor = -1
         win.refreshFolderEntries()
         win.scrollGalleryToTop()
     }
@@ -180,8 +191,11 @@ ApplicationWindow {
     // Clear the gallery selection (e.g. clicking empty space in the grid).
     function clearSelection() {
         selectedIds = []
+        selectedFolders = []
         anchorIndex = -1
         cursorIndex = -1
+        fvAnchor = -1
+        fvCursor = -1
         grid.forceActiveFocus()
     }
 
@@ -322,6 +336,98 @@ ApplicationWindow {
             photoMenu.popup()
     }
 
+    // --- Folder-view selection ----------------------------------------------
+    // The folder grid indexes an optional Up cell, then folders, then photos.
+    // Map a grid index to its item, or null for Up / an empty row.
+    function fvItemAt(gridIndex) {
+        const fc = folderView.folderCount
+        if (gridIndex < fc) {
+            const e = folderView.entries[gridIndex]
+            if (!e || e.type === "up")
+                return null
+            return { type: "folder", path: e.path }
+        }
+        const id = library.filtered.idAt(gridIndex - fc)
+        return id >= 0 ? { type: "photo", id: id } : null
+    }
+
+    // Select the contiguous grid range [a, b] into selectedFolders/selectedIds.
+    function fvApplyRange(a, b) {
+        const lo = Math.min(a, b), hi = Math.max(a, b)
+        const folders = [], ids = []
+        for (let i = lo; i <= hi; ++i) {
+            const it = fvItemAt(i)
+            if (!it) continue
+            if (it.type === "folder") folders.push(it.path)
+            else ids.push(it.id)
+        }
+        selectedFolders = folders
+        selectedIds = ids
+    }
+
+    // Click on a folder or photo cell: plain = replace, Ctrl = toggle, Shift =
+    // range from the anchor. (The Up cell navigates instead; see FolderView.)
+    function fvClick(gridIndex, modifiers) {
+        const it = fvItemAt(gridIndex)
+        if (!it)
+            return
+        if ((modifiers & Qt.ShiftModifier) && fvAnchor >= 0) {
+            fvCursor = gridIndex
+            fvApplyRange(fvAnchor, fvCursor)
+        } else if (modifiers & Qt.ControlModifier) {
+            if (it.type === "folder") {
+                const arr = selectedFolders.slice()
+                const p = arr.indexOf(it.path)
+                if (p === -1) arr.push(it.path); else arr.splice(p, 1)
+                selectedFolders = arr
+            } else {
+                const arr = selectedIds.slice()
+                const p = arr.indexOf(it.id)
+                if (p === -1) arr.push(it.id); else arr.splice(p, 1)
+                selectedIds = arr
+            }
+            fvAnchor = gridIndex; fvCursor = gridIndex
+        } else {
+            if (it.type === "folder") { selectedFolders = [it.path]; selectedIds = [] }
+            else { selectedIds = [it.id]; selectedFolders = [] }
+            fvAnchor = gridIndex; fvCursor = gridIndex
+        }
+        folderView.focusView()
+    }
+
+    // Double-click: enter a folder (or go up), or start the slideshow on a photo.
+    function fvDoubleClick(gridIndex) {
+        const fc = folderView.folderCount
+        if (gridIndex < fc) {
+            const e = folderView.entries[gridIndex]
+            if (e && (e.type === "folder" || e.type === "up"))
+                win.currentFolder = e.path
+        } else {
+            const id = library.filtered.idAt(gridIndex - fc)
+            if (id >= 0) win.startFolderSlideshow(id, false)
+        }
+    }
+
+    function fvRightClick(gridIndex) {
+        const fc = folderView.folderCount
+        if (gridIndex < fc)
+            return // no context menu for folders
+        const row = gridIndex - fc
+        const id = library.filtered.idAt(row)
+        if (id < 0)
+            return
+        const ph = library.filtered.photoAt(row)
+        win.openPhotoMenu(row, id, ph ? ph.fileName : "", ph ? ph.isVideo === true : false)
+    }
+
+    // Ctrl+A in the folder grid selects every folder and photo shown.
+    function fvSelectAll() {
+        const total = folderView.folderCount + library.filtered.count
+        if (total === 0) return
+        fvApplyRange(0, total - 1)
+        fvAnchor = 0; fvCursor = total - 1
+    }
+
     // Commit the selection cursor to a proxy row. Plain move replaces the
     // selection; extend (Shift) grows a contiguous range from the anchor. View-
     // agnostic: the grid and the timeline both drive selection through this, each
@@ -374,47 +480,95 @@ ApplicationWindow {
 
     // Start a slideshow at the currently focused photo. play=false opens paused.
     function slideshowFromFocus(play) {
+        if (win.viewMode === "folder") {
+            win.startFolderSlideshow(-1, play)
+            return
+        }
         const startId = (anchorIndex >= 0 && anchorIndex < library.filtered.count)
                         ? library.filtered.idAt(anchorIndex) : -1
         startSlideshow(startId, play)
     }
 
-    // Build the slideshow set: the selection when more than one is selected,
-    // otherwise the whole filtered set — in grid order, starting at startId.
-    // play=false opens the slideshow paused. forceStart begins at startId even
-    // when playing, overriding the random-start setting (used by "Play from here").
+    // Build the slideshow set for the grid/timeline: the selection when more than
+    // one is selected, otherwise the whole filtered set — in grid order, starting
+    // at startId. Delegates the shuffle/start handling to playSlideshow.
     function startSlideshow(startId, play, forceStart) {
         const selectedOnly = selectedIds.length > 1
-        // Enter / double-click (play === false) on a specific photo start there,
-        // ignoring random start; so does "Play from here" (forceStart). Play /
-        // Space (play === true) otherwise let random start win.
-        const honorStart = (startId >= 0) && (!play || forceStart === true)
         const srcs = []
-        let startPos = 0
         let startSrc = ""
         const n = library.filtered.count
         for (let r = 0; r < n; ++r) {
             const id = library.filtered.idAt(r)
             if (selectedOnly && selectedIds.indexOf(id) === -1)
                 continue
-            if (id === startId) {
-                startPos = srcs.length
-                startSrc = "" + library.filtered.sourceAt(r)
-            }
-            srcs.push("" + library.filtered.sourceAt(r))
+            const s = "" + library.filtered.sourceAt(r)
+            if (id === startId)
+                startSrc = s
+            srcs.push(s)
         }
-        if (srcs.length === 0)
+        playSlideshow(srcs, startSrc, play, forceStart)
+    }
+
+    // Build the slideshow set for the folder view: the contents of every selected
+    // folder (recursively) plus every selected photo when more than one item is
+    // selected; otherwise everything in the current folder (all subfolders'
+    // contents plus the loose photos) — the folder-view "whole set". startId, when
+    // >= 0, is a loose photo to open on (double-clicked).
+    function startFolderSlideshow(startId, play) {
+        let folderPaths = []
+        let photoIds = []
+        const selectedCount = win.selectedFolders.length + win.selectedIds.length
+        if (selectedCount > 1) {
+            folderPaths = win.selectedFolders.slice()
+            photoIds = win.selectedIds.slice()
+        } else {
+            // All siblings: every folder shown here plus every loose photo.
+            for (let i = 0; i < folderView.entries.length; ++i) {
+                const e = folderView.entries[i]
+                if (e && e.type === "folder")
+                    folderPaths.push(e.path)
+            }
+            for (let r = 0; r < library.filtered.count; ++r)
+                photoIds.push(library.filtered.idAt(r))
+        }
+        const srcs = library.folderSlideshowSources(folderPaths, photoIds)
+        // Open on the double-clicked loose photo when there is one.
+        let startSrc = ""
+        if (startId >= 0) {
+            for (let r = 0; r < library.filtered.count; ++r) {
+                if (library.filtered.idAt(r) === startId) {
+                    startSrc = "" + library.filtered.sourceAt(r)
+                    break
+                }
+            }
+        }
+        playSlideshow(srcs, startSrc, play, false)
+    }
+
+    // Shared slideshow runner: given the source list and an optional source to
+    // open on, apply the shuffle / folder-shuffle / random-start settings and
+    // start the show. play=false opens paused; forceStart honors startSrc even
+    // when playing (Enter / double-click / "Play from here").
+    function playSlideshow(srcs, startSrc, play, forceStart) {
+        if (!srcs || srcs.length === 0)
             return
+
+        // Open on a specific photo (and ignore random start) for paused opens and
+        // "Play from here"; Play/Space otherwise let random start win.
+        const honorStart = (startSrc !== "") && (!play || forceStart === true)
+        let startPos = 0
+        if (startSrc !== "") {
+            const p = srcs.indexOf(startSrc)
+            if (p >= 0)
+                startPos = p
+        }
 
         slideshowBase = srcs.slice()
         slideshowShuffleActive = appSettings.shuffle
         slideshowFolderShuffleActive = appSettings.shuffleFolders
 
-        // Random start overrides a selected start photo on Play/Space, but not
-        // when a specific photo is honored (Enter / double-click / "Play from
-        // here"). Mirrors the non-shuffle branch below.
         const randomize = appSettings.randomStart && !honorStart
-        const pin = (startId >= 0) && !randomize
+        const pin = (startSrc !== "") && !randomize
 
         if (slideshowFolderShuffleActive) {
             // Group by folder and visit the folders in random order; image shuffle
@@ -837,10 +991,13 @@ ApplicationWindow {
             }
 
             ToolButton {
-                text: win.selectedIds.length > 1
-                      ? qsTr("▶  Slideshow (%1)").arg(win.selectedIds.length)
-                      : qsTr("▶  Slideshow")
+                // In folder view the selection may include folders as well as photos.
+                readonly property int selCount: win.selectedIds.length
+                    + (win.viewMode === "folder" ? win.selectedFolders.length : 0)
+                text: selCount > 1 ? qsTr("▶  Slideshow (%1)").arg(selCount)
+                                   : qsTr("▶  Slideshow")
                 enabled: library.filtered.count > 0
+                         || (win.viewMode === "folder" && win.folderEntries.length > 0)
                 onClicked: win.slideshowFromFocus(true)
             }
             ToolButton {
@@ -1029,11 +1186,13 @@ ApplicationWindow {
                 crop: gallerySettings.cropThumbs
                 cellSize: win.cellSize
                 selectedIds: win.selectedIds
+                selectedFolders: win.selectedFolders
                 onNavigate: (path) => win.currentFolder = path
-                onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
-                onPhotoDoubleClicked: (id) => win.startSlideshow(id, false)
-                onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)
-                onSelectAllRequested: win.selectAll()
+                onCellClicked: (gridIndex, modifiers) => win.fvClick(gridIndex, modifiers)
+                onCellDoubleClicked: (gridIndex) => win.fvDoubleClick(gridIndex)
+                onCellRightClicked: (gridIndex) => win.fvRightClick(gridIndex)
+                onSelectAllRequested: win.fvSelectAll()
+                onSlideshowRequested: (play) => win.slideshowFromFocus(play)
             }
 
             // Capture-month timeline. Shares library.filtered (sorted by date in
