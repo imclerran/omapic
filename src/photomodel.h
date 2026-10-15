@@ -27,6 +27,7 @@ public:
         TagIdsRole,
         DateTakenRole, // capture time in Unix seconds (0 = unknown)
         MonthKeyRole,  // "yyyy-MM" of the capture time, the timeline section key
+        IsDuplicateRole, // true for a non-representative duplicate (see Photo)
     };
 
     explicit PhotoModel(QObject *parent = nullptr);

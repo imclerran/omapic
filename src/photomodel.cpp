@@ -53,6 +53,8 @@ QVariant PhotoModel::data(const QModelIndex &index, int role) const
         const QDateTime dt = QDateTime::fromSecsSinceEpoch(p.takenAt);
         return dt.toString(QStringLiteral("yyyy-MM"));
     }
+    case IsDuplicateRole:
+        return p.isDuplicate;
     default:
         return {};
     }
@@ -70,6 +72,7 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
         {TagIdsRole, "tagIds"},
         {DateTakenRole, "takenAt"},
         {MonthKeyRole, "monthKey"},
+        {IsDuplicateRole, "isDuplicate"},
     };
 }
 
