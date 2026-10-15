@@ -73,6 +73,14 @@ ApplicationWindow {
         win.scrollGalleryToTop()
     }
 
+    // Alt+Up climbs one folder level while browsing folders, mirroring the Up
+    // button. Disabled at the root (nothing to climb to).
+    Shortcut {
+        sequence: "Alt+Up"
+        enabled: win.viewMode === "folder" && win.currentFolder !== ""
+        onActivated: win.currentFolder = library.upFolder(win.currentFolder)
+    }
+
     // Brief, self-dismissing status message (wallpaper added, Aether failed, …).
     function toast(message) {
         toastLabel.text = message

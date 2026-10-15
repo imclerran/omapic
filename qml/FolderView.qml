@@ -35,7 +35,7 @@ Item {
         function onDataChanged() { fv.dataRevision++ }
     }
 
-    signal navigate(string path)             // the Up cell was clicked (single click)
+    signal navigate(string path)             // go to a folder path (Up button / Alt+Up, or Enter on a folder)
     signal cellClicked(int gridIndex, int modifiers)
     signal cellDoubleClicked(int gridIndex)  // folder -> enter, photo -> slideshow
     signal cellRightClicked(int gridIndex)
@@ -44,6 +44,15 @@ Item {
 
     function toTop() { if (fgrid) fgrid.positionViewAtBeginning() }
     function focusView() { fgrid.forceActiveFocus() }
+
+    // Enter/Return: open the selected folder (descend into it) when exactly one
+    // folder and no photos are selected; otherwise start the slideshow as before.
+    function activateSelection() {
+        if (fv.selectedFolders.length === 1 && fv.selectedIds.length === 0)
+            fv.navigate(fv.selectedFolders[0])
+        else
+            fv.slideshowRequested(false)
+    }
 
     // "#rrggbb" for a color, for embedding in the Up button's SVG.
     function hex(c) {
@@ -122,8 +131,8 @@ Item {
                 }
             }
             Keys.onSpacePressed: (event) => { fv.slideshowRequested(true); event.accepted = true }
-            Keys.onReturnPressed: (event) => { fv.slideshowRequested(false); event.accepted = true }
-            Keys.onEnterPressed: (event) => { fv.slideshowRequested(false); event.accepted = true }
+            Keys.onReturnPressed: (event) => { fv.activateSelection(); event.accepted = true }
+            Keys.onEnterPressed: (event) => { fv.activateSelection(); event.accepted = true }
 
             delegate: Item {
                 id: cell
