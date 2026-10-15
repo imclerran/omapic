@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QList>
+#include <QLoggingCategory>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -28,6 +29,15 @@ int main(int argc, char *argv[])
     // Ties the window to omapic.desktop so Wayland compositors show the right
     // icon and name in docks, alt-tab, etc. (the app_id becomes "omapic").
     QGuiApplication::setDesktopFileName(QStringLiteral("omapic"));
+
+    // Quiet two harmless-but-noisy Qt categories so launching omapic — especially
+    // as a terminal/file-manager image viewer — doesn't print stderr spam: the
+    // multimedia backend's FFmpeg-version banner, and the Wayland portal's benign
+    // "could not register app ID" warning. An explicit QT_LOGGING_RULES wins.
+    if (qEnvironmentVariableIsEmpty("QT_LOGGING_RULES"))
+        QLoggingCategory::setFilterRules(QStringLiteral(
+            "qt.multimedia.ffmpeg.info=false\n"
+            "qt.qpa.services.warning=false"));
 
     // Fusion renders fully from the QPalette, which the Omarchy theme bridge
     // below fills from the active theme's colors.
