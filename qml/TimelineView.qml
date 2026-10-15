@@ -87,7 +87,11 @@ Item {
         target: tv.library ? tv.library.filtered : null
         // countChanged also fires on a re-sort (layoutChanged), so this covers
         // both filtering and the switch into date order when the view opens.
-        function onCountChanged() { tv.refresh() }
+        // Coalesce a burst of count changes into one recompute: a filter change
+        // (e.g. toggling de-dup when entering this view) re-inserts rows one at a
+        // time, and monthGroups() is O(n) — recomputing it per row was O(n²) and
+        // froze the view for seconds. Qt.callLater collapses repeats within a tick.
+        function onCountChanged() { Qt.callLater(tv.refresh) }
         function onDataChanged() { tv.dataRevision++ }
     }
 
