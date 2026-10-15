@@ -77,11 +77,15 @@ Item {
     }
     Component.onCompleted: refresh()
 
+    // Bumped on any model dataChanged so the cells (which read photoAt() once)
+    // re-fetch — e.g. a tag edit updates the badge without a reload.
+    property int dataRevision: 0
     Connections {
         target: tv.library ? tv.library.filtered : null
         // countChanged also fires on a re-sort (layoutChanged), so this covers
         // both filtering and the switch into date order when the view opens.
         function onCountChanged() { tv.refresh() }
+        function onDataChanged() { tv.dataRevision++ }
     }
 
     // --- Keyboard navigation geometry ---------------------------------------
@@ -227,7 +231,7 @@ Item {
                         required property int index
                         // Proxy row for this tile within library.filtered.
                         readonly property int proxyRow: monthSection.modelData.firstRow + index
-                        readonly property var photo: tv.library.filtered.photoAt(proxyRow)
+                        readonly property var photo: { tv.dataRevision; return tv.library.filtered.photoAt(proxyRow) }
                         // photoAt() returns an empty object for an out-of-range row
                         // (possible transiently while the model updates); id is set
                         // only for a real photo.

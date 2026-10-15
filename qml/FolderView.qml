@@ -27,6 +27,14 @@ Item {
     // photos at proxy row (index - folderCount).
     readonly property int folderCount: entries.length
 
+    // Bumped on any model dataChanged so photo cells (which read photoAt() once)
+    // re-fetch — e.g. a tag edit updates the badge without a reload.
+    property int dataRevision: 0
+    Connections {
+        target: fv.library ? fv.library.filtered : null
+        function onDataChanged() { fv.dataRevision++ }
+    }
+
     signal navigate(string path)             // the Up cell was clicked (single click)
     signal cellClicked(int gridIndex, int modifiers)
     signal cellDoubleClicked(int gridIndex)  // folder -> enter, photo -> slideshow
@@ -126,8 +134,10 @@ Item {
                 readonly property bool isFolder: index < fv.folderCount
                 readonly property var entry: isFolder ? fv.entries[index] : null
                 readonly property int proxyRow: index - fv.folderCount
-                readonly property var photo: isFolder ? null
-                                                      : (fv.library.filtered.photoAt(proxyRow) || null)
+                readonly property var photo: {
+                    fv.dataRevision
+                    return isFolder ? null : (fv.library.filtered.photoAt(proxyRow) || null)
+                }
 
                 Loader {
                     anchors.fill: parent
