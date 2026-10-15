@@ -3,9 +3,12 @@ Type=Application
 Name=Omapic
 GenericName=Photo Gallery
 Comment=Photo gallery with tagging, filtering, and slideshows
-Exec=omapic
+Exec=omapic %F
 Icon=omapic
 Terminal=false
 Categories=Graphics;Photography;Viewer;
 Keywords=photo;photos;gallery;image;images;picture;tag;tags;slideshow;
 StartupWMClass=omapic
+# With file arguments omapic opens a lightweight viewer, so it can be set as the
+# default image/video handler; launched with none it opens the full gallery.
+MimeType=image/jpeg;image/png;image/gif;image/bmp;image/webp;image/tiff;video/mp4;video/webm;video/x-matroska;video/quicktime;video/x-msvideo;

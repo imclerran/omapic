@@ -2,12 +2,17 @@
 // Copyright (C) 2026 Ian McLerran
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <QCommandLineParser>
+#include <QFileInfo>
 #include <QGuiApplication>
+#include <QList>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QUrl>
 
+#include "mediascan.h"
 #include "omarchytheme.h"
 #include "thumbnailprovider.h"
 
@@ -32,10 +37,49 @@ int main(int argc, char *argv[])
     // Apply the Omarchy palette before any QML/controls are created.
     auto *omarchyTheme = new OmarchyTheme(&app);
 
+    // Positional file arguments turn omapic into a lightweight image viewer
+    // (`omapic photo.jpg …`), so it can be the system's default image handler
+    // without paying for the full gallery (no database, no scan, no worker).
+    QStringList fileArgs;
+    {
+        QCommandLineParser parser;
+        parser.setApplicationDescription(
+            QStringLiteral("omapic — photo gallery, or a viewer when given files"));
+        parser.addHelpOption();
+        parser.addVersionOption();
+        parser.addPositionalArgument(QStringLiteral("files"),
+                                     QStringLiteral("Image/video files to view."),
+                                     QStringLiteral("[files...]"));
+        parser.process(app);
+        fileArgs = parser.positionalArguments();
+    }
+
+    // Resolve the arguments to media URLs. A lone directory argument opens that
+    // folder's tree; otherwise each existing media file is taken in order.
+    QList<QUrl> launchUrls;
+    bool singlePath = false;
+    if (fileArgs.size() == 1 && QFileInfo(fileArgs.first()).isDir()) {
+        const QString dir = QFileInfo(fileArgs.first()).absoluteFilePath();
+        for (const QString &f : mediascan::collectSorted(dir))
+            launchUrls.append(QUrl::fromLocalFile(f));
+        singlePath = true; // slideshow scope is already the whole tree
+    } else {
+        for (const QString &p : fileArgs) {
+            const QFileInfo fi(p);
+            if (fi.exists() && fi.isFile() && mediascan::isMediaFile(fi.absoluteFilePath()))
+                launchUrls.append(QUrl::fromLocalFile(fi.absoluteFilePath()));
+        }
+        singlePath = (fileArgs.size() == 1); // one path => slideshow the folder
+    }
+    const bool viewerMode = !launchUrls.isEmpty();
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("omarchyTheme"), omarchyTheme);
+    engine.rootContext()->setContextProperty(QStringLiteral("launchUrls"),
+                                              QVariant::fromValue(launchUrls));
+    engine.rootContext()->setContextProperty(QStringLiteral("launchSinglePath"), singlePath);
     engine.addImageProvider(QStringLiteral("thumbs"), new ThumbnailProvider);
-    engine.loadFromModule("Omapic", "Main");
+    engine.loadFromModule("Omapic", viewerMode ? "Viewer" : "Main");
     if (engine.rootObjects().isEmpty())
         return -1;
 
