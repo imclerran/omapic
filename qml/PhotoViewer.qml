@@ -235,8 +235,19 @@ Window {
     }
     // Any pointer movement over the window brings the controls back. A passive
     // handler, so it never steals clicks/wheel/hover from the image or the bar.
+    // Only a real change in cursor position counts: toggling the bar's visibility
+    // makes Qt re-deliver a hover event at the same spot, and reacting to that
+    // would re-show the bar the instant it hid (a flicker that never settles).
     HoverHandler {
-        onPointChanged: root.pokeControls()
+        property real lastX: -1
+        property real lastY: -1
+        onPointChanged: {
+            if (point.position.x !== lastX || point.position.y !== lastY) {
+                lastX = point.position.x
+                lastY = point.position.y
+                root.pokeControls()
+            }
+        }
     }
 
     // Auto-hiding control bar: navigation, zoom (fit / 1:1 / ± with a readout),
