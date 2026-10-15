@@ -69,6 +69,10 @@ Window {
     function go(i) {
         if (count === 0)
             return
+        // Double-buffer the advance: paint the outgoing photo into the hold layer
+        // (it's cached, so it shows at once) so the gap while the next one decodes
+        // shows the previous photo instead of flashing to black.
+        holdImg.source = (!currentIsVideo && currentSource !== "") ? currentSource : ""
         index = (i % count + count) % count
     }
     function next() { go(index + 1) }
@@ -134,6 +138,18 @@ Window {
         clip: true
         visible: !root.currentIsVideo
 
+        // Hold layer: shows the outgoing photo (fit, from cache) behind the live
+        // image while the next one decodes, so advancing never flashes to black.
+        // Cleared once the live image is ready — see img.onStatusChanged.
+        Image {
+            id: holdImg
+            anchors.fill: parent
+            fillMode: Image.PreserveAspectFit
+            autoTransform: true
+            cache: true
+            z: -1
+        }
+
         Image {
             id: img
             source: root.currentIsVideo ? "" : root.currentSource
@@ -150,6 +166,7 @@ Window {
                     root.natW = implicitWidth
                     root.natH = implicitHeight
                     root.fit()
+                    holdImg.source = "" // live image is up; drop the held frame
                 }
             }
         }
