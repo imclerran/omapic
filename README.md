@@ -1,38 +1,50 @@
 # omapic
 
-A photo gallery with tagging, tag filtering, and slideshows — built with C++ and Qt 6 Quick.
+A photo and video gallery for [Omarchy](https://omarchy.org), built around tagging —
+C++ and Qt 6 Quick.
 
 ## Features
 
-- **Import** a folder (recursively) of images into a local library.
-- **Tag** photos; tags are stored in SQLite and persist across runs.
-- **Categorize** tags (place, event, character, artist, …) from *Manage → Tags*; each
-  category gets a color from the active Omarchy theme's palette, and tag chips in the
-  details pane, the filter sidebar, and autocomplete are color-coded by it.
-- **Filter** the gallery by selecting tags in the sidebar, with a *Match all* / *Match any* toggle.
-- **Slideshow** the currently filtered set in fullscreen (`←/→` navigate, `Space` pause, `Esc` exit).
+- **Tagging** — tag photos individually or in bulk; filter by tag with *Match all* /
+  *Match any*, or by tagged / untagged.
+- **Tag categories** — group tags (place, event, artist, …); each category takes a
+  color from the active Omarchy theme, and tag chips are color-coded throughout.
+- **Tags follow content, not paths** — files are content-hashed, so tags survive
+  moves and renames, and are restored if a photo or folder is removed and later
+  re-imported.
+- **Library folders** — add multiple root folders, hide or show each one, and
+  rescan to pick up new, moved, and deleted files. A `.nomedia` file excludes a
+  folder and its subtree.
+- **Three views** — a timeline grouped by month taken, a folder browser with
+  mosaic previews, or a flat grid with duplicate files collapsed.
+- **Slideshows** — of the current filter or selection, including whole selected
+  folders. Options include *shuffle folders* (folders in random order, each one's
+  photos kept together) and intervals down to 0.1 s.
+- **Standalone viewer** — `omapic photo.jpg …` or `omapic <dir>` opens a lightweight
+  viewer without loading the library, so omapic can be the default image and
+  video handler.
+- **Omarchy integration** — follows the active theme live. From any photo: add it
+  to the current theme's wallpaper rotation, or generate a theme from it with
+  [Aether](https://github.com/bjarneo/aether).
 
-## Architecture
+## Install
 
-| Component | Role |
-|-----------|------|
-| `Database` | SQLite wrapper: `photos`, `tags`, `tag_categories`, and a `photo_tags` join table |
-| `PhotoModel` | `QAbstractListModel`, the in-memory source of truth |
-| `PhotoFilterModel` | `QSortFilterProxyModel` doing the tag filtering |
-| `TagModel` | tag list with counts + selection state (drives the filter) |
-| `Library` | the single object QML talks to; owns the above, routes all mutations through the DB |
-
-The library database lives at `~/.local/share/omapic/library.db`.
+A PKGBUILD is in [`packaging/aur/`](packaging/aur/).
 
 ## Build
 
-Requires Qt 6.5+, exiv2 (for reading photo metadata), CMake, and a C++17 compiler.
+Requires Qt 6.5+ (Quick, QuickControls2, Sql, Multimedia, Concurrent), exiv2,
+CMake, and a C++17 compiler. Runtime: `ffmpegthumbnailer` for video thumbnails;
+Aether is optional.
 
 ```sh
 cmake -B build -G Ninja
 cmake --build build
 ./build/omapic
 ```
+
+The library database lives at `~/.local/share/omapic/library.db`; settings at
+`~/.config/omapic/`.
 
 ## License
 
