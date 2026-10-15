@@ -72,6 +72,13 @@ public:
     bool dedupe() const { return m_dedupe; }
     void setDedupe(bool on); // hide duplicates (ungrouped view only)
 
+    // Apply a whole view mode at once (dedup, sort order, folder restriction) with
+    // a single re-filter + re-sort. Switching views changes several of these
+    // together; setting them one at a time made the proxy re-sort once per change
+    // — e.g. a wasted name-sort before the date-sort when opening the timeline.
+    Q_INVOKABLE void applyView(bool dedupe, bool sortByDate, bool folderMode,
+                               const QString &folderPath);
+
     // The registered folder roots, used to tell orphan photos (shown at the
     // folder-view root) from foldered ones. Set by Library; not a QML property.
     void setFolderRoots(const QStringList &roots);
