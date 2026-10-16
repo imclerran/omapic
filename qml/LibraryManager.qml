@@ -188,6 +188,8 @@ Dialog {
                     text: qsTr("No folders yet. Add one to build your library.")
                     color: palette.placeholderText
                 }
+
+                WheelScroller { flickable: list }
             }
         }
 

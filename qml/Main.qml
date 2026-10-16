@@ -1301,41 +1301,11 @@ ApplicationWindow {
 
             // Momentum/fast wheel + trackpad scrolling. Sits above the grid and
             // consumes only wheel events; button clicks fall through to delegates.
-            NumberAnimation {
-                id: wheelAnim
-                target: grid
-                property: "contentY"
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-
-            MouseArea {
-                anchors.fill: parent
+            // One row per mouse-wheel notch (step: cellHeight).
+            WheelScroller {
+                flickable: grid
+                step: grid.cellHeight
                 visible: grid.visible
-                enabled: grid.visible
-                acceptedButtons: Qt.NoButton
-                propagateComposedEvents: true
-                onWheel: (wheel) => {
-                    // A GridView's top extent is originY, not 0 — it drifts as
-                    // delegates above the viewport are recycled. Clamping to 0
-                    // would let the wheel push the content above the first row.
-                    const minY = grid.originY
-                    const maxY = Math.max(minY, grid.originY + grid.contentHeight - grid.height)
-                    if (wheel.pixelDelta.y !== 0) {
-                        // High-resolution trackpad: amplified, immediate.
-                        wheelAnim.stop()
-                        grid.contentY = Math.max(minY, Math.min(maxY, grid.contentY - wheel.pixelDelta.y * 4.0))
-                    } else {
-                        // Mouse-wheel notches: glide one row per notch with
-                        // momentum (tied to cell height, not the viewport, so one
-                        // notch is a single row rather than most of a page).
-                        const step = (wheel.angleDelta.y / 120) * grid.cellHeight
-                        const target = Math.max(minY, Math.min(maxY, grid.contentY - step))
-                        wheelAnim.stop()
-                        wheelAnim.to = target
-                        wheelAnim.start()
-                    }
-                }
             }
 
             // Clicking empty gallery space (the right remainder left by column

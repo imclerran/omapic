@@ -177,6 +177,8 @@ Rectangle {
                       : qsTr("No tags match “%1”.").arg(searchField.text.trim())
                 color: palette.placeholderText
             }
+
+            WheelScroller { flickable: scroll.contentItem }
         }
 
         MenuSeparator { Layout.fillWidth: true }

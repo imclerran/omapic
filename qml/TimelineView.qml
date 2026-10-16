@@ -268,36 +268,10 @@ Item {
         }
     }
 
-    // Match the grid's wheel/trackpad feel: high-resolution trackpad deltas are
-    // amplified and applied immediately; mouse-wheel notches glide one row with
-    // momentum. (The ListView's native wheel is noticeably slower.)
-    NumberAnimation {
-        id: wheelAnim
-        target: list
-        property: "contentY"
-        duration: 220
-        easing.type: Easing.OutCubic
-    }
-
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.NoButton
-        propagateComposedEvents: true
-        onWheel: (wheel) => {
-            const minY = list.originY
-            const maxY = Math.max(minY, list.originY + list.contentHeight - list.height)
-            if (wheel.pixelDelta.y !== 0) {
-                wheelAnim.stop()
-                list.contentY = Math.max(minY, Math.min(maxY, list.contentY - wheel.pixelDelta.y * 4.0))
-            } else {
-                const step = (wheel.angleDelta.y / 120) * tv.cellSize
-                const target = Math.max(minY, Math.min(maxY, list.contentY - step))
-                wheelAnim.stop()
-                wheelAnim.to = target
-                wheelAnim.start()
-            }
-        }
-    }
+    // Match the gallery grid's wheel/trackpad feel: amplified immediate trackpad
+    // scrolling, one row per mouse-wheel notch with momentum. (The ListView's
+    // native wheel is noticeably slower.)
+    WheelScroller { flickable: list; step: tv.cellSize }
 
     Label {
         anchors.centerIn: parent
