@@ -5,12 +5,14 @@
 #include <QCommandLineParser>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImageReader>
 #include <QList>
 #include <QLoggingCategory>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QStringList>
 #include <QUrl>
 
 #include "mediascan.h"
@@ -83,11 +85,36 @@ int main(int argc, char *argv[])
     }
     const bool viewerMode = !launchUrls.isEmpty();
 
+    // HEIC/HEIF and AVIF decoding lives in Qt image-format plugins that aren't
+    // part of a stock Qt install (on Arch, kimageformats, which loads libheif for
+    // HEIC/HEIF and libavif for AVIF). When a plugin is missing, those files are
+    // scanned in but can't be rendered, so expose each capability to QML (for a
+    // graceful placeholder/notice) and say so once on the console to point at the
+    // fix.
+    const QList<QByteArray> fmts = QImageReader::supportedImageFormats();
+    const bool heifSupported = fmts.contains("heic") || fmts.contains("heif");
+    const bool avifSupported = fmts.contains("avif");
+    if (!heifSupported || !avifSupported) {
+        QStringList missing;
+        if (!heifSupported)
+            missing << QStringLiteral("HEIC/HEIF");
+        if (!avifSupported)
+            missing << QStringLiteral("AVIF");
+        const QString msg =
+            QStringLiteral("omapic: no image plugin for %1 — those files will not "
+                           "display. Install a Qt image plugin (on Arch: kimageformats, "
+                           "plus libheif/libavif) to enable them.")
+                .arg(missing.join(QLatin1Char('/')));
+        qWarning("%s", msg.toUtf8().constData());
+    }
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("omarchyTheme"), omarchyTheme);
     engine.rootContext()->setContextProperty(QStringLiteral("launchUrls"),
                                               QVariant::fromValue(launchUrls));
     engine.rootContext()->setContextProperty(QStringLiteral("launchSinglePath"), singlePath);
+    engine.rootContext()->setContextProperty(QStringLiteral("heifSupported"), heifSupported);
+    engine.rootContext()->setContextProperty(QStringLiteral("avifSupported"), avifSupported);
     engine.addImageProvider(QStringLiteral("thumbs"), new ThumbnailProvider);
     engine.loadFromModule("Omapic", viewerMode ? "Viewer" : "Main");
     if (engine.rootObjects().isEmpty())

@@ -214,6 +214,34 @@ Window {
             anchors.centerIn: parent
             running: img.status === Image.Loading
         }
+
+        // Error overlay: an image that failed to decode — a corrupt file, or (most
+        // often) a HEIC/HEIF/AVIF when the matching image plugin isn't installed.
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            width: Math.min(parent.width - 48, 420)
+            visible: img.status === Image.Error && !root.currentIsVideo
+            Label {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: qsTr("This image couldn't be displayed.")
+                color: "white"
+                font.pixelSize: 16
+            }
+            Label {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                // A plugin-backed format (HEIC/HEIF or AVIF) whose plugin is absent.
+                visible: (!heifSupported && /\.(heic|heif)$/i.test(String(root.currentSource)))
+                         || (!avifSupported && /\.avif$/i.test(String(root.currentSource)))
+                text: qsTr("This format needs a Qt image plugin "
+                           + "(on Arch: kimageformats, plus libheif/libavif).")
+                color: "#cccccc"
+                font.pixelSize: 13
+            }
+        }
     }
 
     // --- Video stage ------------------------------------------------------
