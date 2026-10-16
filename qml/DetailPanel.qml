@@ -469,12 +469,19 @@ Rectangle {
                                     Layout.fillWidth: true
                                     text: suggestion.modelData.name
                                     elide: Text.ElideRight
+                                    // Custom contentItem loses the delegate's
+                                    // automatic highlight recoloring, so track it
+                                    // explicitly — otherwise the name is unreadable
+                                    // on the highlight background in many themes.
+                                    color: suggestion.highlighted ? suggestion.palette.highlightedText
+                                                                   : suggestion.palette.text
                                 }
                                 Label {
                                     visible: suggestion.modelData.categoryName !== ""
                                     text: suggestion.modelData.categoryName
                                     font.pixelSize: 11
-                                    color: palette.placeholderText
+                                    color: suggestion.highlighted ? suggestion.palette.highlightedText
+                                                                  : suggestion.palette.placeholderText
                                 }
                             }
                         }
