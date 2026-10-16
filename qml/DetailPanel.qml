@@ -7,6 +7,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Omapic // TextMatch singleton (accent-/case-insensitive folding)
+
 Rectangle {
     id: root
 
@@ -372,7 +374,7 @@ Rectangle {
                 property int highlighted: -1
 
                 function updateSuggestions() {
-                    const q = text.trim().toLowerCase()
+                    const q = TextMatch.fold(text.trim())
                     highlighted = -1
                     if (q.length === 0) {
                         suggestions = []
@@ -385,9 +387,12 @@ Rectangle {
                     const matches = []
                     var exact = null
                     for (var i = 0; i < all.length; ++i) {
-                        const ln = all[i].name.toLowerCase()
-                        if (applied.indexOf(ln) !== -1)
+                        // Exclude tags already applied (exact lower-cased name), but
+                        // match the typed query accent-/case-folded so "cafe" finds
+                        // "café".
+                        if (applied.indexOf(all[i].name.toLowerCase()) !== -1)
                             continue
+                        const ln = TextMatch.fold(all[i].name)
                         if (ln === q)
                             exact = all[i] // keep the exact typed match, surfaced below
                         else if (ln.indexOf(q) !== -1 && matches.length < 8)

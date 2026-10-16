@@ -36,6 +36,7 @@ qt_add_qml_module(omapic
         src/database.h src/database.cpp
         src/photomodel.h src/photomodel.cpp
         src/photofiltermodel.h src/photofiltermodel.cpp
+        src/textfold.h src/textfold.cpp
         src/photometadata.h src/photometadata.cpp
         src/tagmodel.h src/tagmodel.cpp
         src/library.h src/library.cpp

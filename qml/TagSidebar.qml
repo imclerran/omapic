@@ -6,6 +6,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Omapic // TextMatch singleton (accent-/case-insensitive folding)
+
 Rectangle {
     id: root
 
@@ -39,13 +41,13 @@ Rectangle {
 
     // How many chips match the current search text (all of them when empty).
     function matchCount(q) {
-        const s = q.trim().toLowerCase()
+        const s = TextMatch.fold(q.trim())
         if (s === "")
             return rep.count
         let c = 0
         for (let i = 0; i < rep.count; ++i) {
             const it = rep.itemAt(i)
-            if (it && it.name.toLowerCase().indexOf(s) !== -1)
+            if (it && TextMatch.fold(it.name).indexOf(s) !== -1)
                 ++c
         }
         return c
@@ -120,8 +122,8 @@ Rectangle {
                             // Hide (and drop from the flow) chips that don't match
                             // the search text.
                             visible: {
-                                const q = searchField.text.trim().toLowerCase()
-                                return q === "" || chip.name.toLowerCase().indexOf(q) !== -1
+                                const q = TextMatch.fold(searchField.text.trim())
+                                return q === "" || TextMatch.fold(chip.name).indexOf(q) !== -1
                             }
 
                             // Categorized tags take their category's color on the
