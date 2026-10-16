@@ -105,6 +105,10 @@ public:
     // Paths of every photo in the active (shown) set — orphans plus photos under
     // an enabled folder. Used to build the folder-view navigation tree.
     QStringList activePhotoPaths();
+    // Same, restricted to photos matching a tag selection (matchAll = must carry
+    // every selected tag; otherwise any). Empty selection returns all active
+    // paths. Lets the folder view show only folders holding the filtered photos.
+    QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll);
 
 private:
     bool hasColumn(const QString &table, const QString &column);

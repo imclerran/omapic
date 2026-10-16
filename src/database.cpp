@@ -200,6 +200,37 @@ QStringList Database::activePhotoPaths()
     return paths;
 }
 
+QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matchAll)
+{
+    if (selectedTags.isEmpty())
+        return activePhotoPaths();
+
+    QStringList ph;
+    for (int i = 0; i < selectedTags.size(); ++i)
+        ph.append(QStringLiteral("?"));
+    const QString inList = ph.join(QLatin1Char(','));
+    // match-all: the photo must carry every selected tag (count of distinct
+    // matched tags equals the selection size). match-any: carrying one is enough.
+    const QString having = matchAll
+        ? QStringLiteral(" GROUP BY pt.photo_id HAVING COUNT(DISTINCT pt.tag_id) = %1")
+              .arg(selectedTags.size())
+        : QString();
+
+    QStringList paths;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+                  "SELECT p.path FROM photos p WHERE %1 AND p.id IN ("
+                  "  SELECT pt.photo_id FROM photo_tags pt WHERE pt.tag_id IN (%2)%3) "
+                  "ORDER BY p.path")
+                  .arg(activeClause(QStringLiteral("p")), inList, having));
+    for (int id : selectedTags)
+        q.addBindValue(id);
+    q.exec();
+    while (q.next())
+        paths.append(q.value(0).toString());
+    return paths;
+}
+
 void Database::backfillContentTags()
 {
     QSqlQuery q(m_db);

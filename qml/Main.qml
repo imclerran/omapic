@@ -943,8 +943,11 @@ ApplicationWindow {
     // containsId() already reflects the new result set here.
     Connections {
         target: library.filtered
-        function onSelectedTagIdsChanged() { win.pruneSelection() }
-        function onMatchAllChanged() { win.pruneSelection() }
+        // The tag selection / match mode also decides which folders are shown in
+        // folder view (only those holding the filtered photos), so rebuild the
+        // tiles when either changes.
+        function onSelectedTagIdsChanged() { win.pruneSelection(); win.refreshFolderEntries() }
+        function onMatchAllChanged() { win.pruneSelection(); win.refreshFolderEntries() }
         function onSearchTextChanged() { win.pruneSelection() }
         function onTagPresenceChanged() { win.pruneSelection() }
     }

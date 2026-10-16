@@ -246,7 +246,11 @@ void Library::updateFolderRoots()
 QVariantList Library::folderEntries(const QString &path) const
 {
     QVariantList out;
-    const QStringList paths = m_db.activePhotoPaths();
+    // When a tag filter is active, build the tiles from only the matching photos,
+    // so the folder view shows only folders that contain the selected tags.
+    const QList<int> selTags = m_tags->selectedTagIds();
+    const bool filtering = !selTags.isEmpty();
+    const QStringList paths = m_db.activePhotoPaths(selTags, m_matchAll);
 
     // A folder tile, with the count of active photos at or under `dir` and the
     // first (by path) up-to-4 of them for the cover mosaic.
@@ -275,10 +279,15 @@ QVariantList Library::folderEntries(const QString &path) const
 
     if (path.isEmpty()) {
         // Root level: one tile per enabled root library folder. (Orphan photos
-        // show as photos in the grid here, not as tiles.)
+        // show as photos in the grid here, not as tiles.) While filtering, hide a
+        // root that holds no matching photo. (Subfolder tiles below are derived
+        // from the matching paths, so they drop out on their own.)
         for (const FolderInfo &f : m_db.loadFolders()) {
-            if (f.enabled)
-                out.append(makeFolder(f.path));
+            if (!f.enabled)
+                continue;
+            const QVariantMap tile = makeFolder(f.path);
+            if (!filtering || tile.value(QStringLiteral("count")).toInt() > 0)
+                out.append(tile);
         }
         return out;
     }
