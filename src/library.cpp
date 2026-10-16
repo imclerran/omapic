@@ -102,6 +102,14 @@ Library::Library(QObject *parent)
     if (m_db.unhashedPhotoCount() > 0 || m_db.photosMissingTakenAtCount() > 0)
         beginBusy(tr("Preparing library…"));
     emit requestMigration();
+
+    // Reconcile the library with disk on every launch, so files added, moved, or
+    // deleted outside omapic since last time are picked up without a manual
+    // rescan. It's queued behind the migration on the worker thread and reports
+    // in the bottom status bar — non-blocking, exactly like a manual rescan. Skip
+    // it when no folders are registered yet (nothing to scan).
+    if (!m_db.loadFolders().isEmpty())
+        rescan();
 }
 
 Library::~Library()
