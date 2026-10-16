@@ -377,10 +377,24 @@ Rectangle {
                     // {name, colorSlot, categoryName} so rows can show the color.
                     const all = root.library.tagSuggestions()
                     const matches = []
-                    for (var i = 0; i < all.length && matches.length < 8; ++i) {
+                    var exact = null
+                    for (var i = 0; i < all.length; ++i) {
                         const ln = all[i].name.toLowerCase()
-                        if (ln.indexOf(q) !== -1 && ln !== q && applied.indexOf(ln) === -1)
+                        if (applied.indexOf(ln) !== -1)
+                            continue
+                        if (ln === q)
+                            exact = all[i] // keep the exact typed match, surfaced below
+                        else if (ln.indexOf(q) !== -1 && matches.length < 8)
                             matches.push(all[i])
+                    }
+                    // When the text is an exact tag name, keep that tag in the list at
+                    // the top and pre-highlight it — as though the user had arrow-keyed
+                    // to it — so Enter accepts the real (canonically-cased) tag.
+                    if (exact) {
+                        matches.unshift(exact)
+                        if (matches.length > 8)
+                            matches.pop()
+                        highlighted = 0
                     }
                     suggestions = matches
                     if (matches.length > 0)
