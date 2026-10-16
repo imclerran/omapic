@@ -235,7 +235,7 @@ Window {
                 wrapMode: Text.WordWrap
                 visible: !heifSupported && /\.(heic|heif)$/i.test(String(root.currentSource))
                 text: qsTr("HEIC/HEIF images need a Qt HEIF image plugin "
-                           + "(e.g. qt6-heif-image-plugin).")
+                           + "(on Arch: kimageformats + libheif).")
                 color: "#cccccc"
                 font.pixelSize: 13
             }
