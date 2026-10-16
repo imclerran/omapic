@@ -132,6 +132,7 @@ private:
     QSet<int> m_selected;
     bool m_matchAll = true;
     QString m_search;
+    QString m_searchFolded; // m_search, accent-/case-folded for matching
     TagPresence m_tagPresence = AnyTags;
     bool m_folderFirst = false;
     bool m_sortByDate = false;

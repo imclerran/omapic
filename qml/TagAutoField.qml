@@ -6,6 +6,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Omapic // TextMatch singleton (accent-/case-insensitive folding)
+
 // A single-line tag picker with an autocomplete dropdown, matching the detail
 // panel's "add a tag" box — far easier than a long combo box on a big library.
 // Type to filter `tags` by substring; `text` holds the current value, which the
@@ -39,13 +41,15 @@ Item {
         property int highlighted: -1
 
         function refresh() {
-            const q = text.trim().toLowerCase()
+            const q = TextMatch.fold(text.trim())
             highlighted = -1
             if (q === "") { suggestions = []; pop.close(); return }
             const out = []
             let exact = null
             for (let i = 0; i < root.tags.length; ++i) {
-                const ln = root.tags[i].name.toLowerCase()
+                // Fold the candidate too, so unaccented typing finds accented
+                // tags ("cafe" -> "café") and casing is ignored.
+                const ln = TextMatch.fold(root.tags[i].name)
                 if (ln === q)
                     exact = root.tags[i] // keep the exact match, surfaced below
                 else if (ln.indexOf(q) !== -1 && out.length < 8)

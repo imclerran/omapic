@@ -6,6 +6,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Omapic // TextMatch singleton (accent-/case-insensitive folding)
+
 Dialog {
     id: root
 
@@ -60,12 +62,14 @@ Dialog {
     // Tag id for an exact (case-insensitive) name, or -1. Used by the Associations
     // tab's pickers, which only offer existing tag names.
     function tagIdByName(name) {
-        const n = (name || "").trim().toLowerCase()
+        const n = TextMatch.fold((name || "").trim())
         if (n === "")
             return -1
         const all = root.allTags
+        // Folded compare so a typed unaccented name still resolves to its
+        // accented tag ("cafe" -> the "café" tag's id).
         for (let i = 0; i < all.length; ++i) {
-            if (all[i].name.toLowerCase() === n)
+            if (TextMatch.fold(all[i].name) === n)
                 return all[i].id
         }
         return -1
@@ -107,11 +111,12 @@ Dialog {
     // The tag list, filtered by the search box and the category chips (filter the
     // model, not visibility — a ListView leaves gaps for hidden delegates).
     readonly property var filteredTags: {
-        const q = searchField.text.trim().toLowerCase()
+        const q = TextMatch.fold(searchField.text.trim())
         const cf = root.categoryFilter
         const all = root.allTags
         return all.filter(function (t) {
-            if (q !== "" && t.name.toLowerCase().indexOf(q) === -1)
+            // Accent-/case-folded so "cafe" lists the "café" tag.
+            if (q !== "" && TextMatch.fold(t.name).indexOf(q) === -1)
                 return false
             if (cf === -2)
                 return true
@@ -922,8 +927,9 @@ Dialog {
                 // Validation state for the add row.
                 QtObject {
                     id: assoc
-                    // Lower-cased antecedent text, for live-filtering the list below.
-                    readonly property string query: antField.text.trim().toLowerCase()
+                    // Folded antecedent text, for live-filtering the list below
+                    // (accent-/case-insensitive, matching the pickers).
+                    readonly property string query: TextMatch.fold(antField.text.trim())
                     readonly property int antId: root.tagIdByName(antField.text)
                     readonly property int conId: root.tagIdByName(conField.text)
                     readonly property bool isSelf: assoc.antId >= 0 && assoc.antId === assoc.conId
@@ -1015,7 +1021,7 @@ Dialog {
                         // Live-filter to rules whose antecedent matches the text.
                         model: assoc.query === ""
                                ? root.implications
-                               : root.implications.filter(im => im.antecedentName.toLowerCase().indexOf(assoc.query) !== -1)
+                               : root.implications.filter(im => TextMatch.fold(im.antecedentName).indexOf(assoc.query) !== -1)
                         boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar {}
 

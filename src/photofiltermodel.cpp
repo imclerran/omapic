@@ -11,6 +11,7 @@
 #include <QStringList>
 
 #include "photomodel.h"
+#include "textfold.h"
 
 PhotoFilterModel::PhotoFilterModel(QObject *parent)
     : QSortFilterProxyModel(parent)
@@ -66,6 +67,9 @@ void PhotoFilterModel::setSearchText(const QString &text)
     if (m_search == trimmed)
         return;
     m_search = trimmed;
+    // Pre-fold once so the per-row match is a plain folded substring test, and so
+    // typing unaccented text ("cafe") matches accented names ("café").
+    m_searchFolded = foldText(trimmed);
     invalidateRowFilter();
     emit searchTextChanged();
     emit countChanged();
@@ -340,14 +344,15 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
             return false;
     }
 
-    // Text search: match the file name or any tag name.
-    if (!m_search.isEmpty()) {
+    // Text search: match the file name or any tag name. Folded on both sides so
+    // the match is accent- and case-insensitive ("cafe" finds "Café").
+    if (!m_searchFolded.isEmpty()) {
         const QString name = sourceModel()->data(idx, PhotoModel::FileNameRole).toString();
-        if (name.contains(m_search, Qt::CaseInsensitive))
+        if (foldText(name).contains(m_searchFolded))
             return true;
         const QStringList tagNames = sourceModel()->data(idx, PhotoModel::TagsRole).toStringList();
         for (const QString &tn : tagNames)
-            if (tn.contains(m_search, Qt::CaseInsensitive))
+            if (foldText(tn).contains(m_searchFolded))
                 return true;
         return false;
     }
