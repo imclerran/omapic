@@ -19,10 +19,11 @@ const QStringList &globs()
         QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.png"),
         QStringLiteral("*.gif"), QStringLiteral("*.bmp"), QStringLiteral("*.webp"),
         QStringLiteral("*.tif"), QStringLiteral("*.tiff"),
-        // HEIF/HEIC decode through Qt's image plugins, which need a HEIF plugin
-        // installed (on Arch: kimageformats + libheif); see the missing-plugin
-        // handling in main.cpp and the thumbnail provider.
-        QStringLiteral("*.heic"), QStringLiteral("*.heif"),
+        // HEIC/HEIF and AVIF decode through Qt's image plugins, which need extra
+        // plugins installed (on Arch: kimageformats, with libheif for HEIC/HEIF
+        // and libavif for AVIF); see the missing-plugin handling in main.cpp and
+        // the thumbnail provider.
+        QStringLiteral("*.heic"), QStringLiteral("*.heif"), QStringLiteral("*.avif"),
         QStringLiteral("*.mp4"), QStringLiteral("*.m4v"), QStringLiteral("*.webm"),
         QStringLiteral("*.mkv"), QStringLiteral("*.mov"), QStringLiteral("*.avi"),
     };

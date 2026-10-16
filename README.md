@@ -35,9 +35,10 @@ A PKGBUILD is in [`packaging/aur/`](packaging/aur/).
 
 Requires Qt 6.5+ (Quick, QuickControls2, Sql, Multimedia, Concurrent), exiv2,
 CMake, and a C++17 compiler. Runtime: `ffmpegthumbnailer` for video thumbnails;
-a Qt HEIF image plugin (on Arch, `kimageformats` + `libheif`) for `.heic`/`.heif`
-photos — without it HEIC files are listed but show a placeholder; Aether is
-optional. (The AUR package pulls the HEIF plugin in automatically.)
+Qt image plugins (on Arch, `kimageformats` with `libheif` + `libavif`) for
+`.heic`/`.heif`/`.avif` photos — without them those files are listed but show a
+placeholder; Aether is optional. (The AUR package pulls the plugins in
+automatically.)
 
 ```sh
 cmake -B build -G Ninja

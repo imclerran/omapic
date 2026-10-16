@@ -216,7 +216,7 @@ Window {
         }
 
         // Error overlay: an image that failed to decode — a corrupt file, or (most
-        // often) a HEIC/HEIF when no HEIF image plugin is installed.
+        // often) a HEIC/HEIF/AVIF when the matching image plugin isn't installed.
         Column {
             anchors.centerIn: parent
             spacing: 8
@@ -233,9 +233,11 @@ Window {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                visible: !heifSupported && /\.(heic|heif)$/i.test(String(root.currentSource))
-                text: qsTr("HEIC/HEIF images need a Qt HEIF image plugin "
-                           + "(on Arch: kimageformats + libheif).")
+                // A plugin-backed format (HEIC/HEIF or AVIF) whose plugin is absent.
+                visible: (!heifSupported && /\.(heic|heif)$/i.test(String(root.currentSource)))
+                         || (!avifSupported && /\.avif$/i.test(String(root.currentSource)))
+                text: qsTr("This format needs a Qt image plugin "
+                           + "(on Arch: kimageformats, plus libheif/libavif).")
                 color: "#cccccc"
                 font.pixelSize: 13
             }
