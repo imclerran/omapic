@@ -37,6 +37,7 @@ Item {
         radius: 4
 
         Image {
+            id: thumb
             anchors.fill: parent
             anchors.margins: 4
             source: "image://thumbs/" + encodeURIComponent(root.filePath)
@@ -46,6 +47,34 @@ Item {
             sourceSize.width: 320
             sourceSize.height: 320
             clip: true
+        }
+
+        // Placeholder for a thumbnail that couldn't be decoded — most often a
+        // HEIC/HEIF when no HEIF image plugin is installed, but also any corrupt
+        // file. Shows the file type so a broken tile reads as "unsupported" rather
+        // than a mysterious blank card.
+        Column {
+            anchors.centerIn: parent
+            spacing: 4
+            visible: thumb.status === Image.Error
+            opacity: 0.55
+            Label {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: {
+                    const dot = root.filePath.lastIndexOf(".")
+                    return dot >= 0 ? root.filePath.substring(dot + 1).toUpperCase()
+                                    : qsTr("?")
+                }
+                font.pixelSize: 18
+                font.bold: true
+                color: sys.text
+            }
+            Label {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("can't preview")
+                font.pixelSize: 11
+                color: sys.text
+            }
         }
 
         // Play indicator for video items: a semi-opaque disc with a triangle.

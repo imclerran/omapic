@@ -5,6 +5,7 @@
 #include <QCommandLineParser>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImageReader>
 #include <QList>
 #include <QLoggingCategory>
 #include <QQmlApplicationEngine>
@@ -83,11 +84,25 @@ int main(int argc, char *argv[])
     }
     const bool viewerMode = !launchUrls.isEmpty();
 
+    // HEIF/HEIC decoding lives in a Qt image-format plugin that is not part of a
+    // stock Qt install (on Arch it is qt6-heif-image-plugin, built on libheif).
+    // When it is missing, .heic/.heif files are scanned in but can't be rendered,
+    // so expose the capability to QML (to show a graceful placeholder/notice) and
+    // say so once on the console to point at the fix.
+    const bool heifSupported = QImageReader::supportedImageFormats().contains("heic")
+                               || QImageReader::supportedImageFormats().contains("heif");
+    if (!heifSupported) {
+        qWarning("omapic: no HEIF/HEIC image plugin found — .heic/.heif files will "
+                 "not display. Install a Qt HEIF image plugin (e.g. "
+                 "qt6-heif-image-plugin) to enable them.");
+    }
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("omarchyTheme"), omarchyTheme);
     engine.rootContext()->setContextProperty(QStringLiteral("launchUrls"),
                                               QVariant::fromValue(launchUrls));
     engine.rootContext()->setContextProperty(QStringLiteral("launchSinglePath"), singlePath);
+    engine.rootContext()->setContextProperty(QStringLiteral("heifSupported"), heifSupported);
     engine.addImageProvider(QStringLiteral("thumbs"), new ThumbnailProvider);
     engine.loadFromModule("Omapic", viewerMode ? "Viewer" : "Main");
     if (engine.rootObjects().isEmpty())

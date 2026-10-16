@@ -116,6 +116,14 @@ public:
         return QQuickTextureFactory::textureFactoryForImage(m_image);
     }
 
+    // A null result (undecodable file — a corrupt image, or a HEIC/HEIF with no
+    // HEIF plugin installed) reports as an error so the delegate can swap in a
+    // placeholder rather than silently showing a blank card.
+    QString errorString() const override
+    {
+        return m_image.isNull() ? QStringLiteral("thumbnail unavailable") : QString();
+    }
+
 private:
     QString m_id;
     QString m_cacheDir;

@@ -214,6 +214,32 @@ Window {
             anchors.centerIn: parent
             running: img.status === Image.Loading
         }
+
+        // Error overlay: an image that failed to decode — a corrupt file, or (most
+        // often) a HEIC/HEIF when no HEIF image plugin is installed.
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            width: Math.min(parent.width - 48, 420)
+            visible: img.status === Image.Error && !root.currentIsVideo
+            Label {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: qsTr("This image couldn't be displayed.")
+                color: "white"
+                font.pixelSize: 16
+            }
+            Label {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                visible: !heifSupported && /\.(heic|heif)$/i.test(String(root.currentSource))
+                text: qsTr("HEIC/HEIF images need a Qt HEIF image plugin "
+                           + "(e.g. qt6-heif-image-plugin).")
+                color: "#cccccc"
+                font.pixelSize: 13
+            }
+        }
     }
 
     // --- Video stage ------------------------------------------------------
