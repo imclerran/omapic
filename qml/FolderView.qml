@@ -203,33 +203,8 @@ Item {
                 }
             }
 
-            // Match the grid's wheel/trackpad feel.
-            NumberAnimation {
-                id: wheelAnim
-                target: fgrid
-                property: "contentY"
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-            MouseArea {
-                anchors.fill: parent
-                acceptedButtons: Qt.NoButton
-                propagateComposedEvents: true
-                onWheel: (wheel) => {
-                    const minY = fgrid.originY
-                    const maxY = Math.max(minY, fgrid.originY + fgrid.contentHeight - fgrid.height)
-                    if (wheel.pixelDelta.y !== 0) {
-                        wheelAnim.stop()
-                        fgrid.contentY = Math.max(minY, Math.min(maxY, fgrid.contentY - wheel.pixelDelta.y * 4.0))
-                    } else {
-                        const step = (wheel.angleDelta.y / 120) * fgrid.cellHeight
-                        const target = Math.max(minY, Math.min(maxY, fgrid.contentY - step))
-                        wheelAnim.stop()
-                        wheelAnim.to = target
-                        wheelAnim.start()
-                    }
-                }
-            }
+            // Match the gallery grid's wheel/trackpad feel: one row per notch.
+            WheelScroller { flickable: fgrid; step: fgrid.cellHeight }
 
             Label {
                 anchors.centerIn: parent

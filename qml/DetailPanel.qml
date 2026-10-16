@@ -276,10 +276,13 @@ Rectangle {
             color: palette.placeholderText
         }
 
-        ScrollView {
-            id: tagScroll
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
+
+            ScrollView {
+            id: tagScroll
+            anchors.fill: parent
             clip: true
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
@@ -351,6 +354,9 @@ Rectangle {
                 color: palette.placeholderText
             }
             }
+            }
+
+            WheelScroller { flickable: tagScroll.contentItem }
         }
 
         RowLayout {

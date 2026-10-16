@@ -21,6 +21,7 @@ qt_add_qml_module(omapic
         qml/PhotoDelegate.qml
         qml/TagSidebar.qml
         qml/DetailPanel.qml
+        qml/WheelScroller.qml
         qml/SlideshowView.qml
         qml/PhotoViewer.qml
         qml/Viewer.qml

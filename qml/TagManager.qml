@@ -761,6 +761,8 @@ Dialog {
                             }
                             color: palette.placeholderText
                         }
+
+                        WheelScroller { flickable: list }
                     }
                 }
             }
@@ -855,6 +857,8 @@ Dialog {
                                        + "tag's category menu and choosing “New category…”.")
                             color: palette.placeholderText
                         }
+
+                        WheelScroller { flickable: categoryList }
                     }
                 }
             }
