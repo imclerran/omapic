@@ -25,6 +25,7 @@ public slots:
     void runMigration();                      // hash un-hashed photos, then seed the tag archive
     void importDirectory(const QString &root); // walk, hash, insert, reattach archived tags
     void rescan();                            // reconcile the DB with disk: add/relocate/remove
+    void expandImplications();                // apply tag implications across the whole library
     void addTagToPhotos(const QList<int> &photoIds, const QString &name);
     void removeTagFromPhotos(const QList<int> &photoIds, int tagId);
 
@@ -33,6 +34,7 @@ signals:
     void migrationFinished();
     void importFinished(const QString &root);
     void rescanFinished();
+    void implicationsExpanded();
     void tagJobFinished();
 
 private:

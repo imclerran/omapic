@@ -221,8 +221,10 @@ void LibraryWorker::addTagToPhotos(const QList<int> &photoIds, const QString &na
     int done = 0;
     for (int pid : photoIds) {
         if (pid >= 0) {
+            const QString hash = m_db.photoHash(pid);
             m_db.linkTagToContent(pid, tagId); // every copy of this content
-            m_db.rememberContentTag(m_db.photoHash(pid), tagId);
+            m_db.rememberContentTag(hash, tagId);
+            m_db.applyImplications(hash, tagId); // and any tags this one implies
         }
         ++done;
         if (done % step == 0 || done == total)
@@ -231,6 +233,18 @@ void LibraryWorker::addTagToPhotos(const QList<int> &photoIds, const QString &na
     m_db.commitTransaction();
 
     emit tagJobFinished();
+}
+
+void LibraryWorker::expandImplications()
+{
+    // Materialize every implication across the whole library in one transaction
+    // (closure pass over content_tags + photo_tags). Indeterminate progress — the
+    // pass is a handful of set-based statements, not a per-row loop.
+    emit progress(tr("Applying associations…"), 0, 0);
+    m_db.beginTransaction();
+    m_db.expandAllImplications();
+    m_db.commitTransaction();
+    emit implicationsExpanded();
 }
 
 void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)

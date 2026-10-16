@@ -67,6 +67,25 @@ public:
     // Tags on one photo (with category info; count is unused), sorted by name.
     QVector<TagInfo> photoTags(int photoId);
 
+    // --- Tag implications ("if this tag, then that tag") ---
+    // Every implication with both tags' names/colors, for the manager. Sorted by
+    // antecedent then consequent name.
+    QVector<ImplicationInfo> implications();
+    void addImplication(int antecedentId, int consequentId);    // INSERT OR IGNORE
+    void removeImplication(int antecedentId, int consequentId); // stops future propagation only
+    // True when antecedent already belongs to consequent's downstream closure, so
+    // adding antecedent -> consequent would close a cycle (blocked in the UI).
+    bool implicationWouldCycle(int antecedentId, int consequentId);
+    // Materialize the consequent closure of `tagId` onto one content hash: write
+    // every downstream-implied tag into content_tags and onto every live photo of
+    // that hash. Called right after a tag is applied, so implications hold going
+    // forward without a full re-scan.
+    void applyImplications(const QString &hash, int tagId);
+    // Full-library closure pass used when an implication is added: propagate every
+    // antecedent's consequents across content_tags and photo_tags until stable
+    // (handles chains; terminates on cycles). Returns rows added.
+    int expandAllImplications();
+
     // --- Tag categories ---
     // All categories sorted by name. With activeOnly, drop categories whose tags
     // are all in hidden/removed folders (no tag applies to any active photo),

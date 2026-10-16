@@ -88,12 +88,14 @@ Library::Library(QObject *parent)
     connect(this, &Library::requestMigration, m_worker, &LibraryWorker::runMigration);
     connect(this, &Library::requestImport, m_worker, &LibraryWorker::importDirectory);
     connect(this, &Library::requestRescan, m_worker, &LibraryWorker::rescan);
+    connect(this, &Library::requestImplicationMigration, m_worker, &LibraryWorker::expandImplications);
     connect(this, &Library::requestAddTagToPhotos, m_worker, &LibraryWorker::addTagToPhotos);
     connect(this, &Library::requestRemoveTagFromPhotos, m_worker, &LibraryWorker::removeTagFromPhotos);
     connect(m_worker, &LibraryWorker::progress, this, &Library::onWorkerProgress);
     connect(m_worker, &LibraryWorker::migrationFinished, this, &Library::onMigrationFinished);
     connect(m_worker, &LibraryWorker::importFinished, this, &Library::onImportFinished);
     connect(m_worker, &LibraryWorker::rescanFinished, this, &Library::onRescanFinished);
+    connect(m_worker, &LibraryWorker::implicationsExpanded, this, &Library::onImplicationsExpanded);
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     m_workerThread.start();
 
@@ -221,12 +223,72 @@ void Library::onRescanFinished()
     emit foldersChanged();
 }
 
+void Library::onImplicationsExpanded()
+{
+    // The worker materialized newly-implied tags across photo_tags/content_tags;
+    // reload so the gallery, chips, and detail panel reflect them.
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    endBusy(/*modal=*/false); // reported in the status bar
+    emit implicationsChanged();
+}
+
 void Library::onTagJobFinished()
 {
     // The worker changed photo_tags in bulk; reload the in-memory tags once.
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags(); // tagsChanged refreshes the detail panel in one pass
     endBusy(/*modal=*/false); // bulk tagging reports in the status bar
+}
+
+QVariantList Library::tagImplications() const
+{
+    QVariantList out;
+    for (const ImplicationInfo &i : m_db.implications()) {
+        out.append(QVariantMap{
+            {QStringLiteral("antecedentId"), i.antecedentId},
+            {QStringLiteral("antecedentName"), i.antecedentName},
+            {QStringLiteral("antecedentColorSlot"), i.antecedentColorSlot},
+            {QStringLiteral("consequentId"), i.consequentId},
+            {QStringLiteral("consequentName"), i.consequentName},
+            {QStringLiteral("consequentColorSlot"), i.consequentColorSlot},
+        });
+    }
+    return out;
+}
+
+int Library::addTagImplication(int antecedentId, int consequentId)
+{
+    if (antecedentId < 0 || consequentId < 0 || antecedentId == consequentId)
+        return ImplicationInvalid;
+    if (m_db.implicationWouldCycle(antecedentId, consequentId))
+        return ImplicationCycle;
+    // Already defined? Don't kick off a pointless migration.
+    for (const ImplicationInfo &i : m_db.implications()) {
+        if (i.antecedentId == antecedentId && i.consequentId == consequentId)
+            return ImplicationExists;
+    }
+    m_db.addImplication(antecedentId, consequentId);
+    emit implicationsChanged();
+    // Apply it to the existing library on the worker thread (status bar), so a
+    // big library doesn't freeze the UI while the tags propagate.
+    beginBusy(tr("Applying associations…"), /*modal=*/false);
+    emit requestImplicationMigration();
+    return ImplicationOk;
+}
+
+void Library::removeTagImplication(int antecedentId, int consequentId)
+{
+    // Only stops future propagation; tags it has already applied stay put.
+    m_db.removeImplication(antecedentId, consequentId);
+    emit implicationsChanged();
+}
+
+bool Library::implicationWouldCycle(int antecedentId, int consequentId) const
+{
+    if (antecedentId < 0 || consequentId < 0)
+        return false;
+    return m_db.implicationWouldCycle(antecedentId, consequentId);
 }
 
 QVariantList Library::folders() const
@@ -553,8 +615,10 @@ void Library::addTag(int photoId, const QString &name)
     const int tagId = m_db.ensureTag(trimmed);
     if (tagId < 0)
         return;
+    const QString hash = m_db.photoHash(photoId);
     m_db.linkTagToContent(photoId, tagId); // every copy of this content, not just the visible one
-    m_db.rememberContentTag(m_db.photoHash(photoId), tagId);
+    m_db.rememberContentTag(hash, tagId);
+    m_db.applyImplications(hash, tagId);   // and any tags this one implies
     applyTags(photoId);
     refreshTags();
     emit photoChanged(photoId);
@@ -600,8 +664,10 @@ void Library::addTagToPhotos(const QVariantList &photoIds, const QString &name)
         return;
     m_db.beginTransaction();
     for (int pid : ids) {
+        const QString hash = m_db.photoHash(pid);
         m_db.linkTagToContent(pid, tagId); // every copy of this content
-        m_db.rememberContentTag(m_db.photoHash(pid), tagId);
+        m_db.rememberContentTag(hash, tagId);
+        m_db.applyImplications(hash, tagId); // and any tags this one implies
         applyTags(pid); // in-place model update; detail refreshes once via refreshTags
     }
     m_db.commitTransaction();
@@ -943,8 +1009,10 @@ void Library::refreshTags()
 
     m_tags->setTags(tags);
     emit tagsChanged();
-    // Category visibility in the tag manager depends on the same active set (a
-    // category is hidden once all its tags leave the active folders), so refresh
-    // it in lockstep with the tag list.
+    // Category and implication visibility in the tag manager depend on the same
+    // active set (a category is hidden once all its tags leave the active folders;
+    // an association is hidden once either of its tags does), so refresh both in
+    // lockstep with the tag list.
     emit categoriesChanged();
+    emit implicationsChanged();
 }
