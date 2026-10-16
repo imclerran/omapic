@@ -66,6 +66,23 @@ bool Database::open(const QString &path, const QString &connectionName)
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
         "  PRIMARY KEY (hash, tag_id))"));
 
+    // Tag implications: a photo carrying the antecedent tag also gets the
+    // consequent tag. Materialized — applying the antecedent writes the
+    // consequent into photo_tags/content_tags too (see applyImplications and the
+    // worker's expandImplications migration), so the rest of the app needs no
+    // implication-aware queries. CHECK blocks a tag implying itself; cycles are
+    // blocked in the UI.
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS tag_implications ("
+        "  antecedent_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
+        "  consequent_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
+        "  PRIMARY KEY (antecedent_id, consequent_id),"
+        "  CHECK (antecedent_id <> consequent_id))"));
+    // Reverse lookups (closure walks the consequent side too).
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tag_implications_consequent "
+        "ON tag_implications(consequent_id)"));
+
     // Tag categories: a tag may belong to one category, which carries a palette
     // slot (an index into the theme-derived category palette, not a fixed color,
     // so chips keep following the active theme). Deleting a category leaves its
@@ -796,9 +813,141 @@ void Database::unlinkTagFromContent(int photoId, int tagId)
 void Database::deleteTag(int tagId)
 {
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?")); // photo_tags cascade
+    q.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?")); // photo_tags + implications cascade
     q.addBindValue(tagId);
     q.exec();
+}
+
+QVector<ImplicationInfo> Database::implications()
+{
+    // Only rules whose BOTH tags are active (apply to a photo in an enabled,
+    // non-removed folder), so the manager hides associations that reference tags
+    // living only on hidden/removed images — mirroring how the tag and category
+    // lists drop inactive tags. Same active-photos/active-tags CTE as loadTags().
+    QVector<ImplicationInfo> out;
+    QSqlQuery q(QStringLiteral(
+        "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1), "
+        "active_tags AS (SELECT DISTINCT pt.tag_id FROM photo_tags pt "
+        "  WHERE pt.photo_id IN (SELECT id FROM active_photos)) "
+        "SELECT a.id, a.name, ca.color_slot, c.id, c.name, cc.color_slot "
+        "FROM tag_implications i "
+        "JOIN tags a ON a.id = i.antecedent_id "
+        "JOIN tags c ON c.id = i.consequent_id "
+        "LEFT JOIN tag_categories ca ON ca.id = a.category_id "
+        "LEFT JOIN tag_categories cc ON cc.id = c.category_id "
+        "WHERE i.antecedent_id IN (SELECT tag_id FROM active_tags) "
+        "  AND i.consequent_id IN (SELECT tag_id FROM active_tags) "
+        "ORDER BY a.name, c.name")
+        .arg(activeClause(QStringLiteral("p"))),
+        m_db);
+    while (q.next()) {
+        ImplicationInfo info;
+        info.antecedentId = q.value(0).toInt();
+        info.antecedentName = q.value(1).toString();
+        info.antecedentColorSlot = q.value(2).isNull() ? -1 : q.value(2).toInt();
+        info.consequentId = q.value(3).toInt();
+        info.consequentName = q.value(4).toString();
+        info.consequentColorSlot = q.value(5).isNull() ? -1 : q.value(5).toInt();
+        out.append(info);
+    }
+    return out;
+}
+
+void Database::addImplication(int antecedentId, int consequentId)
+{
+    if (antecedentId < 0 || consequentId < 0 || antecedentId == consequentId)
+        return;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO tag_implications(antecedent_id, consequent_id) VALUES(?, ?)"));
+    q.addBindValue(antecedentId);
+    q.addBindValue(consequentId);
+    q.exec();
+}
+
+void Database::removeImplication(int antecedentId, int consequentId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "DELETE FROM tag_implications WHERE antecedent_id = ? AND consequent_id = ?"));
+    q.addBindValue(antecedentId);
+    q.addBindValue(consequentId);
+    q.exec();
+}
+
+bool Database::implicationWouldCycle(int antecedentId, int consequentId)
+{
+    if (antecedentId == consequentId)
+        return true;
+    // Adding antecedent -> consequent closes a cycle iff consequent can already
+    // reach antecedent: walk the graph forward from consequent and look for it.
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "WITH RECURSIVE reach(tag_id) AS ("
+        "  SELECT consequent_id FROM tag_implications WHERE antecedent_id = ?"
+        "  UNION "
+        "  SELECT i.consequent_id FROM tag_implications i JOIN reach r ON i.antecedent_id = r.tag_id"
+        ") SELECT 1 FROM reach WHERE tag_id = ? LIMIT 1"));
+    q.addBindValue(consequentId);
+    q.addBindValue(antecedentId);
+    q.exec();
+    return q.next();
+}
+
+void Database::applyImplications(const QString &hash, int tagId)
+{
+    if (hash.isEmpty() || tagId < 0)
+        return;
+    // The downstream closure of tagId; UNION dedups, so cycles terminate.
+    const QString closure = QStringLiteral(
+        "WITH RECURSIVE closure(tag_id) AS ("
+        "  SELECT consequent_id FROM tag_implications WHERE antecedent_id = ?"
+        "  UNION "
+        "  SELECT i.consequent_id FROM tag_implications i JOIN closure c ON i.antecedent_id = c.tag_id"
+        ") ");
+
+    // Keep the archive closed under implications so re-imports carry them too.
+    QSqlQuery a(m_db);
+    a.prepare(closure + QStringLiteral(
+        "INSERT OR IGNORE INTO content_tags(hash, tag_id) SELECT ?, tag_id FROM closure"));
+    a.addBindValue(tagId);
+    a.addBindValue(hash);
+    a.exec();
+
+    // Apply the closure to every live photo of this content.
+    QSqlQuery p(m_db);
+    p.prepare(closure + QStringLiteral(
+        "INSERT OR IGNORE INTO photo_tags(photo_id, tag_id) "
+        "SELECT ph.id, closure.tag_id FROM closure JOIN photos ph ON ph.hash = ?"));
+    p.addBindValue(tagId);
+    p.addBindValue(hash);
+    p.exec();
+}
+
+int Database::expandAllImplications()
+{
+    // Propagate every antecedent's consequents across the archive and the live
+    // links, one hop per pass, until a pass adds nothing. UNION / OR IGNORE reach
+    // a fixed point, so chains fully materialize and cycles terminate; the pass
+    // cap is a belt-and-braces guard against a driver that misreports row counts.
+    int total = 0;
+    for (int guard = 0; guard < 64; ++guard) {
+        QSqlQuery archive(m_db);
+        archive.exec(QStringLiteral(
+            "INSERT OR IGNORE INTO content_tags(hash, tag_id) "
+            "SELECT ct.hash, i.consequent_id FROM content_tags ct "
+            "JOIN tag_implications i ON i.antecedent_id = ct.tag_id"));
+        QSqlQuery live(m_db);
+        live.exec(QStringLiteral(
+            "INSERT OR IGNORE INTO photo_tags(photo_id, tag_id) "
+            "SELECT pt.photo_id, i.consequent_id FROM photo_tags pt "
+            "JOIN tag_implications i ON i.antecedent_id = pt.tag_id"));
+        const int added = qMax(0, archive.numRowsAffected()) + qMax(0, live.numRowsAffected());
+        total += added;
+        if (added == 0)
+            break;
+    }
+    return total;
 }
 
 QVector<TagInfo> Database::photoTags(int photoId)

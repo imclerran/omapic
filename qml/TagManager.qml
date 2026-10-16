@@ -54,6 +54,31 @@ Dialog {
     // two category list models and the visibility check below don't each re-run
     // the query every time categoriesChanged fires.
     readonly property var categories: root.library.categories
+    // Tag implications ("if this tag, then that tag"), refreshed on any change.
+    readonly property var implications: root.library.tagImplications
+
+    // Tag id for an exact (case-insensitive) name, or -1. Used by the Associations
+    // tab's pickers, which only offer existing tag names.
+    function tagIdByName(name) {
+        const n = (name || "").trim().toLowerCase()
+        if (n === "")
+            return -1
+        const all = root.allTags
+        for (let i = 0; i < all.length; ++i) {
+            if (all[i].name.toLowerCase() === n)
+                return all[i].id
+        }
+        return -1
+    }
+    // Palette color for a tag by id (for the association chips).
+    function tagColorSlot(tagId) {
+        const all = root.allTags
+        for (let i = 0; i < all.length; ++i) {
+            if (all[i].id === tagId)
+                return all[i].colorSlot
+        }
+        return -1
+    }
 
     readonly property int uncategorizedCount: {
         let n = 0
@@ -577,6 +602,7 @@ Dialog {
             Layout.fillWidth: true
             TabButton { text: qsTr("Tags") }
             TabButton { text: qsTr("Categories") }
+            TabButton { text: qsTr("Associations") }
         }
 
         StackLayout {
@@ -859,6 +885,179 @@ Dialog {
                         }
 
                         WheelScroller { flickable: categoryList }
+                    }
+                }
+            }
+
+            // -------------------------------------------------- Associations tab
+            // "If a photo has <this> tag, also add <that> tag." Rules are applied
+            // across the library when added (and to each tag as it's applied going
+            // forward). They're materialized: removing a rule stops future
+            // propagation but leaves already-added tags in place.
+            ColumnLayout {
+                spacing: 10
+
+                // Rounded, category-colored chip for a rule's tags.
+                component AssocChip: Rectangle {
+                    id: chip
+                    property string label: ""
+                    property int colorSlot: -1
+                    readonly property bool categorized: chip.colorSlot >= 0
+                    readonly property color tint: root.categoryColor(chip.colorSlot)
+                    implicitHeight: 24
+                    implicitWidth: chipText.implicitWidth + 16
+                    radius: height / 2
+                    color: chip.categorized ? Qt.alpha(chip.tint, 0.18) : sys.alternateBase
+                    border.width: 1
+                    border.color: chip.categorized ? chip.tint : sys.mid
+                    Label {
+                        id: chipText
+                        anchors.centerIn: parent
+                        text: chip.label
+                        font.pixelSize: 12
+                        color: palette.text
+                    }
+                }
+
+                // Validation state for the add row.
+                QtObject {
+                    id: assoc
+                    // Lower-cased antecedent text, for live-filtering the list below.
+                    readonly property string query: antField.text.trim().toLowerCase()
+                    readonly property int antId: root.tagIdByName(antField.text)
+                    readonly property int conId: root.tagIdByName(conField.text)
+                    readonly property bool isSelf: assoc.antId >= 0 && assoc.antId === assoc.conId
+                    readonly property bool wouldCycle: assoc.antId >= 0 && assoc.conId >= 0 && !assoc.isSelf
+                                                       && root.library.implicationWouldCycle(assoc.antId, assoc.conId)
+                    readonly property bool exists: {
+                        const im = root.implications
+                        for (let i = 0; i < im.length; ++i) {
+                            if (im[i].antecedentId === assoc.antId && im[i].consequentId === assoc.conId)
+                                return true
+                        }
+                        return false
+                    }
+                    readonly property bool canAdd: assoc.antId >= 0 && assoc.conId >= 0
+                                                   && !assoc.isSelf && !assoc.wouldCycle && !assoc.exists
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    function submit() {
+                        if (!assoc.canAdd)
+                            return
+                        root.library.addTagImplication(assoc.antId, assoc.conId)
+                        antField.clear()
+                        conField.clear()
+                        antField.focusInput()
+                    }
+
+                    Label { text: qsTr("If a photo has") }
+                    TagAutoField {
+                        id: antField
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("this tag…")
+                        tags: root.allTags
+                        categoryColorFn: root.categoryColor
+                        onAccepted: conField.focusInput()
+                    }
+                    Label { text: qsTr("also add") }
+                    TagAutoField {
+                        id: conField
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("that tag…")
+                        tags: root.allTags
+                        categoryColorFn: root.categoryColor
+                        onAccepted: parent.submit()
+                    }
+                    Button {
+                        text: qsTr("Add")
+                        enabled: assoc.canAdd
+                        onClicked: parent.submit()
+                    }
+                }
+
+                // Inline hint / validation message.
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 12
+                    color: palette.placeholderText
+                    text: assoc.isSelf ? qsTr("A tag can't imply itself.")
+                        : assoc.wouldCycle ? qsTr("That would create a loop of associations.")
+                        : assoc.exists ? qsTr("That association already exists.")
+                        : qsTr("Removing an association later won't remove tags it has already applied — "
+                               + "those must be cleared by hand.")
+                }
+
+                // As the user types "this tag", the list narrows live to rules
+                // whose antecedent matches, so they can see what already exists.
+                Label {
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    font.bold: true
+                    text: assoc.query === "" ? qsTr("All associations")
+                                             : qsTr("Associations matching “%1”").arg(antField.text.trim())
+                }
+
+                Frame {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 280
+                    padding: 0
+
+                    ListView {
+                        id: assocList
+                        anchors.fill: parent
+                        clip: true
+                        // Live-filter to rules whose antecedent matches the text.
+                        model: assoc.query === ""
+                               ? root.implications
+                               : root.implications.filter(im => im.antecedentName.toLowerCase().indexOf(assoc.query) !== -1)
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar {}
+
+                        delegate: ItemDelegate {
+                            id: arow
+                            width: ListView.view.width
+                            required property var modelData
+
+                            contentItem: RowLayout {
+                                spacing: 10
+                                AssocChip {
+                                    label: arow.modelData.antecedentName
+                                    colorSlot: arow.modelData.antecedentColorSlot
+                                }
+                                Label { text: "→"; font.pixelSize: 16; color: palette.placeholderText }
+                                AssocChip {
+                                    label: arow.modelData.consequentName
+                                    colorSlot: arow.modelData.consequentColorSlot
+                                }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    text: qsTr("Remove")
+                                    onClicked: root.library.removeTagImplication(arow.modelData.antecedentId,
+                                                                                 arow.modelData.consequentId)
+                                }
+                            }
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            width: parent.width - 32
+                            visible: assocList.count === 0
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: assoc.query === ""
+                                  ? qsTr("No associations yet. Add one above to auto-apply a tag "
+                                         + "whenever another is present.")
+                                  : qsTr("No associations match “%1”.").arg(antField.text.trim())
+                            color: palette.placeholderText
+                        }
+
+                        WheelScroller { flickable: assocList }
                     }
                 }
             }

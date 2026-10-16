@@ -56,6 +56,18 @@ struct CategoryInfo {
     int tagCount = 0; // tags assigned to this category
 };
 
+// A tag implication: every photo carrying the antecedent tag also gets the
+// consequent tag ("if this tag, then that tag"). Carries both tags' names and
+// palette slots so the manager can render them as color-coded chips.
+struct ImplicationInfo {
+    int antecedentId = -1;
+    QString antecedentName;
+    int antecedentColorSlot = -1;
+    int consequentId = -1;
+    QString consequentName;
+    int consequentColorSlot = -1;
+};
+
 struct FolderInfo {
     int id = -1;
     QString path;

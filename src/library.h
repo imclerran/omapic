@@ -29,6 +29,9 @@ class Library : public QObject {
     Q_PROPERTY(QVariantList allTags READ allTags NOTIFY tagsChanged)
     // Tag categories: {id, name, colorSlot, tagCount}, sorted by name.
     Q_PROPERTY(QVariantList categories READ categories NOTIFY categoriesChanged)
+    // Tag implications ("if this tag, then that tag"): each entry carries both
+    // tags' {id, name, colorSlot} for the manager's chips.
+    Q_PROPERTY(QVariantList tagImplications READ tagImplications NOTIFY implicationsChanged)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY foldersChanged)
     Q_PROPERTY(int orphanPhotoCount READ orphanPhotoCount NOTIFY foldersChanged)
     // A long-running background job (startup migration or folder import) is in
@@ -49,6 +52,14 @@ public:
     };
     Q_ENUM(RenameResult)
 
+    enum ImplicationResult {
+        ImplicationOk,      // added; a background pass applies it to existing photos
+        ImplicationInvalid, // missing/equal tags
+        ImplicationCycle,   // would close a loop (this -> that -> ... -> this)
+        ImplicationExists,  // that rule is already defined
+    };
+    Q_ENUM(ImplicationResult)
+
     explicit Library(QObject *parent = nullptr);
     ~Library() override;
 
@@ -57,6 +68,7 @@ public:
     TagModel *tags() const { return m_tags; }
     QVariantList allTags() const;
     QVariantList categories() const;
+    QVariantList tagImplications() const;
     QVariantList folders() const;
     int orphanPhotoCount() const;
     bool busy() const { return m_busy; }
@@ -117,6 +129,16 @@ public:
     Q_INVOKABLE void deleteCategory(int categoryId); // its tags become uncategorized
     Q_INVOKABLE void setTagCategory(int tagId, int categoryId); // categoryId < 0 clears
 
+    // --- Tag implications ("if this tag, then that tag") ---
+    // Define antecedent -> consequent, then apply it to existing photos on the
+    // worker thread. Returns an ImplicationResult. Adding one never removes tags;
+    // deleting a rule (removeTagImplication) only stops future propagation and
+    // leaves already-applied tags in place.
+    Q_INVOKABLE int addTagImplication(int antecedentId, int consequentId);
+    Q_INVOKABLE void removeTagImplication(int antecedentId, int consequentId);
+    // Whether antecedent -> consequent would close a loop, for live UI validation.
+    Q_INVOKABLE bool implicationWouldCycle(int antecedentId, int consequentId) const;
+
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.
     Q_INVOKABLE void removeFromLibrary(const QVariantList &photoIds);
@@ -150,6 +172,7 @@ signals:
     void foldersChanged();
     void tagsChanged();
     void categoriesChanged();
+    void implicationsChanged();
     void busyChanged();
     void progressChanged();
     void statusChanged();
@@ -158,6 +181,7 @@ signals:
     void requestMigration();
     void requestImport(const QString &root);
     void requestRescan();
+    void requestImplicationMigration();
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
 
@@ -184,6 +208,7 @@ private:
     void onMigrationFinished();
     void onImportFinished(const QString &root);
     void onRescanFinished();
+    void onImplicationsExpanded();
     void onTagJobFinished();
 
     mutable Database m_db;
