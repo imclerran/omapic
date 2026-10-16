@@ -54,7 +54,11 @@ ApplicationWindow {
     // Refreshed explicitly since folderEntries() isn't a notifying property.
     property var folderEntries: []
     function refreshFolderEntries() {
-        win.folderEntries = (win.viewMode === "folder") ? library.folderEntries(win.currentFolder) : []
+        // While searching, folder view flattens to recursive results — hide the
+        // navigation tiles so only the matching photos show.
+        const searching = library.filtered.searchText.length > 0
+        win.folderEntries = (win.viewMode === "folder" && !searching)
+                            ? library.folderEntries(win.currentFolder) : []
     }
 
     onViewModeChanged: {
@@ -948,7 +952,8 @@ ApplicationWindow {
         // tiles when either changes.
         function onSelectedTagIdsChanged() { win.pruneSelection(); win.refreshFolderEntries() }
         function onMatchAllChanged() { win.pruneSelection(); win.refreshFolderEntries() }
-        function onSearchTextChanged() { win.pruneSelection() }
+        // Search toggles folder view between navigation (tiles) and flat results.
+        function onSearchTextChanged() { win.pruneSelection(); win.refreshFolderEntries() }
         function onTagPresenceChanged() { win.pruneSelection() }
     }
 
@@ -1373,6 +1378,7 @@ ApplicationWindow {
                 library: library
                 entries: win.folderEntries
                 currentFolder: win.currentFolder
+                searching: library.filtered.searchText.length > 0
                 accent: win.accent
                 crop: gallerySettings.cropThumbs
                 cellSize: win.cellSize

@@ -266,7 +266,14 @@ bool PhotoFilterModel::passesFolderGate(const QString &path) const
     if (!m_folderMode)
         return true;
 
+    // While a search is active, folder view flattens to results: match every photo
+    // at or under the current folder (recursively), rather than one level at a
+    // time. At the root that is the whole library (not just orphans).
+    const bool searching = !m_search.isEmpty();
+
     if (m_folderPath.isEmpty()) {
+        if (searching)
+            return true; // searching the whole library from the root
         // Root level: show orphans only — photos under no registered folder.
         for (const QString &root : m_folderRoots) {
             if (path == root || path.startsWith(root + QLatin1Char('/')))
@@ -274,6 +281,9 @@ bool PhotoFilterModel::passesFolderGate(const QString &path) const
         }
         return true;
     }
+
+    if (searching) // the current folder's whole subtree
+        return path.startsWith(m_folderPath + QLatin1Char('/'));
 
     // Inside a folder: immediate children only (photos directly in m_folderPath,
     // not nested deeper — nested ones are reached by descending into subfolders).

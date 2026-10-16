@@ -22,6 +22,9 @@ Item {
     property int cellSize: 184
     property var selectedIds: []
     property var selectedFolders: []
+    // True while a search is active: the view shows flat recursive results, so the
+    // empty state reads as "no matches" rather than "no photos in this folder".
+    property bool searching: false
 
     // Folder cells occupy the first `folderCount` grid indices; the rest are
     // photos at proxy row (index - folderCount).
@@ -231,7 +234,8 @@ Item {
             Label {
                 anchors.centerIn: parent
                 visible: fgrid.count === 0
-                text: qsTr("This folder has no photos.")
+                text: fv.searching ? qsTr("No photos match your search.")
+                                   : qsTr("This folder has no photos.")
                 color: palette.placeholderText
             }
         }
