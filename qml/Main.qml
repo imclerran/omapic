@@ -25,6 +25,11 @@ ApplicationWindow {
     readonly property int thumbIndex: Math.max(0, Math.min(thumbSizes.length - 1, gallerySettings.thumbIndex))
     readonly property int cellSize: thumbSizes[thumbIndex]
 
+    // Below this window width the four-view segmented bar can't share the toolbar
+    // with the other controls, so it collapses to a single current-view button
+    // that opens a vertical bar popup. Tunable.
+    readonly property bool compactViews: width < 1040
+
     // Multi-selection state: ids of selected photos, plus the anchor row for
     // shift-range selection. Reassign selectedIds wholesale so bindings update.
     property var selectedIds: []
@@ -37,15 +42,34 @@ ApplicationWindow {
     property int fvAnchor: -1
     property int fvCursor: -1
 
+    // Album-view selection: ids of selected album tiles (photos reuse selectedIds),
+    // with a grid-index anchor/cursor spanning album tiles and photos — the album
+    // mirror of the folder-view selection state above.
+    property var selectedAlbums: []
+    property int avAnchor: -1
+    property int avCursor: -1
+
     // The photo the right-click context menu currently targets. Set when the
     // menu opens and read by the menu items and the remove/delete confirm dialogs.
     property int menuPhotoId: -1
     property string menuPhotoName: ""
     property bool menuPhotoIsVideo: false
+    // Albums the current context-menu target(s) already belong to, so the "Add to
+    // album" submenu can mark them (a check, or a filled star for Favorites).
+    // Recomputed each time the menu opens (see openPhotoMenu).
+    property var menuAlbumIds: []
 
-    // Central view mode: "ungrouped", "timeline", or "folder". Restored from and
-    // persisted to gallerySettings (see below). The header button group sets it.
+    // Central view mode: "ungrouped", "timeline", "folder", or "albums". Restored
+    // from and persisted to gallerySettings (see below). The header switch sets it.
     property string viewMode: "ungrouped"
+
+    // Display label for a view mode (the compact switcher's current-view button).
+    function viewLabel(mode) {
+        return mode === "timeline" ? qsTr("Timeline")
+             : mode === "folder"   ? qsTr("Folders")
+             : mode === "albums"   ? qsTr("Albums")
+                                   : qsTr("Flat")
+    }
 
     // Folder view: the directory currently shown. "" = the root level (library
     // root folders as tiles, plus any orphan photos in the grid).
@@ -61,12 +85,67 @@ ApplicationWindow {
                             ? library.folderEntries(win.currentFolder) : []
     }
 
+    // Album view: the album currently open (-1 = the album-list level), its name
+    // for the breadcrumb, and the album tiles shown at the list level.
+    property int currentAlbum: -1
+    property string currentAlbumName: ""
+    property var albumEntries: []
+    function refreshAlbumEntries() {
+        // Tiles show only at the album-list level with no search; inside an album
+        // or while searching, the grid flattens to photos (like folder view).
+        const searching = library.filtered.searchText.length > 0
+        win.albumEntries = (win.viewMode === "albums" && win.currentAlbum <= 0 && !searching)
+                           ? library.albums : []
+    }
+
+    // Open an album (drill into its photos); leave it (back to the album list).
+    function enterAlbum(id) {
+        for (let i = 0; i < win.albumEntries.length; ++i) {
+            if (win.albumEntries[i].id === id) {
+                win.currentAlbumName = win.albumEntries[i].name
+                break
+            }
+        }
+        win.currentAlbum = id // onCurrentAlbumChanged refilters + refreshes
+        win.focusGalleryView()
+    }
+    // Climb back to the album list, landing with the album just left selected and
+    // the grid focused — mirroring folder view's fvGoUp.
+    function leaveAlbum() {
+        if (win.currentAlbum <= 0)
+            return
+        const left = win.currentAlbum
+        win.currentAlbum = -1 // onCurrentAlbumChanged refilters + rebuilds tiles
+        win.currentAlbumName = ""
+        const idx = win.avAlbumIndexOf(left)
+        if (idx >= 0)
+            win.avSelectGridIndex(idx)
+        win.focusGalleryView()
+    }
+
     onViewModeChanged: {
         if (win.viewMode === "folder") {
             win.currentFolder = ""
             win.refreshFolderEntries()
         }
-        win.applyViewFilter() // batch dedup/sort/folder changes into one re-filter
+        if (win.viewMode === "albums") {
+            win.currentAlbum = -1
+            win.currentAlbumName = ""
+            win.refreshAlbumEntries()
+        }
+        win.applyViewFilter() // batch dedup/sort/folder/album changes into one re-filter
+        win.scrollGalleryToTop()
+    }
+    onCurrentAlbumChanged: {
+        // Opening/closing an album is a fresh context; drop the selection.
+        win.selectedIds = []
+        win.selectedAlbums = []
+        win.anchorIndex = -1
+        win.cursorIndex = -1
+        win.avAnchor = -1
+        win.avCursor = -1
+        win.applyViewFilter()     // restrict to the album (or back to the list)
+        win.refreshAlbumEntries()
         win.scrollGalleryToTop()
     }
     onCurrentFolderChanged: {
@@ -84,8 +163,9 @@ ApplicationWindow {
     // button. Disabled at the root (nothing to climb to).
     Shortcut {
         sequence: "Alt+Up"
-        enabled: win.viewMode === "folder" && win.currentFolder !== ""
-        onActivated: win.fvGoUp()
+        enabled: (win.viewMode === "folder" && win.currentFolder !== "")
+                 || (win.viewMode === "albums" && win.currentAlbum > 0)
+        onActivated: win.viewMode === "folder" ? win.fvGoUp() : win.leaveAlbum()
     }
 
     // --- Tab focus cycle: add-a-tag field → tag filter → gallery → main search ---
@@ -100,6 +180,7 @@ ApplicationWindow {
         Qt.callLater(function () {
             if (win.viewMode === "timeline") timelineView.focusView()
             else if (win.viewMode === "folder") folderView.focusView()
+            else if (win.viewMode === "albums") albumView.focusView()
             else grid.forceActiveFocus()
         })
     }
@@ -263,6 +344,7 @@ ApplicationWindow {
             grid.positionViewAtBeginning()
             timelineView.toTop()
             folderView.toTop()
+            albumView.toTop()
         })
     }
 
@@ -362,6 +444,8 @@ ApplicationWindow {
             timelineView.focusView()
         else if (win.viewMode === "folder")
             folderView.focusView()
+        else if (win.viewMode === "albums")
+            albumView.focusView()
         else
             grid.forceActiveFocus()
     }
@@ -376,6 +460,8 @@ ApplicationWindow {
         win.menuPhotoId = id
         win.menuPhotoName = fileName
         win.menuPhotoIsVideo = isVideo === true
+        // Which albums the target(s) are already in, for the "Add to album" marks.
+        win.menuAlbumIds = library.commonAlbumIds(win.selectedIds)
         if (win.selectedIds.length > 1)
             multiPhotoMenu.popup()
         else
@@ -523,6 +609,166 @@ ApplicationWindow {
         return -1
     }
 
+    // --- Album-view selection (mirrors the folder-view fv* helpers) -----------
+    // The album grid indexes album tiles first, then the current album's photos.
+    // Map a grid index to its item, or null for an empty row.
+    function avItemAt(gridIndex) {
+        const ac = albumView.albumCount
+        if (gridIndex < ac) {
+            const e = win.albumEntries[gridIndex]
+            return e ? { type: "album", id: e.id } : null
+        }
+        const id = library.filtered.idAt(gridIndex - ac)
+        return id >= 0 ? { type: "photo", id: id } : null
+    }
+
+    // Select the contiguous grid range [a, b] into selectedAlbums/selectedIds.
+    function avApplyRange(a, b) {
+        const lo = Math.min(a, b), hi = Math.max(a, b)
+        const albums = [], ids = []
+        for (let i = lo; i <= hi; ++i) {
+            const it = avItemAt(i)
+            if (!it) continue
+            if (it.type === "album") albums.push(it.id)
+            else ids.push(it.id)
+        }
+        selectedAlbums = albums
+        selectedIds = ids
+    }
+
+    // Click on an album tile or photo cell: plain = replace, Ctrl = toggle, Shift
+    // = range from the anchor. (Double-click enters an album; see avDoubleClick.)
+    function avClick(gridIndex, modifiers) {
+        const it = avItemAt(gridIndex)
+        if (!it)
+            return
+        if ((modifiers & Qt.ShiftModifier) && avAnchor >= 0) {
+            avCursor = gridIndex
+            avApplyRange(avAnchor, avCursor)
+        } else if (modifiers & Qt.ControlModifier) {
+            if (it.type === "album") {
+                const arr = selectedAlbums.slice()
+                const p = arr.indexOf(it.id)
+                if (p === -1) arr.push(it.id); else arr.splice(p, 1)
+                selectedAlbums = arr
+            } else {
+                const arr = selectedIds.slice()
+                const p = arr.indexOf(it.id)
+                if (p === -1) arr.push(it.id); else arr.splice(p, 1)
+                selectedIds = arr
+            }
+            avAnchor = gridIndex; avCursor = gridIndex
+        } else {
+            if (it.type === "album") { selectedAlbums = [it.id]; selectedIds = [] }
+            else { selectedIds = [it.id]; selectedAlbums = [] }
+            avAnchor = gridIndex; avCursor = gridIndex
+        }
+        albumView.focusView()
+    }
+
+    // Double-click: open an album, or view a photo.
+    function avDoubleClick(gridIndex) {
+        const ac = albumView.albumCount
+        if (gridIndex < ac) {
+            const e = win.albumEntries[gridIndex]
+            if (e)
+                win.enterAlbum(e.id)
+        } else {
+            const id = library.filtered.idAt(gridIndex - ac)
+            if (id >= 0) win.openViewer(id)
+        }
+    }
+
+    function avRightClick(gridIndex) {
+        const ac = albumView.albumCount
+        if (gridIndex < ac)
+            return // no context menu for album tiles
+        const row = gridIndex - ac
+        const id = library.filtered.idAt(row)
+        if (id < 0)
+            return
+        const ph = library.filtered.photoAt(row)
+        win.openPhotoMenu(row, id, ph ? ph.fileName : "", ph ? ph.isVideo === true : false)
+    }
+
+    // Ctrl+A in the album grid selects every album and photo shown.
+    function avSelectAll() {
+        const total = albumView.albumCount + library.filtered.count
+        if (total === 0) return
+        avApplyRange(0, total - 1)
+        avAnchor = 0; avCursor = total - 1
+    }
+
+    // Arrow-key navigation over the album grid (tiles then photos). Mirrors
+    // fvNavigate: plain arrows move a single selection, Shift+arrows extend.
+    function avNavigate(dir, extend) {
+        const total = albumView.albumCount + library.filtered.count
+        if (total === 0)
+            return
+        const cols = Math.max(1, albumView.columns)
+        let base = (avCursor >= 0 && avCursor < total) ? avCursor
+                 : (avAnchor >= 0 && avAnchor < total) ? avAnchor : 0
+        let target = base
+        if (selectedAlbums.length > 0 || selectedIds.length > 0) {
+            if (dir === "left")       target = base - 1
+            else if (dir === "right") target = base + 1
+            else if (dir === "up")    target = base - cols
+            else if (dir === "down")  target = base + cols
+        }
+        target = Math.max(0, Math.min(total - 1, target))
+        if (extend) {
+            if (!avItemAt(target)) return
+            if (avAnchor < 0 || avAnchor >= total) avAnchor = target
+            avCursor = target
+            avApplyRange(avAnchor, avCursor)
+            albumView.ensureVisible(target)
+        } else {
+            win.avSelectGridIndex(target)
+        }
+    }
+
+    // Select just the item at grid index `i` (an album or a photo), move the
+    // cursor/anchor there, and scroll it into view.
+    function avSelectGridIndex(i) {
+        const it = avItemAt(i)
+        if (!it)
+            return
+        if (it.type === "album") { selectedAlbums = [it.id]; selectedIds = [] }
+        else { selectedIds = [it.id]; selectedAlbums = [] }
+        avAnchor = i; avCursor = i
+        albumView.ensureVisible(i)
+    }
+
+    // Grid index of the album tile with this id, or -1.
+    function avAlbumIndexOf(id) {
+        for (let i = 0; i < albumView.albumCount; ++i) {
+            const e = win.albumEntries[i]
+            if (e && e.id === id)
+                return i
+        }
+        return -1
+    }
+
+    // Build the slideshow set for album view: the contents of every selected album
+    // plus every selected photo when more than one item is selected; otherwise
+    // every album shown. Inside an open album the grid is just photos, so the
+    // normal grid slideshow (over library.filtered) is used instead — see
+    // slideshowFromFocus.
+    function startAlbumSlideshow(play) {
+        let albumIds = []
+        let photoIds = []
+        const selectedCount = win.selectedAlbums.length + win.selectedIds.length
+        if (selectedCount > 1 || win.selectedAlbums.length === 1) {
+            albumIds = win.selectedAlbums.slice()
+            photoIds = win.selectedIds.slice()
+        } else {
+            for (let i = 0; i < win.albumEntries.length; ++i)
+                albumIds.push(win.albumEntries[i].id)
+        }
+        const srcs = library.albumSlideshowSources(albumIds, photoIds)
+        win.playSlideshow(srcs, "", play, false)
+    }
+
     // Descend into a folder, landing with its first item selected and the grid
     // focused so arrow keys work immediately.
     function fvEnterFolder(path) {
@@ -597,6 +843,13 @@ ApplicationWindow {
     function slideshowFromFocus(play) {
         if (win.viewMode === "folder") {
             win.startFolderSlideshow(-1, play)
+            return
+        }
+        // Album list level: play the selected album tiles (or all albums). Inside
+        // an open album the grid is photos, so fall through to the grid path over
+        // library.filtered (restricted to that album).
+        if (win.viewMode === "albums" && win.currentAlbum <= 0) {
+            win.startAlbumSlideshow(play)
             return
         }
         const startId = (anchorIndex >= 0 && anchorIndex < library.filtered.count)
@@ -868,10 +1121,13 @@ ApplicationWindow {
     // date; folder view restricts to one directory level (currentFolder); only the
     // ungrouped (flat) view collapses duplicate files.
     function applyViewFilter() {
-        library.filtered.applyView(win.viewMode === "ungrouped",  // dedupe
-                                   win.viewMode === "timeline",    // sortByDate
-                                   win.viewMode === "folder",      // folderMode
-                                   win.currentFolder)              // folderPath
+        const albums = win.viewMode === "albums"
+        library.filtered.applyView(win.viewMode === "ungrouped",     // dedupe
+                                   win.viewMode === "timeline" || albums, // sortByDate (albums: newest first)
+                                   win.viewMode === "folder",         // folderMode
+                                   win.currentFolder,                 // folderPath
+                                   albums,                            // albumMode
+                                   albums ? win.currentAlbum : -1)    // albumTagId (<=0 = list level)
         // Scope the filter sidebar's tag chips to the current folder subtree while
         // browsing folders; the whole library otherwise (and at the folder root).
         library.setTagFolderScope(win.viewMode === "folder" ? win.currentFolder : "")
@@ -935,11 +1191,16 @@ ApplicationWindow {
             // navigation (handles a now-removed currentFolder too — its photos and
             // subfolder tiles simply vanish, and Up still walks back by string).
             win.refreshFolderEntries()
+            win.refreshAlbumEntries()
             // A single image delete/remove keeps its scroll position; only broader
             // changes (folders added/removed, rescan, orphan cleanup) re-anchor.
             if (!win.preservingGalleryScroll)
                 win.scrollGalleryToTop()
         }
+        // Album membership/counts changed: rebuild the album tiles (only does work
+        // while the album list is showing; refreshAlbumEntries is a cheap no-op
+        // otherwise).
+        function onAlbumsChanged() { win.refreshAlbumEntries() }
     }
 
     // When the tag/search filter changes, drop selected photos the new filter
@@ -950,10 +1211,10 @@ ApplicationWindow {
         // The tag selection / match mode also decides which folders are shown in
         // folder view (only those holding the filtered photos), so rebuild the
         // tiles when either changes.
-        function onSelectedTagIdsChanged() { win.pruneSelection(); win.refreshFolderEntries() }
-        function onMatchAllChanged() { win.pruneSelection(); win.refreshFolderEntries() }
-        // Search toggles folder view between navigation (tiles) and flat results.
-        function onSearchTextChanged() { win.pruneSelection(); win.refreshFolderEntries() }
+        function onSelectedTagIdsChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
+        function onMatchAllChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
+        // Search toggles folder/album views between navigation (tiles) and flat results.
+        function onSearchTextChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
         function onTagPresenceChanged() { win.pruneSelection() }
     }
 
@@ -1125,12 +1386,22 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
 
             // View mode: switch the central area between the flat grid, a
-            // capture-month timeline, and a navigable folder tree. Exclusive, so
-            // exactly one is active; the choice is persisted in gallerySettings.
+            // capture-month timeline, a navigable folder tree, and albums. Exactly
+            // one is active; the choice is persisted in gallerySettings. A plain
+            // Row of segmented buttons when there's room; a single current-view
+            // button that opens a vertical bar popup when the window is narrow.
             ButtonGroup { id: viewModeGroup; exclusive: true }
             Row {
+                id: viewModeRow
                 spacing: 0
+                visible: !win.compactViews
+                // Equal-width segments: every button takes the width of the widest
+                // label, so the bar reads as even segments regardless of text.
+                readonly property real btnW: Math.max(vbTimeline.implicitWidth, vbFolder.implicitWidth,
+                                                      vbFlat.implicitWidth, vbAlbums.implicitWidth)
                 ToolButton {
+                    id: vbTimeline
+                    width: viewModeRow.btnW
                     text: qsTr("Timeline")
                     checkable: true
                     ButtonGroup.group: viewModeGroup
@@ -1140,6 +1411,8 @@ ApplicationWindow {
                     ToolTip.text: qsTr("Grouped by the month each photo was taken")
                 }
                 ToolButton {
+                    id: vbFolder
+                    width: viewModeRow.btnW
                     text: qsTr("Folders")
                     checkable: true
                     ButtonGroup.group: viewModeGroup
@@ -1149,6 +1422,8 @@ ApplicationWindow {
                     ToolTip.text: qsTr("Browse your library folders")
                 }
                 ToolButton {
+                    id: vbFlat
+                    width: viewModeRow.btnW
                     text: qsTr("Flat")
                     checkable: true
                     ButtonGroup.group: viewModeGroup
@@ -1156,6 +1431,81 @@ ApplicationWindow {
                     onClicked: win.viewMode = "ungrouped"
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("All photos in one grid")
+                }
+                ToolButton {
+                    id: vbAlbums
+                    width: viewModeRow.btnW
+                    text: qsTr("Albums")
+                    checkable: true
+                    ButtonGroup.group: viewModeGroup
+                    checked: win.viewMode === "albums"
+                    onClicked: win.viewMode = "albums"
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Your albums and favorites")
+                }
+            }
+
+            // Narrow: the current view's name + caret, opening a vertical bar. Width
+            // comes from the wide bar's widest segment (which keeps a valid implicit
+            // width even while that Row is hidden) plus room for the caret — not from
+            // the popup's own content, which has no size until it first opens. The
+            // popup matches this width and the label is centered, so the current-view
+            // label lines up with the centered dropdown labels below it.
+            ToolButton {
+                id: compactViewButton
+                visible: win.compactViews
+                // Sized to the widest view label via TextMetrics — reliable
+                // regardless of layout/visibility. As a direct RowLayout child the
+                // width must come from Layout.preferredWidth (a plain `width` is
+                // overridden by the layout). The popup and its buttons share it.
+                Layout.preferredWidth: Math.max(tmViewA.width, tmViewB.width, tmViewC.width, tmViewD.width) + 48
+                onClicked: viewModePopup.open()
+
+                TextMetrics { id: tmViewA; font: compactViewButton.font; text: win.viewLabel("timeline") }
+                TextMetrics { id: tmViewB; font: compactViewButton.font; text: win.viewLabel("folder") }
+                TextMetrics { id: tmViewC; font: compactViewButton.font; text: win.viewLabel("ungrouped") }
+                TextMetrics { id: tmViewD; font: compactViewButton.font; text: win.viewLabel("albums") }
+
+                contentItem: Item {
+                    implicitHeight: compactLabel.implicitHeight
+                    Label {
+                        id: compactLabel
+                        anchors.centerIn: parent
+                        text: win.viewLabel(win.viewMode)
+                    }
+                    Label {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "▾"
+                    }
+                }
+
+                Popup {
+                    id: viewModePopup
+                    y: parent.height
+                    x: 0
+                    padding: 0
+                    width: compactViewButton.width
+                    // A vertical segmented bar: same four checkable buttons stacked,
+                    // each filling the full width so the column is an even bar.
+                    ButtonGroup { id: viewModePopupGroup; exclusive: true }
+                    contentItem: Column {
+                        spacing: 0
+                        component VBtn: ToolButton {
+                            required property string mode
+                            width: viewModePopup.width
+                            checkable: true
+                            ButtonGroup.group: viewModePopupGroup
+                            text: win.viewLabel(mode)
+                            checked: win.viewMode === mode
+                            onClicked: { win.viewMode = mode; viewModePopup.close() }
+                        }
+                        VBtn { mode: "timeline" }
+                        VBtn { mode: "folder" }
+                        VBtn { mode: "ungrouped" }
+                        VBtn { mode: "albums" }
+                    }
                 }
             }
 
@@ -1177,13 +1527,15 @@ ApplicationWindow {
             }
 
             ToolButton {
-                // In folder view the selection may include folders as well as photos.
+                // In folder/album view the selection may include tiles as well as photos.
                 readonly property int selCount: win.selectedIds.length
                     + (win.viewMode === "folder" ? win.selectedFolders.length : 0)
+                    + (win.viewMode === "albums" ? win.selectedAlbums.length : 0)
                 text: selCount > 1 ? qsTr("▶  Slideshow (%1)").arg(selCount)
                                    : qsTr("▶  Slideshow")
                 enabled: library.filtered.count > 0
                          || (win.viewMode === "folder" && win.folderEntries.length > 0)
+                         || (win.viewMode === "albums" && win.albumEntries.length > 0)
                 onClicked: win.slideshowFromFocus(true)
             }
             ToolButton {
@@ -1389,6 +1741,38 @@ ApplicationWindow {
                 onSelectAllRequested: win.selectAll()
                 onMoveCursorRequested: (target, extend) => win.moveCursorTo(target, extend)
                 onSlideshowFromFocusRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
+                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                onTabForward: win.tabStepTo(3, true)
+                onTabBackward: win.tabStepTo(1, false)
+            }
+
+            // Albums: album tiles (2x2 cover mosaics) at the list level, then one
+            // album's photos when opened. Photos share library.filtered (restricted
+            // to the album tag) and route selection/slideshow through the same win
+            // helpers the grid uses, so behavior matches the other views.
+            AlbumView {
+                id: albumView
+                anchors.fill: parent
+                visible: win.viewMode === "albums"
+                library: library
+                entries: win.albumEntries
+                currentAlbum: win.currentAlbum
+                currentAlbumName: win.currentAlbumName
+                searching: library.filtered.searchText.length > 0
+                accent: win.accent
+                crop: gallerySettings.cropThumbs
+                cellSize: win.cellSize
+                selectedIds: win.selectedIds
+                selectedAlbums: win.selectedAlbums
+                onEnterAlbum: (id) => win.enterAlbum(id)
+                onGoUp: win.leaveAlbum()
+                onCellClicked: (gridIndex, modifiers) => win.avClick(gridIndex, modifiers)
+                onCellDoubleClicked: (gridIndex) => win.avDoubleClick(gridIndex)
+                onCellRightClicked: (gridIndex) => win.avRightClick(gridIndex)
+                onPhotoFavoriteToggled: (id) => library.toggleFavorite(id)
+                onSelectAllRequested: win.avSelectAll()
+                onCursorMove: (dir, extend) => win.avNavigate(dir, extend)
+                onSlideshowRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
                 // Tab cycle: gallery → main search; Shift+Tab → tag filter.
                 onTabForward: win.tabStepTo(3, true)
                 onTabBackward: win.tabStepTo(1, false)
@@ -1616,6 +2000,72 @@ ApplicationWindow {
         }
     }
 
+    // "Add to album" submenu, shared by the single- and multi-photo menus. Acts on
+    // win.selectedIds (openPhotoMenu normalizes it to the clicked photo or the
+    // whole selection). "New album…" is pinned on top; the album list scrolls when
+    // long (Fusion). allAlbums is unfiltered, so every album is offered regardless
+    // of the current tag/search filter.
+    component AddToAlbumMenu: Menu {
+        title: qsTr("Add to album")
+        MenuItem {
+            text: qsTr("New album…")
+            onTriggered: newAlbumDialog.open()
+        }
+        MenuSeparator {}
+        Repeater {
+            model: library.allAlbums
+            delegate: MenuItem {
+                required property var modelData
+                // Whether the target photo(s) are already in this album, so the
+                // user can see current membership: a check for a regular album, a
+                // filled vs empty star for Favorites.
+                readonly property bool member: win.menuAlbumIds.indexOf(modelData.id) !== -1
+                text: (modelData.favorite ? (member ? "★  " : "☆  ")
+                                          : (member ? "✓  " : "      ")) + modelData.name
+                onTriggered: library.addPhotosToAlbum(win.selectedIds, modelData.id)
+            }
+        }
+    }
+
+    // Create-album dialog (opened from the "New album…" menu item). Creates the
+    // album and adds the current selection to it; reuses an existing album of the
+    // same name. Refuses a name already used by a non-album tag.
+    Dialog {
+        id: newAlbumDialog
+        title: qsTr("New album")
+        anchors.centerIn: parent
+        modal: true
+        width: 360
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: { albumNameField.text = ""; albumNameField.forceActiveFocus() }
+        onAccepted: {
+            const name = albumNameField.text.trim()
+            if (name.length === 0)
+                return
+            const id = library.createAlbumWithPhotos(name, win.selectedIds)
+            if (id < 0)
+                win.toast(qsTr("A tag already uses that name"))
+        }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: win.selectedIds.length > 1
+                      ? qsTr("Create an album with these %1 photos:").arg(win.selectedIds.length)
+                      : qsTr("Create an album and add this photo to it:")
+            }
+            TextField {
+                id: albumNameField
+                Layout.fillWidth: true
+                placeholderText: qsTr("Album name")
+                onAccepted: newAlbumDialog.accept()
+            }
+        }
+    }
+
     // Right-click context menu for a single photo (win.menuPhotoId). A
     // multi-selection gets its own menu below.
     Menu {
@@ -1630,6 +2080,9 @@ ApplicationWindow {
             text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
             onTriggered: win.openViewer(win.menuPhotoId)
         }
+
+        MenuSeparator {}
+        AddToAlbumMenu {}
 
         // Theme actions apply to still images only.
         MenuSeparator { visible: !win.menuPhotoIsVideo; height: visible ? implicitHeight : 0 }
@@ -1692,6 +2145,8 @@ ApplicationWindow {
             onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
 
+        MenuSeparator {}
+        AddToAlbumMenu {}
         MenuSeparator {}
 
         MenuItem {

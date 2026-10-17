@@ -18,12 +18,17 @@ Item {
     property string filePath: ""
     property bool isVideo: false
     property int tagCount: 0
+    property bool favorite: false
 
     signal clicked(int modifiers)
     signal doubleClicked()
     signal rightClicked()
+    signal favoriteToggled()
 
     SystemPalette { id: sys }
+
+    // Reveal the (empty) star on hover; a favorited photo always shows its star.
+    HoverHandler { id: cardHover }
 
     Rectangle {
         anchors.fill: parent
@@ -139,5 +144,37 @@ Item {
                 root.clicked(mouse.modifiers)
         }
         onDoubleClicked: root.doubleClicked()
+    }
+
+    // Favorite star, top-left. Declared after the click MouseArea so it sits on
+    // top and its own clicks toggle the favorite instead of selecting the photo.
+    // Shown when favorited, or on hover so it reads as "click to favorite".
+    Rectangle {
+        id: starButton
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.margins: 10
+        width: 28
+        height: 28
+        radius: width / 2
+        visible: root.favorite || cardHover.hovered || starArea.containsMouse
+        color: Qt.rgba(0, 0, 0, 0.45)
+
+        Label {
+            anchors.centerIn: parent
+            // Nudge up a touch so the glyph looks optically centered in the disc.
+            anchors.verticalCenterOffset: -1
+            text: root.favorite ? "★" : "☆"
+            font.pixelSize: 18
+            color: root.favorite ? "#ffd24a" : "white"
+        }
+
+        MouseArea {
+            id: starArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.favoriteToggled()
+        }
     }
 }

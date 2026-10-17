@@ -31,6 +31,7 @@ qt_add_qml_module(omapic
         qml/TimelineView.qml
         qml/FolderView.qml
         qml/FolderMosaicCell.qml
+        qml/AlbumView.qml
     SOURCES
         src/photo.h
         src/database.h src/database.cpp

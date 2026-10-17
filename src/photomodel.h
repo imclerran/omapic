@@ -28,6 +28,7 @@ public:
         DateTakenRole, // capture time in Unix seconds (0 = unknown)
         MonthKeyRole,  // "yyyy-MM" of the capture time, the timeline section key
         IsDuplicateRole, // true for a non-representative duplicate (see Photo)
+        FavoriteRole,  // true when the photo is in the hidden Favorites album
     };
 
     explicit PhotoModel(QObject *parent = nullptr);
@@ -41,7 +42,8 @@ public:
     int rowForId(int id) const;
     Q_INVOKABLE bool contains(int id) const { return rowForId(id) >= 0; }
     Photo photoById(int id) const;
-    void setTagsForId(int photoId, const QSet<int> &ids, const QStringList &names);
+    const QVector<Photo> &photos() const { return m_photos; }
+    void setTagsForId(int photoId, const QSet<int> &ids, const QStringList &names, bool favorite);
 
 private:
     QVector<Photo> m_photos;

@@ -135,13 +135,15 @@ void PhotoFilterModel::setDedupe(bool on)
 }
 
 void PhotoFilterModel::applyView(bool dedupe, bool sortByDate, bool folderMode,
-                                 const QString &folderPath)
+                                 const QString &folderPath, bool albumMode, int albumTagId)
 {
     bool changed = false;
     if (m_dedupe != dedupe) { m_dedupe = dedupe; emit dedupeChanged(); changed = true; }
     if (m_sortByDate != sortByDate) { m_sortByDate = sortByDate; emit sortByDateChanged(); changed = true; }
     if (m_folderMode != folderMode) { m_folderMode = folderMode; emit folderModeChanged(); changed = true; }
     if (m_folderPath != folderPath) { m_folderPath = folderPath; emit folderPathChanged(); changed = true; }
+    if (m_albumMode != albumMode) { m_albumMode = albumMode; changed = true; }
+    if (m_albumTagId != albumTagId) { m_albumTagId = albumTagId; changed = true; }
     if (!changed)
         return;
     // One re-filter + re-sort against the final mode, rather than one per setter.
@@ -156,6 +158,19 @@ void PhotoFilterModel::setFolderRoots(const QStringList &roots)
     m_folderRoots = roots;
     // Only matters at the folder-view root (orphan detection); re-filter there.
     if (m_folderMode && m_folderPath.isEmpty()) {
+        invalidateRowFilter();
+        emit countChanged();
+    }
+}
+
+void PhotoFilterModel::setAlbumTagIds(const QList<int> &ids)
+{
+    const QSet<int> next(ids.begin(), ids.end());
+    if (next == m_albumTagIds)
+        return;
+    m_albumTagIds = next;
+    // Only affects the flattened album-list search; re-filter there.
+    if (m_albumMode && m_albumTagId <= 0 && !m_search.isEmpty()) {
         invalidateRowFilter();
         emit countChanged();
     }
@@ -186,6 +201,7 @@ QVariantMap PhotoFilterModel::photoAt(int row) const
         {QStringLiteral("fileName"), data(idx, PhotoModel::FileNameRole).toString()},
         {QStringLiteral("isVideo"), data(idx, PhotoModel::IsVideoRole).toBool()},
         {QStringLiteral("tagCount"), data(idx, PhotoModel::TagsRole).toStringList().size()},
+        {QStringLiteral("favorite"), data(idx, PhotoModel::FavoriteRole).toBool()},
     };
 }
 
@@ -308,6 +324,29 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
         const QString path = sourceModel()->data(idx, PhotoModel::FilePathRole).toString();
         if (!passesFolderGate(path))
             return false;
+    }
+
+    // Album-view gate (no-op outside album mode). Inside an album, require the
+    // photo to carry that album's tag. At the album-list level the grid is hidden,
+    // so show nothing unless a search is active — then flatten to every photo that
+    // belongs to some album (mirroring folder view's flattened search).
+    if (m_albumMode) {
+        const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
+        if (m_albumTagId > 0) {
+            bool has = false;
+            for (const QVariant &v : raw)
+                if (v.toInt() == m_albumTagId) { has = true; break; }
+            if (!has)
+                return false;
+        } else {
+            if (m_search.isEmpty())
+                return false; // album-list level shows tiles, not a photo grid
+            bool inAny = false;
+            for (const QVariant &v : raw)
+                if (m_albumTagIds.contains(v.toInt())) { inAny = true; break; }
+            if (!inAny)
+                return false;
+        }
     }
 
     // Tag filter.

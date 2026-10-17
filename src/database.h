@@ -65,7 +65,28 @@ public:
     void deleteTag(int tagId); // delete a tag and all its photo links
 
     // Tags on one photo (with category info; count is unused), sorted by name.
+    // Excludes reserved/system tags (album membership, favorites), so the detail
+    // panel never shows them as chips.
     QVector<TagInfo> photoTags(int photoId);
+    // Every tag id on a photo, including reserved/system ones — used to refresh the
+    // in-memory model (the album filter and the favorite star need them).
+    QSet<int> photoTagIds(int photoId);
+
+    // --- Albums (reserved hidden "Albums" tag-category; Favorites is one album) ---
+    // The reserved ids, resolved/created in open(). favoritesTagId's album is
+    // always listed first and can't be renamed or deleted.
+    int albumCategoryId() const { return m_albumCategoryId; }
+    int favoritesTagId() const { return m_favoritesTagId; }
+    // Album tags as {id, name, favorite}, Favorites first then by name. Metadata
+    // only — per-album counts/covers are computed from the active photo set in
+    // Library, so they honor the current tag filter (exactly like folders).
+    QVector<AlbumInfo> albumTags();
+    QList<int> albumTagIds();          // ids of every album tag (incl. Favorites)
+    int tagCategoryId(int tagId);      // a tag's category id, -1 if none/unknown
+    // Create an album (a tag in the Albums category). Returns its id; reuses an
+    // existing album of the same name (even a hidden/empty one). Returns -1 when
+    // the name is blank or already belongs to a non-album tag.
+    int createAlbum(const QString &name);
 
     // --- Tag implications ("if this tag, then that tag") ---
     // Every implication with both tags' names/colors, for the manager. Sorted by
@@ -134,7 +155,17 @@ private:
     // SQL boolean (for the given photos-table alias) that is true when a photo is
     // in the active set: an orphan, or under at least one enabled folder.
     QString activeClause(const QString &alias) const;
+    // SQL boolean (for the given tags-table alias) that is true for a user-visible
+    // tag: one not in a reserved (system) category. Used to keep album/favorites
+    // tags out of every tag list, autocomplete, and the detail panel.
+    QString nonSystemTagClause(const QString &alias) const;
+    // Resolve (creating if needed) the reserved Albums category and Favorites tag,
+    // caching their ids. Idempotent; called at the end of open().
+    void ensureAlbumsCategory();
+    void ensureFavoritesAlbum();
 
     QSqlDatabase m_db;
     QString m_connectionName;
+    int m_albumCategoryId = -1; // reserved "Albums" category (system = 1)
+    int m_favoritesTagId = -1;  // reserved "Favorites" album tag (system = 1)
 };

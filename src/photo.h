@@ -32,6 +32,12 @@ struct Photo {
     // the same content hash was added earlier. Hidden only in the ungrouped view
     // (timeline and folder views show every copy). See Database::loadPhotos.
     bool isDuplicate = false;
+    // True when this photo carries the hidden Favorites tag. Drives the thumbnail
+    // star; favorites are a reserved album (see AlbumInfo / Database album APIs).
+    bool favorite = false;
+    // Every tag id on the photo, including the hidden album/favorites tags (the
+    // album filter and the star need them); tagNames carries only the user-visible
+    // (non-system) names, so album membership never shows as a chip or tag badge.
     QSet<int> tagIds;
     QStringList tagNames;
 };
@@ -66,6 +72,14 @@ struct ImplicationInfo {
     int consequentId = -1;
     QString consequentName;
     int consequentColorSlot = -1;
+};
+
+// An album: a tag in the reserved (hidden) "Albums" category. Favorites is the
+// one album with favorite == true, always sorted first.
+struct AlbumInfo {
+    int id = -1;
+    QString name;
+    bool favorite = false;
 };
 
 struct FolderInfo {
