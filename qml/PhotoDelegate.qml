@@ -49,8 +49,12 @@ Item {
             fillMode: root.crop ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
             cache: true
-            sourceSize.width: 320
-            sourceSize.height: 320
+            // Request at the cell's own size (Qt folds in the device pixel ratio)
+            // so thumbnails stay crisp on large / HiDPI grids. The provider caches
+            // each size separately and builds them lazily, so only the sizes
+            // actually shown are ever generated.
+            sourceSize.width: root.width > 0 ? root.width : 320
+            sourceSize.height: root.height > 0 ? root.height : 320
             clip: true
         }
 
