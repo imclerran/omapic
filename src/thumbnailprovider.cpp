@@ -22,17 +22,21 @@
 
 namespace {
 
-constexpr int kThumbBox = 320;
+// Box size used when a request carries no usable size, and the ceiling we'll
+// ever generate (guards against an absurd request blowing up the cache / memory;
+// 1024 covers the largest cell on a 3x display).
+constexpr int kDefaultBox = 320;
+constexpr int kMaxBox = 1024;
 
 // Render a representative frame of a video to `cachePath` using
 // ffmpegthumbnailer (runs on this pool worker thread, so blocking is fine).
-QImage makeVideoThumbnail(const QString &path, const QString &cachePath)
+QImage makeVideoThumbnail(const QString &path, const QString &cachePath, int box)
 {
     QProcess proc;
     proc.start(QStringLiteral("ffmpegthumbnailer"),
                {QStringLiteral("-i"), path,
                 QStringLiteral("-o"), cachePath,
-                QStringLiteral("-s"), QString::number(kThumbBox),
+                QStringLiteral("-s"), QString::number(box),
                 QStringLiteral("-q"), QStringLiteral("8")});
     // Generous ceiling; a frame grab is normally well under a second.
     if (!proc.waitForStarted(5000))
@@ -50,7 +54,11 @@ QImage makeVideoThumbnail(const QString &path, const QString &cachePath)
     return {};
 }
 
-QImage makeThumbnail(const QString &rawId, const QString &cacheDir)
+// `box` is the longest-edge target in physical pixels (the display already
+// folds in the device pixel ratio, see requestImageResponse). Each size is
+// cached separately and generated lazily — the grid only ever asks for the
+// cell sizes it actually shows, so caches for other sizes never get built.
+QImage makeThumbnail(const QString &rawId, const QString &cacheDir, int box)
 {
     // The provider id is the local file path; fall back to percent-decoding.
     QString path = rawId;
@@ -64,10 +72,11 @@ QImage makeThumbnail(const QString &rawId, const QString &cacheDir)
     if (!fi.exists())
         return {};
 
-    // Key on path + mtime + box size, so edited files regenerate automatically.
+    // Key on path + mtime + box size, so edited files regenerate automatically
+    // and each requested size gets its own cache entry.
     const QByteArray keySrc = (path + QLatin1Char('|')
                                + QString::number(fi.lastModified().toSecsSinceEpoch())
-                               + QLatin1Char('|') + QString::number(kThumbBox))
+                               + QLatin1Char('|') + QString::number(box))
                                   .toUtf8();
     const QString key = QString::fromLatin1(
         QCryptographicHash::hash(keySrc, QCryptographicHash::Sha1).toHex());
@@ -78,13 +87,13 @@ QImage makeThumbnail(const QString &rawId, const QString &cacheDir)
         return img;
 
     if (isVideoPath(path))
-        return makeVideoThumbnail(path, cachePath);
+        return makeVideoThumbnail(path, cachePath, box);
 
     QImageReader reader(path);
     reader.setAutoTransform(true); // honour EXIF orientation
     const QSize orig = reader.size();
     if (orig.isValid()) {
-        const QSize target = orig.scaled(kThumbBox, kThumbBox, Qt::KeepAspectRatio);
+        const QSize target = orig.scaled(box, box, Qt::KeepAspectRatio);
         if (!target.isEmpty() && target.width() <= orig.width())
             reader.setScaledSize(target); // fast downscale during decode
     }
@@ -98,16 +107,17 @@ QImage makeThumbnail(const QString &rawId, const QString &cacheDir)
 
 class ThumbnailResponse : public QQuickImageResponse, public QRunnable {
 public:
-    ThumbnailResponse(const QString &id, const QString &cacheDir)
+    ThumbnailResponse(const QString &id, const QString &cacheDir, int box)
         : m_id(id)
         , m_cacheDir(cacheDir)
+        , m_box(box)
     {
         setAutoDelete(false); // the engine owns and deletes the response
     }
 
     void run() override
     {
-        m_image = makeThumbnail(m_id, m_cacheDir);
+        m_image = makeThumbnail(m_id, m_cacheDir, m_box);
         emit finished();
     }
 
@@ -127,6 +137,7 @@ public:
 private:
     QString m_id;
     QString m_cacheDir;
+    int m_box;
     QImage m_image;
 };
 
@@ -146,8 +157,13 @@ ThumbnailProvider::ThumbnailProvider()
 QQuickImageResponse *ThumbnailProvider::requestImageResponse(const QString &id,
                                                              const QSize &requestedSize)
 {
-    Q_UNUSED(requestedSize)
-    auto *response = new ThumbnailResponse(id, m_cacheDir);
+    // The QML Image's sourceSize arrives here already multiplied by the window's
+    // device pixel ratio, so honouring it gives crisp thumbnails on HiDPI grids
+    // without any dpr math of our own. Fall back to a sane box when a caller sets
+    // no sourceSize, and cap it so an outlandish request can't bloat the cache.
+    const int longest = qMax(requestedSize.width(), requestedSize.height());
+    const int box = longest > 0 ? qMin(longest, kMaxBox) : kDefaultBox;
+    auto *response = new ThumbnailResponse(id, m_cacheDir, box);
     m_pool.start(response);
     return response;
 }
