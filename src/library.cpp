@@ -76,6 +76,7 @@ Library::Library(QObject *parent)
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
     updateFolderRoots();
+    updateAlbumTagIds();
     // Keep the folder-view's orphan detection in step as folders come and go.
     connect(this, &Library::foldersChanged, this, &Library::updateFolderRoots);
 
@@ -417,6 +418,44 @@ QStringList Library::folderSlideshowSources(const QStringList &folderPaths,
     return out;
 }
 
+QStringList Library::albumSlideshowSources(const QVariantList &albumIds,
+                                           const QVariantList &photoIds) const
+{
+    QSet<int> albums;
+    for (const QVariant &v : albumIds)
+        albums.insert(v.toInt());
+
+    // Active photos in any of the selected albums, newest first (the album view's
+    // order), de-duped across albums by photo id.
+    QVector<const Photo *> members;
+    QSet<int> seen;
+    for (const Photo &p : m_photos->photos()) {
+        bool inAlbum = false;
+        for (int aid : albums)
+            if (p.tagIds.contains(aid)) { inAlbum = true; break; }
+        if (inAlbum && !seen.contains(p.id)) {
+            seen.insert(p.id);
+            members.append(&p);
+        }
+    }
+    std::sort(members.begin(), members.end(), [](const Photo *a, const Photo *b) {
+        if (a->takenAt != b->takenAt)
+            return a->takenAt > b->takenAt; // newest first
+        return a->fileName.compare(b->fileName, Qt::CaseInsensitive) < 0;
+    });
+
+    QStringList out;
+    for (const Photo *p : members)
+        out.append(QUrl::fromLocalFile(p->path).toString());
+    // Loose selected photos (mirrors the folder path; uncommon in album view).
+    for (const QVariant &v : photoIds) {
+        const Photo ph = m_photos->photoById(v.toInt());
+        if (ph.id >= 0 && !seen.contains(ph.id))
+            out.append(QUrl::fromLocalFile(ph.path).toString());
+    }
+    return out;
+}
+
 void Library::removeFolder(int folderId)
 {
     const QString path = m_db.folderPath(folderId);
@@ -705,6 +744,171 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
     refreshTags();
 }
 
+QVariantList Library::albums() const
+{
+    const QVector<AlbumInfo> metas = m_db.albumTags(); // Favorites first, then name
+    if (metas.isEmpty())
+        return {};
+
+    // Count members (and gather up-to-4 cover thumbs) per album over the active
+    // photo set, honoring the current tag filter — so album tiles narrow exactly
+    // like folder tiles. tagIds includes the hidden album ids, so membership is a
+    // plain set test.
+    const QList<int> sel = m_tags->selectedTagIds();
+    const QSet<int> selSet(sel.begin(), sel.end());
+    const bool filtering = !selSet.isEmpty();
+
+    struct Acc { int count = 0; QStringList thumbs; };
+    QHash<int, Acc> acc;
+    for (const Photo &p : m_photos->photos()) {
+        if (filtering) {
+            bool ok;
+            if (m_matchAll) {
+                ok = true;
+                for (int t : selSet)
+                    if (!p.tagIds.contains(t)) { ok = false; break; }
+            } else {
+                ok = false;
+                for (int t : selSet)
+                    if (p.tagIds.contains(t)) { ok = true; break; }
+            }
+            if (!ok)
+                continue;
+        }
+        for (const AlbumInfo &a : metas) {
+            if (!p.tagIds.contains(a.id))
+                continue;
+            Acc &x = acc[a.id];
+            ++x.count;
+            if (x.thumbs.size() < 4)
+                x.thumbs.append(p.path);
+        }
+    }
+
+    QVariantList out;
+    for (const AlbumInfo &a : metas) {
+        const Acc x = acc.value(a.id);
+        // Hide empty albums, like empty tags/categories. Favorites stays visible
+        // when not filtering (a permanent destination), even with no photos yet.
+        if (x.count == 0 && !(a.favorite && !filtering))
+            continue;
+        out.append(QVariantMap{
+            {QStringLiteral("type"), QStringLiteral("album")},
+            {QStringLiteral("id"), a.id},
+            {QStringLiteral("name"), a.name},
+            {QStringLiteral("favorite"), a.favorite},
+            {QStringLiteral("count"), x.count},
+            {QStringLiteral("thumbs"), x.thumbs},
+        });
+    }
+    return out;
+}
+
+QVariantList Library::allAlbums() const
+{
+    QVariantList out;
+    for (const AlbumInfo &a : m_db.albumTags()) {
+        out.append(QVariantMap{
+            {QStringLiteral("id"), a.id},
+            {QStringLiteral("name"), a.name},
+            {QStringLiteral("favorite"), a.favorite},
+        });
+    }
+    return out;
+}
+
+int Library::favoriteAlbumId() const
+{
+    return m_db.favoritesTagId();
+}
+
+int Library::createAlbumWithPhotos(const QString &name, const QVariantList &photoIds)
+{
+    const int id = m_db.createAlbum(name);
+    if (id < 0)
+        return -1;
+    updateAlbumTagIds();
+    if (!photoIds.isEmpty())
+        addPhotosToAlbum(photoIds, id); // adds + refreshes (emits albumsChanged)
+    else
+        emit albumsChanged();
+    return id;
+}
+
+void Library::addPhotosToAlbum(const QVariantList &photoIds, int albumId)
+{
+    if (albumId < 0 || photoIds.isEmpty())
+        return;
+    const QString name = m_db.tagName(albumId);
+    if (name.isEmpty())
+        return;
+    // Reuse the by-name tag-apply path: it handles the bulk-worker threshold,
+    // content_tags archival (so album membership survives moves/re-imports), the
+    // in-place model update, and the refresh. ensureTag re-resolves the same
+    // existing album tag (names are unique), leaving its category intact.
+    addTagToPhotos(photoIds, name);
+}
+
+void Library::removePhotosFromAlbum(const QVariantList &photoIds, int albumId)
+{
+    if (albumId < 0 || photoIds.isEmpty())
+        return;
+    removeTagFromPhotos(photoIds, albumId); // by id; handles bulk + refresh
+}
+
+QVariantList Library::commonAlbumIds(const QVariantList &photoIds) const
+{
+    QVariantList out;
+    if (photoIds.isEmpty())
+        return out;
+    const QList<int> albumList = m_db.albumTagIds();
+    const QSet<int> albumSet(albumList.begin(), albumList.end());
+
+    QSet<int> common;
+    bool first = true;
+    for (const QVariant &v : photoIds) {
+        const Photo p = m_photos->photoById(v.toInt());
+        if (p.id < 0)
+            continue;
+        QSet<int> photoAlbums;
+        for (int t : p.tagIds)
+            if (albumSet.contains(t))
+                photoAlbums.insert(t);
+        if (first) { common = photoAlbums; first = false; }
+        else common.intersect(photoAlbums);
+        if (common.isEmpty())
+            break;
+    }
+    for (int id : common)
+        out.append(id);
+    return out;
+}
+
+void Library::toggleFavorite(int photoId)
+{
+    if (photoId < 0)
+        return;
+    const Photo p = m_photos->photoById(photoId);
+    const bool isFav = p.tagIds.contains(m_db.favoritesTagId());
+    setFavorite(QVariantList{photoId}, !isFav);
+}
+
+void Library::setFavorite(const QVariantList &photoIds, bool favorite)
+{
+    const int favId = m_db.favoritesTagId();
+    if (favId < 0 || photoIds.isEmpty())
+        return;
+    if (favorite)
+        addPhotosToAlbum(photoIds, favId);
+    else
+        removeTagFromPhotos(photoIds, favId);
+}
+
+void Library::updateAlbumTagIds()
+{
+    m_filtered->setAlbumTagIds(m_db.albumTagIds());
+}
+
 QVariantList Library::commonTags(const QVariantList &photoIds) const
 {
     QHash<int, int> counts;
@@ -937,13 +1141,15 @@ int Library::renameTag(int tagId, const QString &newName)
 
 void Library::applyTags(int photoId)
 {
-    QSet<int> ids;
+    // tagIds carries every tag (including the hidden album/favorites ones the album
+    // filter and the star need); the visible names come from photoTags(), which
+    // already drops system tags.
+    const QSet<int> ids = m_db.photoTagIds(photoId);
     QStringList names;
-    for (const TagInfo &t : m_db.photoTags(photoId)) {
-        ids.insert(t.id);
+    for (const TagInfo &t : m_db.photoTags(photoId))
         names.append(t.name);
-    }
-    m_photos->setTagsForId(photoId, ids, names);
+    const bool favorite = ids.contains(m_db.favoritesTagId());
+    m_photos->setTagsForId(photoId, ids, names, favorite);
 }
 
 void Library::setMatchAll(bool matchAll)
@@ -1015,4 +1221,7 @@ void Library::refreshTags()
     // lockstep with the tag list.
     emit categoriesChanged();
     emit implicationsChanged();
+    // Album tiles count only active photos (and honor the tag filter), so refresh
+    // them in lockstep too.
+    emit albumsChanged();
 }

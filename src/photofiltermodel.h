@@ -77,11 +77,16 @@ public:
     // together; setting them one at a time made the proxy re-sort once per change
     // — e.g. a wasted name-sort before the date-sort when opening the timeline.
     Q_INVOKABLE void applyView(bool dedupe, bool sortByDate, bool folderMode,
-                               const QString &folderPath);
+                               const QString &folderPath, bool albumMode = false,
+                               int albumTagId = -1);
 
     // The registered folder roots, used to tell orphan photos (shown at the
     // folder-view root) from foldered ones. Set by Library; not a QML property.
     void setFolderRoots(const QStringList &roots);
+
+    // Every album tag id (Library keeps this in step), so the album view's
+    // flattened search ("photos in any album") can be answered from a row's tags.
+    void setAlbumTagIds(const QList<int> &ids);
 
     int count() const { return rowCount(); }
 
@@ -139,6 +144,9 @@ private:
     bool m_folderMode = false;
     QString m_folderPath;
     bool m_dedupe = true; // ungrouped is the default view, which dedupes
+    bool m_albumMode = false;   // album view: restrict to one album (or the list level)
+    int m_albumTagId = -1;      // the album being viewed; <= 0 = the album-list level
     QStringList m_folderRoots;
+    QSet<int> m_albumTagIds;    // every album tag id (for the flattened album search)
     QCollator m_collator;
 };

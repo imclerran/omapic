@@ -55,6 +55,8 @@ QVariant PhotoModel::data(const QModelIndex &index, int role) const
     }
     case IsDuplicateRole:
         return p.isDuplicate;
+    case FavoriteRole:
+        return p.favorite;
     default:
         return {};
     }
@@ -73,6 +75,7 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
         {DateTakenRole, "takenAt"},
         {MonthKeyRole, "monthKey"},
         {IsDuplicateRole, "isDuplicate"},
+        {FavoriteRole, "favorite"},
     };
 }
 
@@ -108,7 +111,7 @@ Photo PhotoModel::photoById(int id) const
     return m_photos.at(row);
 }
 
-void PhotoModel::setTagsForId(int photoId, const QSet<int> &ids, const QStringList &names)
+void PhotoModel::setTagsForId(int photoId, const QSet<int> &ids, const QStringList &names, bool favorite)
 {
     const int row = rowForId(photoId);
     if (row < 0)
@@ -116,6 +119,7 @@ void PhotoModel::setTagsForId(int photoId, const QSet<int> &ids, const QStringLi
     Photo &p = m_photos[row];
     p.tagIds = ids;
     p.tagNames = names;
+    p.favorite = favorite;
     const QModelIndex idx = index(row, 0);
-    emit dataChanged(idx, idx, {TagsRole, TagIdsRole});
+    emit dataChanged(idx, idx, {TagsRole, TagIdsRole, FavoriteRole});
 }

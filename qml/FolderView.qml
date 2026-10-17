@@ -37,6 +37,10 @@ Item {
         target: fv.library ? fv.library.filtered : null
         function onDataChanged() { fv.dataRevision++ }
     }
+    // A favorite/tag change made in another view can remove or alter rows without
+    // a dataChanged this view observes, leaving its cached photoAt() snapshots
+    // stale. Re-fetch them whenever the view is (re)shown.
+    onVisibleChanged: if (visible) fv.dataRevision++
 
     signal goUp()                            // climb one level (Up button / Alt+Up)
     signal enterFolder(string path)          // descend into a folder (Enter on a selected folder)
@@ -195,10 +199,12 @@ Item {
                         filePath: cell.photo ? cell.photo.filePath : ""
                         isVideo: cell.photo ? (cell.photo.isVideo === true) : false
                         tagCount: cell.photo ? cell.photo.tagCount : 0
+                        favorite: cell.photo ? (cell.photo.favorite === true) : false
                         selected: cell.photo ? (fv.selectedIds.indexOf(cell.photo.id) !== -1) : false
                         onClicked: (modifiers) => { if (cell.photo) fv.cellClicked(cell.index, modifiers) }
                         onDoubleClicked: { if (cell.photo) fv.cellDoubleClicked(cell.index) }
                         onRightClicked: { if (cell.photo) fv.cellRightClicked(cell.index) }
+                        onFavoriteToggled: { if (cell.photo) fv.library.toggleFavorite(cell.photo.id) }
                     }
                 }
             }

@@ -68,6 +68,10 @@ Item {
     function refresh() {
         if (!tv.visible || !tv.library)
             return
+        // Force every cached photoAt() snapshot to re-fetch. A favorite (or tag)
+        // changed in another view removes/alters rows without a dataChanged this
+        // view sees, so re-fetch on every (re)show to avoid a stale star/badge.
+        tv.dataRevision++
         tv.groups = tv.library.filtered.monthGroups()
         list.model = tv.groups
     }
@@ -253,6 +257,7 @@ Item {
                         filePath: hasPhoto ? photo.filePath : ""
                         isVideo: hasPhoto ? (photo.isVideo === true) : false
                         tagCount: hasPhoto ? photo.tagCount : 0
+                        favorite: hasPhoto ? (photo.favorite === true) : false
                         selected: hasPhoto ? (tv.selectedIds.indexOf(photo.id) !== -1) : false
 
                         onClicked: (modifiers) => {
@@ -262,6 +267,7 @@ Item {
                         onRightClicked: {
                             if (hasPhoto) tv.photoRightClicked(proxyRow, photo.id, photo.fileName, photo.isVideo === true)
                         }
+                        onFavoriteToggled: { if (hasPhoto) tv.library.toggleFavorite(photo.id) }
                     }
                 }
             }

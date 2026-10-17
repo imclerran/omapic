@@ -12,6 +12,18 @@
 #include <QSqlQuery>
 #include <QVariant>
 
+namespace {
+// Album tags are stored under a reserved, namespaced prefix so an album named
+// "Destiny" can't collide with a user tag "Destiny" (tag names are globally
+// unique). The prefix is internal — the UI always shows the display name.
+const QString kAlbumPrefix = QStringLiteral("_album:");
+QString albumStoredName(const QString &display) { return kAlbumPrefix + display.trimmed(); }
+QString albumDisplayName(const QString &stored)
+{
+    return stored.startsWith(kAlbumPrefix) ? stored.mid(kAlbumPrefix.size()) : stored;
+}
+}
+
 bool Database::open(const QString &path, const QString &connectionName)
 {
     m_connectionName = connectionName.isEmpty()
@@ -98,6 +110,14 @@ bool Database::open(const QString &path, const QString &connectionName)
             "REFERENCES tag_categories(id) ON DELETE SET NULL"));
     }
 
+    // Albums reuse the tag system: a reserved "Albums" category (system = 1) whose
+    // tags are albums, hidden from every normal tag list. The Favorites album is
+    // the one tag also marked system = 1, so it sorts first and is permanent.
+    if (!hasColumn(QStringLiteral("tag_categories"), QStringLiteral("system")))
+        q.exec(QStringLiteral("ALTER TABLE tag_categories ADD COLUMN system INTEGER NOT NULL DEFAULT 0"));
+    if (!hasColumn(QStringLiteral("tags"), QStringLiteral("system")))
+        q.exec(QStringLiteral("ALTER TABLE tags ADD COLUMN system INTEGER NOT NULL DEFAULT 0"));
+
     // Capture time in Unix seconds for the timeline view (EXIF date taken, or the
     // file mtime when there's no EXIF date). NULL until backfilled: the one-time
     // worker migration fills it for pre-existing rows (see LibraryWorker).
@@ -105,9 +125,54 @@ bool Database::open(const QString &path, const QString &connectionName)
         q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN taken_at INTEGER"));
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at)"));
 
+    // Resolve (creating if needed) the reserved Albums category + Favorites album.
+    ensureAlbumsCategory();
+    ensureFavoritesAlbum();
+
     // Hashing existing photos and seeding content_tags is slow on a large
     // library, so it is driven from a worker thread (see LibraryWorker), not here.
     return true;
+}
+
+void Database::ensureAlbumsCategory()
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO tag_categories(name, color_slot, system) VALUES(?, 0, 1)"));
+    q.addBindValue(QStringLiteral("Albums"));
+    q.exec();
+    QSqlQuery sel(m_db);
+    sel.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
+    sel.addBindValue(QStringLiteral("Albums"));
+    sel.exec();
+    if (sel.next())
+        m_albumCategoryId = sel.value(0).toInt();
+}
+
+void Database::ensureFavoritesAlbum()
+{
+    if (m_albumCategoryId < 0)
+        return;
+    const QString favName = albumStoredName(QStringLiteral("Favorites")); // "_album:Favorites"
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO tags(name, category_id, system) VALUES(?, ?, 1)"));
+    q.addBindValue(favName);
+    q.addBindValue(m_albumCategoryId);
+    q.exec();
+    // Keep the reserved favorites tag in the Albums category and marked system.
+    QSqlQuery u(m_db);
+    u.prepare(QStringLiteral(
+        "UPDATE tags SET category_id = ?, system = 1 WHERE name = ?"));
+    u.addBindValue(m_albumCategoryId);
+    u.addBindValue(favName);
+    u.exec();
+    QSqlQuery sel(m_db);
+    sel.prepare(QStringLiteral("SELECT id FROM tags WHERE name = ?"));
+    sel.addBindValue(favName);
+    sel.exec();
+    if (sel.next())
+        m_favoritesTagId = sel.value(0).toInt();
 }
 
 namespace {
@@ -270,6 +335,17 @@ QString Database::activeClause(const QString &alias) const
         .arg(alias);
 }
 
+QString Database::nonSystemTagClause(const QString &alias) const
+{
+    // A tag is user-visible unless it lives in a reserved (system) category —
+    // which is how album tags and the Favorites tag are hidden from every normal
+    // tag list, autocomplete, and the detail panel.
+    return QStringLiteral(
+        "(%1.category_id IS NULL OR %1.category_id NOT IN "
+        "(SELECT id FROM tag_categories WHERE system = 1))")
+        .arg(alias);
+}
+
 QVector<Photo> Database::loadPhotos()
 {
     QHash<int, int> indexOf;
@@ -307,8 +383,13 @@ QVector<Photo> Database::loadPhotos()
         photos.append(p);
     }
 
+    // tagIds carries every tag (including the hidden album/favorites tags, which
+    // the album filter and the star need); tagNames carries only the user-visible
+    // ones, so album membership never shows as a chip or inflates the tag badge.
     QSqlQuery t(QStringLiteral(
-                    "SELECT pt.photo_id, t.id, t.name "
+                    "SELECT pt.photo_id, t.id, t.name, "
+                    "  (t.category_id IS NOT NULL AND t.category_id IN "
+                    "   (SELECT id FROM tag_categories WHERE system = 1)) "
                     "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id "
                     "ORDER BY t.name"),
                 m_db);
@@ -318,8 +399,12 @@ QVector<Photo> Database::loadPhotos()
         if (it == indexOf.constEnd())
             continue;
         Photo &p = photos[it.value()];
-        p.tagIds.insert(t.value(1).toInt());
-        p.tagNames.append(t.value(2).toString());
+        const int tagId = t.value(1).toInt();
+        p.tagIds.insert(tagId);
+        if (!t.value(3).toBool())
+            p.tagNames.append(t.value(2).toString());
+        if (tagId == m_favoritesTagId)
+            p.favorite = true;
     }
 
     return photos;
@@ -345,11 +430,12 @@ QVector<TagInfo> Database::loadTags()
                     "SELECT t.id, t.name, COUNT(pt.photo_id), %2 "
                     "FROM tags t LEFT JOIN photo_tags pt ON pt.tag_id = t.id "
                     "%3"
-                    "WHERE t.id IN (SELECT tag_id FROM active_tags) "
+                    "WHERE t.id IN (SELECT tag_id FROM active_tags) AND %4 "
                     "GROUP BY t.id, t.name ORDER BY t.name")
                     .arg(activeClause(QStringLiteral("p")),
                          QLatin1String(kTagCategoryColumns),
-                         QLatin1String(kTagCategoryJoin)),
+                         QLatin1String(kTagCategoryJoin),
+                         nonSystemTagClause(QStringLiteral("t"))),
                 m_db);
     while (q.next()) {
         TagInfo info;
@@ -383,12 +469,13 @@ QVector<TagInfo> Database::activeTags(const QString &folderScope)
                   "FROM tags t "
                   "JOIN photo_tags pt ON pt.tag_id = t.id "
                   "%3"
-                  "WHERE pt.photo_id IN (SELECT id FROM active_photos) "
+                  "WHERE pt.photo_id IN (SELECT id FROM active_photos) AND %5 "
                   "GROUP BY t.id, t.name HAVING COUNT(pt.photo_id) > 0 "
                   "ORDER BY t.name")
                   .arg(activeClause(QStringLiteral("p")),
                        QLatin1String(kTagCategoryColumns),
-                       QLatin1String(kTagCategoryJoin), scope));
+                       QLatin1String(kTagCategoryJoin), scope,
+                       nonSystemTagClause(QStringLiteral("t"))));
     if (!folderScope.isEmpty()) {
         q.addBindValue(folderScope);
         q.addBindValue(folderScope);
@@ -435,10 +522,12 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QSt
         "  SELECT pt2.photo_id FROM photo_tags pt2 "
         "  WHERE pt2.tag_id IN (%2) "
         "  GROUP BY pt2.photo_id HAVING COUNT(DISTINCT pt2.tag_id) = %3) "
+        "  AND %7 "
         "GROUP BY t.id, t.name HAVING COUNT(DISTINCT pt.photo_id) > 0 "
         "ORDER BY t.name")
         .arg(activeClause(QStringLiteral("p")), inList, QString::number(selected.size()),
-             QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin), scope);
+             QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin), scope,
+             nonSystemTagClause(QStringLiteral("t")));
 
     QSqlQuery q(m_db);
     q.prepare(sql);
@@ -555,8 +644,9 @@ QStringList Database::allTagNames()
                     "SELECT DISTINCT t.name FROM tags t "
                     "JOIN photo_tags pt ON pt.tag_id = t.id "
                     "JOIN photos p ON p.id = pt.photo_id "
-                    "WHERE %1 ORDER BY t.name")
-                    .arg(activeClause(QStringLiteral("p"))),
+                    "WHERE %1 AND %2 ORDER BY t.name")
+                    .arg(activeClause(QStringLiteral("p")),
+                         nonSystemTagClause(QStringLiteral("t"))),
                 m_db);
     while (q.next())
         out.append(q.value(0).toString());
@@ -837,8 +927,11 @@ QVector<ImplicationInfo> Database::implications()
         "LEFT JOIN tag_categories cc ON cc.id = c.category_id "
         "WHERE i.antecedent_id IN (SELECT tag_id FROM active_tags) "
         "  AND i.consequent_id IN (SELECT tag_id FROM active_tags) "
+        "  AND %2 AND %3 "
         "ORDER BY a.name, c.name")
-        .arg(activeClause(QStringLiteral("p"))),
+        .arg(activeClause(QStringLiteral("p")),
+             nonSystemTagClause(QStringLiteral("a")),
+             nonSystemTagClause(QStringLiteral("c"))),
         m_db);
     while (q.next()) {
         ImplicationInfo info;
@@ -958,8 +1051,9 @@ QVector<TagInfo> Database::photoTags(int photoId)
         "SELECT t.id, t.name, %1 FROM photo_tags pt "
         "JOIN tags t ON t.id = pt.tag_id "
         "%2"
-        "WHERE pt.photo_id = ? ORDER BY t.name")
-        .arg(QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin)));
+        "WHERE pt.photo_id = ? AND %3 ORDER BY t.name")
+        .arg(QLatin1String(kTagCategoryColumns), QLatin1String(kTagCategoryJoin),
+             nonSystemTagClause(QStringLiteral("t"))));
     q.addBindValue(photoId);
     q.exec();
     while (q.next()) {
@@ -970,6 +1064,84 @@ QVector<TagInfo> Database::photoTags(int photoId)
         out.append(info);
     }
     return out;
+}
+
+QSet<int> Database::photoTagIds(int photoId)
+{
+    QSet<int> ids;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT tag_id FROM photo_tags WHERE photo_id = ?"));
+    q.addBindValue(photoId);
+    q.exec();
+    while (q.next())
+        ids.insert(q.value(0).toInt());
+    return ids;
+}
+
+QVector<AlbumInfo> Database::albumTags()
+{
+    QVector<AlbumInfo> out;
+    if (m_albumCategoryId < 0)
+        return out;
+    QSqlQuery q(m_db);
+    // Favorites (system = 1) first, then user albums by name.
+    q.prepare(QStringLiteral(
+        "SELECT id, name, system FROM tags WHERE category_id = ? "
+        "ORDER BY system DESC, name"));
+    q.addBindValue(m_albumCategoryId);
+    q.exec();
+    while (q.next()) {
+        AlbumInfo a;
+        a.id = q.value(0).toInt();
+        a.name = albumDisplayName(q.value(1).toString()); // strip the "_album:" prefix
+        a.favorite = q.value(2).toInt() != 0;
+        out.append(a);
+    }
+    return out;
+}
+
+QList<int> Database::albumTagIds()
+{
+    QList<int> ids;
+    if (m_albumCategoryId < 0)
+        return ids;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id FROM tags WHERE category_id = ?"));
+    q.addBindValue(m_albumCategoryId);
+    q.exec();
+    while (q.next())
+        ids.append(q.value(0).toInt());
+    return ids;
+}
+
+int Database::tagCategoryId(int tagId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT category_id FROM tags WHERE id = ?"));
+    q.addBindValue(tagId);
+    q.exec();
+    if (q.next() && !q.value(0).isNull())
+        return q.value(0).toInt();
+    return -1;
+}
+
+int Database::createAlbum(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty() || m_albumCategoryId < 0)
+        return -1;
+    // Albums are stored under the namespaced "_album:" prefix, so they never
+    // collide with user tags of the same display name. Reuse an existing album of
+    // this name (even a hidden/empty one), mirroring tag creation.
+    const QString stored = albumStoredName(trimmed);
+    const int existing = tagIdByName(stored);
+    if (existing >= 0)
+        return tagCategoryId(existing) == m_albumCategoryId ? existing : -1;
+    const int id = ensureTag(stored);
+    if (id < 0)
+        return -1;
+    setTagCategory(id, m_albumCategoryId);
+    return id;
 }
 
 QVector<CategoryInfo> Database::loadCategories(bool activeOnly)
@@ -993,8 +1165,8 @@ QVector<CategoryInfo> Database::loadCategories(bool activeOnly)
               .arg(activeClause(QStringLiteral("p")))
         : QString();
     const QString where = activeOnly
-        ? QStringLiteral("WHERE c.id IN (SELECT category_id FROM active_categories) ")
-        : QString();
+        ? QStringLiteral("WHERE c.id IN (SELECT category_id FROM active_categories) AND c.system = 0 ")
+        : QStringLiteral("WHERE c.system = 0 ");
     QSqlQuery q(QStringLiteral(
                     "%1"
                     "SELECT c.id, c.name, c.color_slot, COUNT(t.id) "

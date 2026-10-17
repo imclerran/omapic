@@ -32,6 +32,13 @@ class Library : public QObject {
     // Tag implications ("if this tag, then that tag"): each entry carries both
     // tags' {id, name, colorSlot} for the manager's chips.
     Q_PROPERTY(QVariantList tagImplications READ tagImplications NOTIFY implicationsChanged)
+    // Albums for the album view: each entry {id, name, favorite, count, thumbs},
+    // Favorites first. Counts/covers honor the current tag filter, so an album
+    // with no matching photos drops out — just like folders.
+    Q_PROPERTY(QVariantList albums READ albums NOTIFY albumsChanged)
+    // Every album as {id, name, favorite}, unfiltered — for the "Add to album"
+    // menu, which must offer all albums regardless of the current tag/search filter.
+    Q_PROPERTY(QVariantList allAlbums READ allAlbums NOTIFY albumsChanged)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY foldersChanged)
     Q_PROPERTY(int orphanPhotoCount READ orphanPhotoCount NOTIFY foldersChanged)
     // A long-running background job (startup migration or folder import) is in
@@ -69,6 +76,8 @@ public:
     QVariantList allTags() const;
     QVariantList categories() const;
     QVariantList tagImplications() const;
+    QVariantList albums() const;
+    QVariantList allAlbums() const;
     QVariantList folders() const;
     int orphanPhotoCount() const;
     bool busy() const { return m_busy; }
@@ -112,6 +121,12 @@ public:
     // contents) together with selected loose photos.
     Q_INVOKABLE QStringList folderSlideshowSources(const QStringList &folderPaths,
                                                    const QVariantList &photoIds) const;
+    // Slideshow source URLs for an album-view selection: every active photo in
+    // each album in `albumIds` (newest first, as the album shows them, de-duped
+    // across albums), followed by the photos named by `photoIds`. Mirrors
+    // folderSlideshowSources so selected album tiles play like selected folders.
+    Q_INVOKABLE QStringList albumSlideshowSources(const QVariantList &albumIds,
+                                                  const QVariantList &photoIds) const;
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
     // Tags relevant to the active set as {name, colorSlot, categoryName}, for the
@@ -138,6 +153,24 @@ public:
     Q_INVOKABLE void removeTagImplication(int antecedentId, int consequentId);
     // Whether antecedent -> consequent would close a loop, for live UI validation.
     Q_INVOKABLE bool implicationWouldCycle(int antecedentId, int consequentId) const;
+
+    // --- Albums & favorites ---
+    // Create an album and add the given photos to it in one step. Returns the
+    // album id, or -1 when the name is blank or already used by a non-album tag.
+    // Reuses an existing album of the same name (even a hidden/empty one).
+    Q_INVOKABLE int createAlbumWithPhotos(const QString &name, const QVariantList &photoIds);
+    Q_INVOKABLE void addPhotosToAlbum(const QVariantList &photoIds, int albumId);
+    Q_INVOKABLE void removePhotosFromAlbum(const QVariantList &photoIds, int albumId);
+    // Album ids that EVERY given photo already belongs to — so the "Add to album"
+    // menu can show which albums the selection is already in (a check, or a filled
+    // star for Favorites).
+    Q_INVOKABLE QVariantList commonAlbumIds(const QVariantList &photoIds) const;
+    // The hidden Favorites album's tag id (its album is always listed first).
+    Q_INVOKABLE int favoriteAlbumId() const;
+    // Toggle one photo's membership in the Favorites album (the thumbnail star).
+    Q_INVOKABLE void toggleFavorite(int photoId);
+    // Set the Favorites membership for many photos at once.
+    Q_INVOKABLE void setFavorite(const QVariantList &photoIds, bool favorite);
 
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.
@@ -173,6 +206,7 @@ signals:
     void tagsChanged();
     void categoriesChanged();
     void implicationsChanged();
+    void albumsChanged();
     void busyChanged();
     void progressChanged();
     void statusChanged();
@@ -197,6 +231,9 @@ private:
     // Keep the filter model's list of registered folder roots in step with the
     // DB, so the folder view can tell orphan photos from foldered ones.
     void updateFolderRoots();
+    // Keep the filter model's album tag id set in step, for the flattened album
+    // search ("photos in any album"). Called when the album set changes.
+    void updateAlbumTagIds();
     // Ref-counted so overlapping worker jobs (e.g. a bulk tag started mid-import)
     // don't fight over one busy flag: the indicator stays up until every job has
     // called its matching endBusy. Pass the same `modal` to endBusy as to beginBusy.
