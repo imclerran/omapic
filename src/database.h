@@ -114,8 +114,9 @@ public:
     // is always the category's total tag count.
     QVector<CategoryInfo> loadCategories(bool activeOnly = false);
     int insertCategory(const QString &name, int colorSlot); // new id, -1 on error/duplicate
-    int categoryIdByName(const QString &name);         // case-insensitive lookup, -1 if none
-    QString categoryName(int categoryId);              // current name, empty if unknown
+    int categoryIdByName(const QString &name);         // case-insensitive lookup of a user category, -1 if none
+    QString categoryName(int categoryId);              // current display name, empty if unknown
+    // The three below never touch reserved (system) categories.
     void renameCategory(int categoryId, const QString &newName);
     void setCategoryColor(int categoryId, int colorSlot);
     void deleteCategory(int categoryId);               // its tags become uncategorized
@@ -166,6 +167,6 @@ private:
 
     QSqlDatabase m_db;
     QString m_connectionName;
-    int m_albumCategoryId = -1; // reserved "Albums" category (system = 1)
+    int m_albumCategoryId = -1; // reserved "Albums" category (system = 1, stored "_system:Albums")
     int m_favoritesTagId = -1;  // reserved "Favorites" album tag (system = 1)
 };

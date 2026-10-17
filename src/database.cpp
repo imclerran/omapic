@@ -22,6 +22,15 @@ QString albumDisplayName(const QString &stored)
 {
     return stored.startsWith(kAlbumPrefix) ? stored.mid(kAlbumPrefix.size()) : stored;
 }
+// Reserved (system) categories get the same treatment, so the hidden Albums
+// category can't be confused with — or block — a user category named "Albums"
+// (category names are unique too).
+const QString kSystemPrefix = QStringLiteral("_system:");
+QString systemStoredName(const QString &display) { return kSystemPrefix + display.trimmed(); }
+QString systemDisplayName(const QString &stored)
+{
+    return stored.startsWith(kSystemPrefix) ? stored.mid(kSystemPrefix.size()) : stored;
+}
 }
 
 bool Database::open(const QString &path, const QString &connectionName)
@@ -110,9 +119,10 @@ bool Database::open(const QString &path, const QString &connectionName)
             "REFERENCES tag_categories(id) ON DELETE SET NULL"));
     }
 
-    // Albums reuse the tag system: a reserved "Albums" category (system = 1) whose
-    // tags are albums, hidden from every normal tag list. The Favorites album is
-    // the one tag also marked system = 1, so it sorts first and is permanent.
+    // Albums reuse the tag system: a reserved "Albums" category (system = 1,
+    // stored namespaced as "_system:Albums") whose tags are albums, hidden from
+    // every normal tag list. The Favorites album is the one tag also marked
+    // system = 1, so it sorts first and is permanent.
     if (!hasColumn(QStringLiteral("tag_categories"), QStringLiteral("system")))
         q.exec(QStringLiteral("ALTER TABLE tag_categories ADD COLUMN system INTEGER NOT NULL DEFAULT 0"));
     if (!hasColumn(QStringLiteral("tags"), QStringLiteral("system")))
@@ -136,14 +146,57 @@ bool Database::open(const QString &path, const QString &connectionName)
 
 void Database::ensureAlbumsCategory()
 {
+    const QString storedName = systemStoredName(QStringLiteral("Albums")); // "_system:Albums"
+
+    // One-time migration: the category used to be stored under the bare name
+    // "Albums". Move a row created that way (system = 1) to the namespaced name.
+    // A user's own "Albums" category (system = 0) is left alone — the system one
+    // is created fresh beside it below.
+    QSqlQuery legacy(m_db);
+    legacy.prepare(QStringLiteral(
+        "SELECT id FROM tag_categories WHERE name = ? AND system = 1"));
+    legacy.addBindValue(QStringLiteral("Albums"));
+    legacy.exec();
+    if (legacy.next()) {
+        const int legacyId = legacy.value(0).toInt();
+        QSqlQuery cur(m_db);
+        cur.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
+        cur.addBindValue(storedName);
+        cur.exec();
+        if (cur.next()) {
+            // Both exist (an older build re-created the bare one): fold the
+            // legacy row's albums into the namespaced one and drop it.
+            QSqlQuery mv(m_db);
+            mv.prepare(QStringLiteral("UPDATE tags SET category_id = ? WHERE category_id = ?"));
+            mv.addBindValue(cur.value(0).toInt());
+            mv.addBindValue(legacyId);
+            mv.exec();
+            QSqlQuery del(m_db);
+            del.prepare(QStringLiteral("DELETE FROM tag_categories WHERE id = ?"));
+            del.addBindValue(legacyId);
+            del.exec();
+        } else {
+            QSqlQuery ren(m_db);
+            ren.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ?"));
+            ren.addBindValue(storedName);
+            ren.addBindValue(legacyId);
+            ren.exec();
+        }
+    }
+
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO tag_categories(name, color_slot, system) VALUES(?, 0, 1)"));
-    q.addBindValue(QStringLiteral("Albums"));
+    q.addBindValue(storedName);
     q.exec();
+    // Keep the reserved category marked system, whatever created the row.
+    QSqlQuery u(m_db);
+    u.prepare(QStringLiteral("UPDATE tag_categories SET system = 1 WHERE name = ?"));
+    u.addBindValue(storedName);
+    u.exec();
     QSqlQuery sel(m_db);
     sel.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
-    sel.addBindValue(QStringLiteral("Albums"));
+    sel.addBindValue(storedName);
     sel.exec();
     if (sel.next())
         m_albumCategoryId = sel.value(0).toInt();
@@ -1199,8 +1252,10 @@ int Database::insertCategory(const QString &name, int colorSlot)
 
 int Database::categoryIdByName(const QString &name)
 {
+    // User categories only: the reserved ones are never a name conflict and
+    // never a resolve-or-create target.
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
+    q.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ? AND system = 0"));
     q.addBindValue(name);
     q.exec();
     if (q.next())
@@ -1215,14 +1270,15 @@ QString Database::categoryName(int categoryId)
     q.addBindValue(categoryId);
     q.exec();
     if (q.next())
-        return q.value(0).toString();
+        return systemDisplayName(q.value(0).toString()); // strip the "_system:" prefix
     return {};
 }
 
 void Database::renameCategory(int categoryId, const QString &newName)
 {
+    // Reserved (system) categories are not renamable.
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ?"));
+    q.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ? AND system = 0"));
     q.addBindValue(newName);
     q.addBindValue(categoryId);
     q.exec();
@@ -1231,7 +1287,7 @@ void Database::renameCategory(int categoryId, const QString &newName)
 void Database::setCategoryColor(int categoryId, int colorSlot)
 {
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("UPDATE tag_categories SET color_slot = ? WHERE id = ?"));
+    q.prepare(QStringLiteral("UPDATE tag_categories SET color_slot = ? WHERE id = ? AND system = 0"));
     q.addBindValue(colorSlot);
     q.addBindValue(categoryId);
     q.exec();
@@ -1239,6 +1295,14 @@ void Database::setCategoryColor(int categoryId, int colorSlot)
 
 void Database::deleteCategory(int categoryId)
 {
+    // Reserved (system) categories are permanent; deleting one would turn its
+    // hidden album tags into visible user tags.
+    QSqlQuery guard(m_db);
+    guard.prepare(QStringLiteral("SELECT system FROM tag_categories WHERE id = ?"));
+    guard.addBindValue(categoryId);
+    guard.exec();
+    if (!guard.next() || guard.value(0).toInt() != 0)
+        return;
     // The FK is ON DELETE SET NULL, but clear explicitly too so the tags are
     // uncategorized even on a connection without foreign_keys enabled.
     QSqlQuery u(m_db);
