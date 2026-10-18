@@ -1573,6 +1573,7 @@ ApplicationWindow {
                 // Tab cycle: main search → add-a-tag (wrap); Shift+Tab → gallery.
                 Keys.onTabPressed: (event) => { win.tabStepTo(0, true); event.accepted = true }
                 Keys.onBacktabPressed: (event) => { win.tabStepTo(2, false); event.accepted = true }
+                ClearButton { field: gallerySearch }
             }
 
             ToolButton {
@@ -2112,6 +2113,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 placeholderText: qsTr("Album name")
                 onAccepted: newAlbumDialog.accept()
+                ClearButton { field: albumNameField }
             }
         }
     }
@@ -2169,6 +2171,7 @@ ApplicationWindow {
                 id: smartNameField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Smart album name")
+                ClearButton { field: smartNameField }
             }
             TagPicker {
                 id: smartPicker

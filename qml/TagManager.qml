@@ -304,6 +304,7 @@ Dialog {
                 Layout.fillWidth: true
                 selectByMouse: true
                 onAccepted: renameDialog.apply()
+                ClearButton { field: field }
             }
 
             Label {
@@ -379,6 +380,7 @@ Dialog {
                 selectByMouse: true
                 placeholderText: qsTr("Category name (e.g. Place, Event, Artist)")
                 onAccepted: newCategoryDialog.apply()
+                ClearButton { field: newField }
             }
 
             Label {
@@ -624,6 +626,7 @@ Dialog {
                     Layout.fillWidth: true
                     placeholderText: qsTr("Search tags…")
                     Keys.onEscapePressed: text = ""
+                    ClearButton { field: searchField }
                 }
 
                 // Category filter chips. Hidden until a category exists, since

@@ -81,6 +81,8 @@ Item {
         onTextEdited: refresh()
         onActiveFocusChanged: if (!activeFocus) pop.close()
 
+        ClearButton { field: field }
+
         Keys.onDownPressed: if (suggestions.length > 0)
                                 highlighted = Math.min(highlighted + 1, suggestions.length - 1)
         Keys.onUpPressed: highlighted = Math.max(highlighted - 1, -1)

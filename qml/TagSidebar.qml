@@ -89,6 +89,7 @@ Rectangle {
             Keys.onEscapePressed: text = ""
             Keys.onTabPressed: (event) => { root.tabForward(); event.accepted = true }
             Keys.onBacktabPressed: (event) => { root.tabBackward(); event.accepted = true }
+            ClearButton { field: searchField }
         }
 
         Item {
