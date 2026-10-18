@@ -1,31 +1,19 @@
 # omapic
 
-A photo and video gallery for [Omarchy](https://omarchy.org), built around tagging —
-C++ and Qt 6 Quick.
+A photo and video gallery for [Omarchy](https://omarchy.org), built around tagging.
 
 ## Features
 
-- **Tagging** — tag photos individually or in bulk; filter by tag with *Match all* /
-  *Match any*, or by tagged / untagged.
-- **Tag categories** — group tags (place, event, artist, …); each category takes a
-  color from the active Omarchy theme, and tag chips are color-coded throughout.
-- **Tags follow content, not paths** — files are content-hashed, so tags survive
-  moves and renames, and are restored if a photo or folder is removed and later
-  re-imported.
-- **Library folders** — add multiple root folders, hide or show each one, and
-  rescan to pick up new, moved, and deleted files. A `.nomedia` file excludes a
-  folder and its subtree.
-- **Three views** — a timeline grouped by month taken, a folder browser with
-  mosaic previews, or a flat grid with duplicate files collapsed.
-- **Slideshows** — of the current filter or selection, including whole selected
-  folders. Options include *shuffle folders* (folders in random order, each one's
-  photos kept together) and intervals down to 0.1 s.
-- **Standalone viewer** — `omapic photo.jpg …` or `omapic <dir>` opens a lightweight
-  viewer without loading the library, so omapic can be the default image and
-  video handler.
-- **Omarchy integration** — follows the active theme live. From any photo: add it
-  to the current theme's wallpaper rotation, or generate a theme from it with
-  [Aether](https://github.com/bjarneo/aether).
+- **Tags that stick** — tags follow the file's content, not its path, so they survive moves, renames, and even deleting and re-importing a folder.
+- **Color-coded tag categories** — group tags (people, places, events, …), with colors pulled from your active Omarchy theme.
+- **Tag rules** — "if *beach*, then also *vacation*." Set it once and it applies across your whole library, and to everything you tag from then on.
+- **Albums, Favorites, and Smart Albums** — star favorites, build albums by hand, or save a tag search as a smart album that keeps itself up to date.
+- **Drill into tags by folder** — pick a tag and the folder view narrows to just the folders that contain it.
+- **Forgiving search** — find tags without worrying about case or accents ("cafe" finds "café").
+- **Slideshows** — from any filter, selection, or album, with folder-aware shuffle and intervals down to 0.1 s.
+- **Default image viewer** — `omapic photo.jpg` or `omapic <dir>` opens a lightweight viewer without loading your library.
+- **Omarchy integration** — follows your theme live. Add any photo to your wallpaper rotation, or generate a whole theme from it with [Aether](https://github.com/bjarneo/aether).
+- **HEIC and AVIF support**, plus video.
 
 ## Install
 
@@ -33,12 +21,7 @@ A PKGBUILD is in [`packaging/aur/`](packaging/aur/).
 
 ## Build
 
-Requires Qt 6.5+ (Quick, QuickControls2, Sql, Multimedia, Concurrent), exiv2,
-CMake, and a C++17 compiler. Runtime: `ffmpegthumbnailer` for video thumbnails;
-Qt image plugins (on Arch, `kimageformats` with `libheif` + `libavif`) for
-`.heic`/`.heif`/`.avif` photos — without them those files are listed but show a
-placeholder; Aether is optional. (The AUR package pulls the plugins in
-automatically.)
+Requires Qt 6.5+, exiv2, CMake, and a C++17 compiler. At runtime, `ffmpegthumbnailer` provides video thumbnails and `kimageformats` (with `libheif` and `libavif`) provides HEIC/AVIF support. Aether is optional.
 
 ```sh
 cmake -B build -G Ninja
@@ -46,14 +29,8 @@ cmake --build build
 ./build/omapic
 ```
 
-The library database lives at `~/.local/share/omapic/library.db`; settings at
-`~/.config/omapic/`.
-
 ## License
 
 Copyright (C) 2026 Ian McLerran
 
-omapic is free software: you can redistribute it and/or modify it under the
-terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version. See [LICENSE](LICENSE) for the full text.
+omapic is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE) for the full text.
