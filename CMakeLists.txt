@@ -33,6 +33,7 @@ qt_add_qml_module(omapic
         qml/FolderView.qml
         qml/FolderMosaicCell.qml
         qml/AlbumView.qml
+        qml/ClearButton.qml
     SOURCES
         src/photo.h
         src/database.h src/database.cpp

@@ -67,6 +67,7 @@ ColumnLayout {
         Layout.fillWidth: true
         placeholderText: qsTr("Search tags…")
         Keys.onEscapePressed: text = ""
+        ClearButton { field: searchField }
     }
 
     Item {
