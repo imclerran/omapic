@@ -27,7 +27,7 @@ jobs:
             qt6-base qt6-declarative qt6-multimedia exiv2
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure
         run: cmake -B build -G Ninja -DOMAPIC_BUILD_TESTS=ON -Wno-dev
