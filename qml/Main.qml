@@ -1925,6 +1925,46 @@ ApplicationWindow {
         }
     }
 
+    // Blocking message shown when the library can't be opened — most importantly
+    // when it was written by a newer Omapic. Nothing else loads behind it.
+    Popup {
+        id: fatalErrorPopup
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        dim: true
+        closePolicy: Popup.NoAutoClose
+        visible: library.fatalError !== ""
+        padding: 24
+        width: Math.min(440, (Overlay.overlay ? Overlay.overlay.width : width) - 48)
+
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.6) }
+
+        background: Rectangle {
+            color: palette.window
+            radius: 10
+            border.color: palette.mid
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 14
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Can't open your library")
+                font.pixelSize: 16
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Label {
+                Layout.fillWidth: true
+                text: library.fatalError
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                color: palette.placeholderText
+            }
+        }
+    }
+
     Dialog {
         id: settingsDialog
         title: qsTr("Slideshow settings")
