@@ -679,10 +679,53 @@ ApplicationWindow {
         }
     }
 
+    // Open the album-tile context menu, first normalizing the album selection the
+    // way openPhotoMenu does for photos: right-clicking a tile outside the current
+    // multi-selection selects just it, so the menu acts on what you clicked.
+    function openAlbumMenu(gridIndex) {
+        const entry = win.albumEntries[gridIndex]
+        if (!entry)
+            return
+        if (win.selectedAlbums.length <= 1 || win.selectedAlbums.indexOf(entry.id) === -1) {
+            win.selectedAlbums = [entry.id]
+            win.selectedIds = []
+        }
+        // Flags for the menu: how many of the selection can be deleted (Favorites
+        // is permanent), and whether a lone smart album is selected (editable).
+        const favId = library.favoriteAlbumId()
+        let deletable = 0
+        for (const id of win.selectedAlbums)
+            if (id !== favId)
+                ++deletable
+        albumMenu.selCount = win.selectedAlbums.length
+        albumMenu.singleId = win.selectedAlbums.length === 1 ? win.selectedAlbums[0] : -1
+        albumMenu.singleSmart = albumMenu.singleId >= 0 && library.isSmartAlbum(albumMenu.singleId)
+        albumMenu.deletableCount = deletable
+        albumMenu.popup()
+    }
+
+    // Delete every selected album (skipping Favorites): smart albums drop their
+    // saved query, regular albums drop their hidden tag + memberships.
+    function deleteSelectedAlbums() {
+        const favId = library.favoriteAlbumId()
+        const ids = win.selectedAlbums.slice()
+        for (const id of ids) {
+            if (id === favId)
+                continue
+            if (library.isSmartAlbum(id))
+                library.deleteSmartAlbum(id)
+            else
+                library.deleteAlbum(id)
+        }
+        win.selectedAlbums = []
+    }
+
     function avRightClick(gridIndex) {
         const ac = albumView.albumCount
-        if (gridIndex < ac)
-            return // no context menu for album tiles
+        if (gridIndex < ac) {
+            win.openAlbumMenu(gridIndex)
+            return
+        }
         const row = gridIndex - ac
         const id = library.filtered.idAt(row)
         if (id < 0)
@@ -1122,12 +1165,18 @@ ApplicationWindow {
     // ungrouped (flat) view collapses duplicate files.
     function applyViewFilter() {
         const albums = win.viewMode === "albums"
+        // Inside an album, gate on its membership query — a regular album is a
+        // one-tag query, a smart album its saved (tag set + AND/OR). At the list
+        // level (currentAlbum <= 0) the query is empty.
+        const q = (albums && win.currentAlbum > 0) ? library.albumQuery(win.currentAlbum)
+                                                    : { tags: [], matchAll: true }
         library.filtered.applyView(win.viewMode === "ungrouped",     // dedupe
                                    win.viewMode === "timeline" || albums, // sortByDate (albums: newest first)
                                    win.viewMode === "folder",         // folderMode
                                    win.currentFolder,                 // folderPath
                                    albums,                            // albumMode
-                                   albums ? win.currentAlbum : -1)    // albumTagId (<=0 = list level)
+                                   q.tags,                            // album query tags ([] = list level)
+                                   q.matchAll)                        // album query AND/OR
         // Scope the filter sidebar's tag chips to the current folder subtree while
         // browsing folders; the whole library otherwise (and at the folder root).
         library.setTagFolderScope(win.viewMode === "folder" ? win.currentFolder : "")
@@ -1766,6 +1815,7 @@ ApplicationWindow {
                 selectedAlbums: win.selectedAlbums
                 onEnterAlbum: (id) => win.enterAlbum(id)
                 onGoUp: win.leaveAlbum()
+                onNewSmartAlbumRequested: { smartAlbumDialog.editId = 0; smartAlbumDialog.open() }
                 onCellClicked: (gridIndex, modifiers) => win.avClick(gridIndex, modifiers)
                 onCellDoubleClicked: (gridIndex) => win.avDoubleClick(gridIndex)
                 onCellRightClicked: (gridIndex) => win.avRightClick(gridIndex)
@@ -2063,6 +2113,129 @@ ApplicationWindow {
                 placeholderText: qsTr("Album name")
                 onAccepted: newAlbumDialog.accept()
             }
+        }
+    }
+
+    // Create / edit a smart album: a name plus a tag query (set of tags + AND/OR)
+    // that auto-populates in the Albums view. editId 0 = create, else the smart
+    // album's UI id (prefilled from the library).
+    Dialog {
+        id: smartAlbumDialog
+        property int editId: 0
+        title: editId > 0 ? qsTr("Edit smart album") : qsTr("New smart album")
+        anchors.centerIn: parent
+        modal: true
+        width: Math.min(540, win.width - 48)
+        height: Math.min(600, win.height - 48)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        readonly property bool formValid:
+            smartNameField.text.trim().length > 0 && smartPicker.selectedIds.length > 0
+        function syncOk() {
+            const b = standardButton(Dialog.Ok)
+            if (b) b.enabled = formValid
+        }
+        onFormValidChanged: syncOk()
+        onOpened: {
+            if (editId > 0) {
+                const sa = library.smartAlbum(editId)
+                smartNameField.text = sa.name
+                smartPicker.setSelection(sa.tags, sa.matchAll)
+            } else {
+                smartNameField.text = ""
+                smartPicker.clear()
+            }
+            syncOk()
+            smartNameField.forceActiveFocus()
+        }
+        onAccepted: {
+            const name = smartNameField.text.trim()
+            if (name.length === 0 || smartPicker.selectedIds.length === 0)
+                return
+            // Library emits albumsChanged on success, which refreshes the tiles.
+            if (editId > 0) {
+                if (!library.updateSmartAlbum(editId, name, smartPicker.selectedIds, smartPicker.matchAll))
+                    win.toast(qsTr("Another smart album already uses that name"))
+            } else {
+                if (library.createSmartAlbum(name, smartPicker.selectedIds, smartPicker.matchAll) < 0)
+                    win.toast(qsTr("A smart album already uses that name"))
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            TextField {
+                id: smartNameField
+                Layout.fillWidth: true
+                placeholderText: qsTr("Smart album name")
+            }
+            TagPicker {
+                id: smartPicker
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                tagModel: library.tags
+                accent: win.accent
+            }
+        }
+    }
+
+    // Right-click menu for album tiles (regular and smart; single or multi
+    // selection). Play slideshow always; Edit for a lone smart album; Delete for
+    // any selected albums except the permanent Favorites.
+    Menu {
+        id: albumMenu
+        property int selCount: 0
+        property int singleId: -1
+        property bool singleSmart: false
+        property int deletableCount: 0
+
+        MenuItem {
+            text: qsTr("Play slideshow")
+            onTriggered: win.startAlbumSlideshow(true)
+        }
+        // Edit / Delete act on a single album only; a multi-selection gets just
+        // the slideshow (deleting several at once is too easy to do by accident).
+        readonly property bool singleDeletable: selCount === 1 && deletableCount === 1
+        MenuSeparator {
+            visible: albumMenu.singleSmart || albumMenu.singleDeletable
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            visible: albumMenu.singleSmart
+            height: visible ? implicitHeight : 0
+            text: qsTr("Edit smart album…")
+            onTriggered: { smartAlbumDialog.editId = albumMenu.singleId; smartAlbumDialog.open() }
+        }
+        MenuItem {
+            visible: albumMenu.singleDeletable
+            height: visible ? implicitHeight : 0
+            text: albumMenu.singleSmart ? qsTr("Delete smart album") : qsTr("Delete album")
+            onTriggered: deleteAlbumsConfirm.open()
+        }
+    }
+
+    // Confirm deleting the selected album(s). Deleting an album removes only the
+    // album (its membership / saved query) — the photos and their tags stay.
+    Dialog {
+        id: deleteAlbumsConfirm
+        title: qsTr("Delete album")
+        anchors.centerIn: parent
+        modal: true
+        width: 420
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: {
+            // If we're inside an album being deleted, step back to the list first.
+            if (win.currentAlbum > 0 && win.selectedAlbums.indexOf(win.currentAlbum) !== -1)
+                win.leaveAlbum()
+            win.deleteSelectedAlbums()
+        }
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: albumMenu.singleSmart
+                  ? qsTr("Delete this smart album?\n\nThis removes the saved filter only; your photos and tags are untouched.")
+                  : qsTr("Delete this album?\n\nThis removes the album only — your photos and tags stay in the library.")
         }
     }
 

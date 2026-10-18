@@ -88,6 +88,18 @@ public:
     // the name is blank or already belongs to a non-album tag.
     int createAlbum(const QString &name);
 
+    // --- Smart albums (saved tag queries) ---
+    // A smart album is a stored (tag set + AND/OR) query, kept in its own tables
+    // (smart_albums / smart_album_tags), not in the tag system. Membership is
+    // evaluated live against a photo's tags, so there is nothing in photo_tags.
+    QVector<SmartAlbumInfo> smartAlbums();        // all, each with its tag ids, by name
+    SmartAlbumInfo smartAlbum(int id);            // one row (for the edit dialog)
+    // Create/update return the id (or true) on success, -1/false when the name is
+    // blank, the tag set is empty, or the name duplicates another smart album.
+    int createSmartAlbum(const QString &name, const QList<int> &tagIds, bool matchAll);
+    bool updateSmartAlbum(int id, const QString &name, const QList<int> &tagIds, bool matchAll);
+    void deleteSmartAlbum(int id);
+
     // --- Tag implications ("if this tag, then that tag") ---
     // Every implication with both tags' names/colors, for the manager. Sorted by
     // antecedent then consequent name.

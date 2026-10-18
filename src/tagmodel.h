@@ -40,6 +40,9 @@ public:
     QList<int> selectedTagIds() const;
     Q_INVOKABLE void toggle(int row);
     Q_INVOKABLE void clearSelection();
+    // The tag id at a row. QML delegates can't read the "id" role as `model.id`
+    // (`id` is reserved), so a picker that tracks its own selection uses this.
+    Q_INVOKABLE int idAt(int row) const;
 
 signals:
     void selectionChanged();

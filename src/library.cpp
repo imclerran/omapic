@@ -24,6 +24,31 @@ namespace {
 // progress bar instead of blocking the UI; at or below it, apply in place.
 constexpr int kBulkTagThreshold = 100;
 
+// Smart albums are stored in their own table with their own (small) ids, which
+// would collide with the tag ids that identify regular album tiles. So the
+// UI-facing album id of a smart album is offset into this reserved high range,
+// keeping all the int-based album plumbing (selection, currentAlbum, slideshow)
+// kind-agnostic. The offset is decoded only inside Library.
+constexpr int kSmartAlbumIdBase = 1'000'000'000;
+
+// True when a photo's tags satisfy a smart album's query (AND = carry every tag,
+// OR = carry any). An empty query matches nothing (an all-tags-deleted album).
+bool photoMatchesQuery(const QSet<int> &photoTags, const QList<int> &queryTags, bool matchAll)
+{
+    if (queryTags.isEmpty())
+        return false;
+    if (matchAll) {
+        for (int t : queryTags)
+            if (!photoTags.contains(t))
+                return false;
+        return true;
+    }
+    for (int t : queryTags)
+        if (photoTags.contains(t))
+            return true;
+    return false;
+}
+
 // The active Omarchy theme's short name (the folder name under themes/), read
 // from the state file the theme switcher keeps. Empty if it can't be read.
 QString currentOmarchyTheme()
@@ -421,9 +446,17 @@ QStringList Library::folderSlideshowSources(const QStringList &folderPaths,
 QStringList Library::albumSlideshowSources(const QVariantList &albumIds,
                                            const QVariantList &photoIds) const
 {
-    QSet<int> albums;
-    for (const QVariant &v : albumIds)
-        albums.insert(v.toInt());
+    // Selected albums split into regular (membership by tag id) and smart
+    // (membership by saved query). Smart ids are in the reserved high range.
+    QSet<int> regularAlbums;
+    QVector<SmartAlbumInfo> smartSel;
+    for (const QVariant &v : albumIds) {
+        const int id = v.toInt();
+        if (id >= kSmartAlbumIdBase)
+            smartSel.append(m_db.smartAlbum(id - kSmartAlbumIdBase));
+        else
+            regularAlbums.insert(id);
+    }
 
     // Active photos in any of the selected albums, newest first (the album view's
     // order), de-duped across albums by photo id.
@@ -431,8 +464,11 @@ QStringList Library::albumSlideshowSources(const QVariantList &albumIds,
     QSet<int> seen;
     for (const Photo &p : m_photos->photos()) {
         bool inAlbum = false;
-        for (int aid : albums)
+        for (int aid : regularAlbums)
             if (p.tagIds.contains(aid)) { inAlbum = true; break; }
+        if (!inAlbum)
+            for (const SmartAlbumInfo &sa : smartSel)
+                if (photoMatchesQuery(p.tagIds, sa.tagIds, sa.matchAll)) { inAlbum = true; break; }
         if (inAlbum && !seen.contains(p.id)) {
             seen.insert(p.id);
             members.append(&p);
@@ -746,20 +782,26 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
 
 QVariantList Library::albums() const
 {
-    const QVector<AlbumInfo> metas = m_db.albumTags(); // Favorites first, then name
-    if (metas.isEmpty())
-        return {};
+    const QVector<AlbumInfo> metas = m_db.albumTags();        // Favorites first, then name
+    const QVector<SmartAlbumInfo> smart = m_db.smartAlbums(); // by name
 
     // Count members (and gather up-to-4 cover thumbs) per album over the active
     // photo set, honoring the current tag filter — so album tiles narrow exactly
-    // like folder tiles. tagIds includes the hidden album ids, so membership is a
-    // plain set test.
+    // like folder tiles. A regular album's membership is a plain tagIds test; a
+    // smart album's is its saved (tag set + AND/OR) query. Both are keyed in `acc`
+    // by the UI-facing album id (smart albums use the reserved high id range).
     const QList<int> sel = m_tags->selectedTagIds();
     const QSet<int> selSet(sel.begin(), sel.end());
     const bool filtering = !selSet.isEmpty();
 
     struct Acc { int count = 0; QStringList thumbs; };
     QHash<int, Acc> acc;
+    auto tally = [&acc](int uiId, const Photo &p) {
+        Acc &x = acc[uiId];
+        ++x.count;
+        if (x.thumbs.size() < 4)
+            x.thumbs.append(p.path);
+    };
     for (const Photo &p : m_photos->photos()) {
         if (filtering) {
             bool ok;
@@ -775,14 +817,12 @@ QVariantList Library::albums() const
             if (!ok)
                 continue;
         }
-        for (const AlbumInfo &a : metas) {
-            if (!p.tagIds.contains(a.id))
-                continue;
-            Acc &x = acc[a.id];
-            ++x.count;
-            if (x.thumbs.size() < 4)
-                x.thumbs.append(p.path);
-        }
+        for (const AlbumInfo &a : metas)
+            if (p.tagIds.contains(a.id))
+                tally(a.id, p);
+        for (const SmartAlbumInfo &sa : smart)
+            if (photoMatchesQuery(p.tagIds, sa.tagIds, sa.matchAll))
+                tally(kSmartAlbumIdBase + sa.id, p);
     }
 
     QVariantList out;
@@ -797,8 +837,31 @@ QVariantList Library::albums() const
             {QStringLiteral("id"), a.id},
             {QStringLiteral("name"), a.name},
             {QStringLiteral("favorite"), a.favorite},
+            {QStringLiteral("smart"), false},
             {QStringLiteral("count"), x.count},
             {QStringLiteral("thumbs"), x.thumbs},
+        });
+    }
+    // Smart album tiles after the regular ones (by name). Hidden when empty, like
+    // everything else. They carry their query so the UI can enter/edit without a
+    // round trip.
+    for (const SmartAlbumInfo &sa : smart) {
+        const Acc x = acc.value(kSmartAlbumIdBase + sa.id);
+        if (x.count == 0)
+            continue;
+        QVariantList tagIds;
+        for (int t : sa.tagIds)
+            tagIds.append(t);
+        out.append(QVariantMap{
+            {QStringLiteral("type"), QStringLiteral("album")},
+            {QStringLiteral("id"), kSmartAlbumIdBase + sa.id},
+            {QStringLiteral("name"), sa.name},
+            {QStringLiteral("favorite"), false},
+            {QStringLiteral("smart"), true},
+            {QStringLiteral("count"), x.count},
+            {QStringLiteral("thumbs"), x.thumbs},
+            {QStringLiteral("tags"), tagIds},
+            {QStringLiteral("matchAll"), sa.matchAll},
         });
     }
     return out;
@@ -907,6 +970,81 @@ void Library::setFavorite(const QVariantList &photoIds, bool favorite)
 void Library::updateAlbumTagIds()
 {
     m_filtered->setAlbumTagIds(m_db.albumTagIds());
+}
+
+bool Library::isSmartAlbum(int albumId) const
+{
+    return albumId >= kSmartAlbumIdBase;
+}
+
+QVariantMap Library::albumQuery(int albumId) const
+{
+    QVariantList tags;
+    bool matchAll = true;
+    if (albumId >= kSmartAlbumIdBase) {
+        const SmartAlbumInfo sa = m_db.smartAlbum(albumId - kSmartAlbumIdBase);
+        for (int t : sa.tagIds)
+            tags.append(t);
+        matchAll = sa.matchAll;
+    } else if (albumId > 0) {
+        tags.append(albumId); // a regular album is a one-tag query
+    }
+    return QVariantMap{
+        {QStringLiteral("tags"), tags},
+        {QStringLiteral("matchAll"), matchAll},
+    };
+}
+
+QVariantMap Library::smartAlbum(int albumId) const
+{
+    const SmartAlbumInfo sa = m_db.smartAlbum(albumId - kSmartAlbumIdBase);
+    QVariantList tags;
+    for (int t : sa.tagIds)
+        tags.append(t);
+    return QVariantMap{
+        {QStringLiteral("id"), albumId},
+        {QStringLiteral("name"), sa.name},
+        {QStringLiteral("tags"), tags},
+        {QStringLiteral("matchAll"), sa.matchAll},
+    };
+}
+
+int Library::createSmartAlbum(const QString &name, const QVariantList &tagIds, bool matchAll)
+{
+    QList<int> tags;
+    for (const QVariant &v : tagIds)
+        tags.append(v.toInt());
+    const int id = m_db.createSmartAlbum(name, tags, matchAll);
+    if (id < 0)
+        return -1;
+    emit albumsChanged();
+    return kSmartAlbumIdBase + id;
+}
+
+bool Library::updateSmartAlbum(int albumId, const QString &name,
+                               const QVariantList &tagIds, bool matchAll)
+{
+    QList<int> tags;
+    for (const QVariant &v : tagIds)
+        tags.append(v.toInt());
+    if (!m_db.updateSmartAlbum(albumId - kSmartAlbumIdBase, name, tags, matchAll))
+        return false;
+    emit albumsChanged();
+    return true;
+}
+
+void Library::deleteSmartAlbum(int albumId)
+{
+    m_db.deleteSmartAlbum(albumId - kSmartAlbumIdBase);
+    emit albumsChanged();
+}
+
+void Library::deleteAlbum(int albumId)
+{
+    if (albumId < 0 || albumId == m_db.favoritesTagId())
+        return; // Favorites is a permanent, reserved album
+    deleteTag(albumId);   // drops the hidden tag + memberships; refreshTags emits albumsChanged
+    updateAlbumTagIds();  // keep the flattened-search album set in step
 }
 
 QVariantList Library::commonTags(const QVariantList &photoIds) const
