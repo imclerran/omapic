@@ -970,8 +970,11 @@ void Database::unlinkTagFromContent(int photoId, int tagId)
 
 void Database::deleteTag(int tagId)
 {
+    // Reserved (system) tags are permanent: deleting the Favorites tag would leave
+    // favoritesTagId() dangling and drop it from the albums list. User tags and
+    // regular albums are system = 0, so only Favorites is protected here.
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?")); // photo_tags + implications cascade
+    q.prepare(QStringLiteral("DELETE FROM tags WHERE id = ? AND system = 0")); // photo_tags + implications cascade
     q.addBindValue(tagId);
     q.exec();
 }

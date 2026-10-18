@@ -54,6 +54,15 @@ target_include_directories(omapic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia Qt6::Concurrent Exiv2::exiv2lib)
 
+# Unit tests for the logic layer. On by default; configure with
+# -DOMAPIC_BUILD_TESTS=OFF to skip them (e.g. in the packaging build). Run with
+# `ctest --test-dir build` (or `ctest` from the build directory) after building.
+option(OMAPIC_BUILD_TESTS "Build the logic unit tests" ON)
+if(OMAPIC_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 # Installation. The QML module is compiled into the executable, so only the
 # binary plus its desktop entry and icon need to be installed.
 include(GNUInstallDirs)
