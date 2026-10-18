@@ -18,8 +18,19 @@
 class Database {
 public:
     // connectionName lets a second thread open its own connection to the same
-    // file (QSqlDatabase connections are per-thread).
+    // file (QSqlDatabase connections are per-thread). Returns false when the file
+    // can't be opened OR when the library was written by a newer Omapic (see
+    // schemaTooNew); in the latter case the connection is closed, not left
+    // partially open. On success the schema is migrated up to kSchemaVersion.
     bool open(const QString &path, const QString &connectionName = {});
+
+    // True when the most recent open() refused because the library's schema
+    // version is newer than this build understands. Lets the UI show a clear
+    // "update Omapic" message instead of a generic failure.
+    bool schemaTooNew() const { return m_schemaTooNew; }
+    // The schema version this build writes (PRAGMA user_version). Exposed so tests
+    // can assert an upgraded library lands on it.
+    static int currentSchemaVersion();
 
     bool beginTransaction();  // wrap many writes in one commit (much faster)
     bool commitTransaction();
@@ -173,12 +184,44 @@ private:
     // tags out of every tag list, autocomplete, and the detail panel.
     QString nonSystemTagClause(const QString &alias) const;
     // Resolve (creating if needed) the reserved Albums category and Favorites tag,
-    // caching their ids. Idempotent; called at the end of open().
+    // caching their ids. Idempotent; called at the end of open() on every open,
+    // regardless of schema version, since the ids are per-instance in-memory.
     void ensureAlbumsCategory();
     void ensureFavoritesAlbum();
+
+    // --- Schema versioning (PRAGMA user_version) ---
+    int userVersion();                 // the opened file's current schema version
+    void setUserVersion(int version);
+    // Upgrade the open database from `fromVersion` to kSchemaVersion by running the
+    // numbered migration steps in order. Each step runs in its own transaction and
+    // writes user_version at the end, so an interrupted upgrade resumes from the
+    // last completed step. Returns false if a step fails. fromVersion == 0 runs the
+    // whole ladder (a fresh or pre-versioning database).
+    bool runMigrations(int fromVersion);
+    // Numbered, idempotent migration steps (keyed by target version). Each keeps
+    // the hasColumn / IF NOT EXISTS guards so re-running is harmless.
+    void migrate_0_to_1(); // base tables
+    void migrate_1_to_2(); // folders.enabled
+    void migrate_2_to_3(); // photos.hash + content_tags
+    void migrate_3_to_4(); // tag_implications
+    void migrate_4_to_5(); // tag_categories + tags.category_id
+    void migrate_5_to_6(); // system flags
+    void migrate_6_to_7(); // smart_albums
+    void migrate_7_to_8(); // photos.taken_at
+    void migrate_8_to_9(); // _system:Albums category rename (non-additive)
+    // True when migrate_8_to_9 would actually move rows (a legacy bare "Albums"
+    // system category is present). Gates the pre-migration backup so a fresh
+    // library isn't backed up pointlessly.
+    bool legacyAlbumsNeedRename();
+    // Copy the database to "<path>.bak-v<fromVersion>" via VACUUM INTO before a
+    // non-additive migration. No-op for an in-memory database. Keeps the two most
+    // recent backups.
+    void backupDatabase(int fromVersion);
+    void pruneBackups(const QString &dbPath);
 
     QSqlDatabase m_db;
     QString m_connectionName;
     int m_albumCategoryId = -1; // reserved "Albums" category (system = 1, stored "_system:Albums")
     int m_favoritesTagId = -1;  // reserved "Favorites" album tag (system = 1)
+    bool m_schemaTooNew = false; // set by open() when the library is from a newer build
 };
