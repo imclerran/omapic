@@ -75,6 +75,10 @@ private slots:
     void favoritesTagCannotBeDeleted();
     void addImplicationRejectsSelfAndNegative();
     void expandAllImplicationsResolvesDiamond();
+    void removeImplicationStopsFuturePropagationOnly();
+    void deleteTagCascadesImplications();
+    void linkPhotoTagFailsOnMissingForeignKey();
+    void coOccurringTagsEmptyWhenNoCoOccurrence();
 
 private:
     // Map a tag list to {name: count} for order-independent assertions.
@@ -788,6 +792,83 @@ void TestDatabase::expandAllImplicationsResolvesDiamond()
 
     // Fixed point reached: a second pass adds nothing.
     QCOMPARE(m_db->expandAllImplications(), 0);
+}
+
+void TestDatabase::removeImplicationStopsFuturePropagationOnly()
+{
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    m_db->addImplication(a, b);
+
+    // Apply the rule to an existing photo: p1 gets both a and b.
+    const int p1 = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QStringLiteral("H1"));
+    m_db->linkPhotoTag(p1, a);
+    m_db->applyImplications(QStringLiteral("H1"), a);
+    QVERIFY(m_db->photoTagIds(p1).contains(b));
+
+    // Removing the implication drops the rule but must NOT un-apply what it already
+    // produced: the rule is gone, yet p1 keeps b.
+    m_db->removeImplication(a, b);
+    QVERIFY(m_db->implications().isEmpty());
+    QVERIFY(m_db->photoTagIds(p1).contains(b));
+
+    // Future propagation stops: a freshly tagged photo no longer gains b.
+    const int p2 = m_db->insertPhoto(QStringLiteral("/p/2.jpg"), QStringLiteral("H2"));
+    m_db->linkPhotoTag(p2, a);
+    m_db->applyImplications(QStringLiteral("H2"), a);
+    const QSet<int> ids = m_db->photoTagIds(p2);
+    QVERIFY(ids.contains(a));
+    QVERIFY(!ids.contains(b));
+}
+
+void TestDatabase::deleteTagCascadesImplications()
+{
+    // a -> b -> c. Deleting the middle tag must cascade both implication rows away,
+    // breaking the chain (observed through implicationWouldCycle's graph walk).
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    const int c = m_db->ensureTag(QStringLiteral("c"));
+    m_db->addImplication(a, b);
+    m_db->addImplication(b, c);
+
+    // Before: a reaches c through b, so adding c -> a would close a cycle.
+    QVERIFY(m_db->implicationWouldCycle(c, a));
+
+    m_db->deleteTag(b);
+
+    // After: with b (and its two implication rows) gone, a no longer reaches c.
+    QVERIFY(!m_db->implicationWouldCycle(c, a));
+}
+
+void TestDatabase::linkPhotoTagFailsOnMissingForeignKey()
+{
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    const int tag = m_db->ensureTag(QStringLiteral("x"));
+
+    // With foreign_keys ON, linking a non-existent photo or tag is a foreign-key
+    // violation (not caught by INSERT OR IGNORE, which only absorbs the duplicate
+    // PK case): the call reports failure and writes no row.
+    QVERIFY(!m_db->linkPhotoTag(99999, tag));
+    QVERIFY(!m_db->linkPhotoTag(photo, 99999));
+    QVERIFY(m_db->photoTagIds(photo).isEmpty());
+
+    // The valid link still succeeds.
+    QVERIFY(m_db->linkPhotoTag(photo, tag));
+    QVERIFY(m_db->photoTagIds(photo).contains(tag));
+}
+
+void TestDatabase::coOccurringTagsEmptyWhenNoCoOccurrence()
+{
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    const int p1 = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    const int p2 = m_db->insertPhoto(QStringLiteral("/p/2.jpg"), QString());
+    m_db->linkPhotoTag(p1, a);
+    m_db->linkPhotoTag(p2, b); // a and b never appear on the same photo
+
+    // Faceted drill-down on {a, b}: no photo carries both, so the co-occurring set
+    // is empty — it must NOT fall back to the full active tag list.
+    QVERIFY(m_db->coOccurringTags({a, b}).isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestDatabase)

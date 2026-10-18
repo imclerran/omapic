@@ -22,6 +22,8 @@ private slots:
     void collectFindsMediaRecursively();
     void collectMatchesUppercaseExtensions();
     void collectHonorsNomedia();
+    void collectHonorsNomediaInRoot();
+    void collectUnionsIntoExistingSet();
     void collectIgnoresEmptyAndMissingRoot();
     void collectSortedIsCaseInsensitiveOrder();
 
@@ -113,6 +115,39 @@ void TestMediaScan::collectMatchesUppercaseExtensions()
     QVERIFY(out.contains(root + QStringLiteral("/PHOTO.JPG")));
     QVERIFY(out.contains(root + QStringLiteral("/Clip.MOV")));
     QVERIFY(out.contains(root + QStringLiteral("/mixed.JpEg")));
+}
+
+void TestMediaScan::collectHonorsNomediaInRoot()
+{
+    // A .nomedia directly in the scanned root excludes the whole tree.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString root = dir.path();
+    touch(root, QStringLiteral("a.jpg"));
+    touch(root, QStringLiteral("sub/b.png"));
+    touch(root, QStringLiteral(".nomedia"));
+
+    QSet<QString> out;
+    mediascan::collect(root, out);
+    QVERIFY(out.isEmpty());
+}
+
+void TestMediaScan::collectUnionsIntoExistingSet()
+{
+    // collect adds to the set it is given, so several roots can be unioned by
+    // calling it repeatedly with the same set.
+    QTemporaryDir dirA, dirB;
+    QVERIFY(dirA.isValid() && dirB.isValid());
+    touch(dirA.path(), QStringLiteral("one.jpg"));
+    touch(dirB.path(), QStringLiteral("two.png"));
+
+    QSet<QString> out;
+    mediascan::collect(dirA.path(), out);
+    mediascan::collect(dirB.path(), out);
+
+    QCOMPARE(out.size(), 2);
+    QVERIFY(out.contains(dirA.path() + QStringLiteral("/one.jpg")));
+    QVERIFY(out.contains(dirB.path() + QStringLiteral("/two.png")));
 }
 
 void TestMediaScan::collectIgnoresEmptyAndMissingRoot()

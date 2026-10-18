@@ -21,6 +21,7 @@ private slots:
     void leavesInnerSpacingAndDigits();
     void preservesCompatibilityLigatures();
     void handlesSurrogatePairs();
+    void foldsToEmptyWhenOnlyCombiningMarks();
     void textMatchContains();
 };
 
@@ -96,6 +97,18 @@ void TestTextFold::handlesSurrogatePairs()
     const QString folded = foldText(input);
     QCOMPARE(folded, QStringLiteral("cafe ") + party);
     QVERIFY(folded.endsWith(party)); // the emoji's surrogate pair is unbroken
+}
+
+void TestTextFold::foldsToEmptyWhenOnlyCombiningMarks()
+{
+    // A string of only combining marks folds away to empty. This matters because
+    // an empty needle is a substring of everything — a stray lone accent typed as
+    // a search term would then match every item, which this pins as the behavior.
+    QVERIFY(foldText(QStringLiteral("́")).isEmpty());        // lone combining acute
+    QVERIFY(foldText(QStringLiteral("́̈")).isEmpty()); // acute + diaeresis
+
+    TextMatch tm;
+    QVERIFY(tm.contains(QStringLiteral("anything"), QStringLiteral("́")));
 }
 
 void TestTextFold::textMatchContains()
