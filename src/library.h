@@ -161,6 +161,9 @@ public:
     Q_INVOKABLE int createAlbumWithPhotos(const QString &name, const QVariantList &photoIds);
     Q_INVOKABLE void addPhotosToAlbum(const QVariantList &photoIds, int albumId);
     Q_INVOKABLE void removePhotosFromAlbum(const QVariantList &photoIds, int albumId);
+    // Delete a regular album: drop its hidden tag and every membership link. The
+    // photos and their other tags are untouched. Favorites is permanent (no-op).
+    Q_INVOKABLE void deleteAlbum(int albumId);
     // Album ids that EVERY given photo already belongs to — so the "Add to album"
     // menu can show which albums the selection is already in (a check, or a filled
     // star for Favorites).
@@ -171,6 +174,23 @@ public:
     Q_INVOKABLE void toggleFavorite(int photoId);
     // Set the Favorites membership for many photos at once.
     Q_INVOKABLE void setFavorite(const QVariantList &photoIds, bool favorite);
+
+    // --- Smart albums (saved tag queries, shown alongside regular albums) ---
+    // True when a UI-facing album id refers to a smart album (reserved high range)
+    // rather than a regular album tag.
+    Q_INVOKABLE bool isSmartAlbum(int albumId) const;
+    // An album's membership query as {tags: [ids], matchAll}. A regular album is a
+    // single-tag query; a smart album returns its saved set. An invalid/list-level
+    // id returns an empty tag list. Used to drive the album-view filter uniformly.
+    Q_INVOKABLE QVariantMap albumQuery(int albumId) const;
+    // A smart album's definition for the edit dialog: {id, name, tags, matchAll}.
+    Q_INVOKABLE QVariantMap smartAlbum(int albumId) const;
+    // Create/update a smart album. Returns the new UI id (or true) on success, or
+    // -1/false when the name is blank/duplicate or no tags are selected.
+    Q_INVOKABLE int createSmartAlbum(const QString &name, const QVariantList &tagIds, bool matchAll);
+    Q_INVOKABLE bool updateSmartAlbum(int albumId, const QString &name,
+                                      const QVariantList &tagIds, bool matchAll);
+    Q_INVOKABLE void deleteSmartAlbum(int albumId);
 
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.

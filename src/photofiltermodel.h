@@ -76,9 +76,12 @@ public:
     // a single re-filter + re-sort. Switching views changes several of these
     // together; setting them one at a time made the proxy re-sort once per change
     // — e.g. a wasted name-sort before the date-sort when opening the timeline.
+    // albumTags is the current album's membership query: a regular album is a
+    // single-tag query ([albumTagId]); a smart album is its saved tag set. An
+    // empty list means the album-list level (tiles, not a photo grid).
     Q_INVOKABLE void applyView(bool dedupe, bool sortByDate, bool folderMode,
                                const QString &folderPath, bool albumMode = false,
-                               int albumTagId = -1);
+                               const QVariantList &albumTags = {}, bool albumMatchAll = true);
 
     // The registered folder roots, used to tell orphan photos (shown at the
     // folder-view root) from foldered ones. Set by Library; not a QML property.
@@ -145,7 +148,8 @@ private:
     QString m_folderPath;
     bool m_dedupe = true; // ungrouped is the default view, which dedupes
     bool m_albumMode = false;   // album view: restrict to one album (or the list level)
-    int m_albumTagId = -1;      // the album being viewed; <= 0 = the album-list level
+    QList<int> m_albumTags;     // the viewed album's query tags; empty = the list level
+    bool m_albumMatchAll = true; // AND (every tag) vs OR (any tag) for m_albumTags
     QStringList m_folderRoots;
     QSet<int> m_albumTagIds;    // every album tag id (for the flattened album search)
     QCollator m_collator;

@@ -16,6 +16,7 @@ Item {
     property bool selected: false
     signal clicked(int modifiers)
     signal doubleClicked()
+    signal rightClicked()
 
     readonly property var thumbs: (entry && entry.thumbs) ? entry.thumbs : []
 
@@ -63,6 +64,28 @@ Item {
             }
         }
 
+        // Smart-album badge (a funnel) so a saved-query album reads differently
+        // from a regular one.
+        Rectangle {
+            visible: root.entry && root.entry.smart === true
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 6
+            width: 20
+            height: 20
+            radius: 10
+            color: Qt.rgba(0, 0, 0, 0.6)
+            Image {
+                anchors.centerIn: parent
+                source: "data:image/svg+xml," + encodeURIComponent(
+                    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+                    + "<path fill='white' d='M3 4 h18 l-7 8 v6 l-4 2 v-8 z'/></svg>")
+                sourceSize.width: 12
+                sourceSize.height: 12
+                smooth: true
+            }
+        }
+
         // Name + count band.
         Rectangle {
             anchors.left: parent.left
@@ -99,8 +122,14 @@ Item {
         id: mouse
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
-        onClicked: (mouse) => root.clicked(mouse.modifiers)
+        onClicked: (mouse) => {
+            if (mouse.button === Qt.RightButton)
+                root.rightClicked()
+            else
+                root.clicked(mouse.modifiers)
+        }
         onDoubleClicked: root.doubleClicked()
     }
 }

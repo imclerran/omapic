@@ -46,6 +46,7 @@ Item {
 
     signal goUp()                            // back to the album list (Alt+Up / Back)
     signal enterAlbum(int albumId)           // open an album (Enter on a selected tile)
+    signal newSmartAlbumRequested()          // the "New Smart Album" button
     signal cellClicked(int gridIndex, int modifiers)
     signal cellDoubleClicked(int gridIndex)  // album -> open, photo -> view
     signal cellRightClicked(int gridIndex)
@@ -110,12 +111,29 @@ Item {
                     smooth: true
                 }
             }
+            // Create a smart album; only at the album-list level (there's no "add
+            // to" concept inside an album, and smart albums have no manual members).
+            Button {
+                id: newSmartBtn
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                height: 28
+                flat: true
+                visible: av.currentAlbum <= 0 && !av.searching
+                text: qsTr("＋ Smart Album")
+                font.pixelSize: 12
+                onClicked: av.newSmartAlbumRequested()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Create an album that auto-fills from a tag query")
+            }
             Label {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: 10
-                anchors.right: upButton.visible ? upButton.left : parent.right
-                anchors.rightMargin: upButton.visible ? 6 : 10
+                anchors.right: upButton.visible ? upButton.left
+                             : newSmartBtn.visible ? newSmartBtn.left : parent.right
+                anchors.rightMargin: (upButton.visible || newSmartBtn.visible) ? 6 : 10
                 text: av.currentAlbum > 0 ? av.currentAlbumName : qsTr("Albums")
                 elide: Text.ElideMiddle
                 font.pixelSize: 12
@@ -184,16 +202,19 @@ Item {
                 Component {
                     id: albumComp
                     FolderMosaicCell {
-                        // Prefix a star on the Favorites tile so it reads as special.
+                        // Prefix a star on the Favorites tile so it reads as special;
+                        // carry `smart` so the cell shows the smart-album badge.
                         entry: cell.entry ? ({
                             name: (cell.entry.favorite ? "★  " : "") + cell.entry.name,
                             count: cell.entry.count,
-                            thumbs: cell.entry.thumbs
+                            thumbs: cell.entry.thumbs,
+                            smart: cell.entry.smart === true
                         }) : ({})
                         accent: av.accent
                         selected: cell.entry && av.selectedAlbums.indexOf(cell.entry.id) !== -1
                         onClicked: (modifiers) => av.cellClicked(cell.index, modifiers)
                         onDoubleClicked: av.cellDoubleClicked(cell.index)
+                        onRightClicked: av.cellRightClicked(cell.index)
                     }
                 }
                 Component {

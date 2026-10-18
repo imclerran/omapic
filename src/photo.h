@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QFileInfo>
+#include <QList>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -80,6 +81,16 @@ struct AlbumInfo {
     int id = -1;
     QString name;
     bool favorite = false;
+};
+
+// A smart album: a saved tag query (a set of tags + AND/OR mode) that
+// auto-populates in the Albums view. Unlike a regular album it has no stored
+// membership — a photo belongs iff its tags currently match the query.
+struct SmartAlbumInfo {
+    int id = -1;
+    QString name;
+    bool matchAll = true;   // true = AND (carry every tag); false = OR (any tag)
+    QList<int> tagIds;
 };
 
 struct FolderInfo {

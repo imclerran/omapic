@@ -135,15 +135,22 @@ void PhotoFilterModel::setDedupe(bool on)
 }
 
 void PhotoFilterModel::applyView(bool dedupe, bool sortByDate, bool folderMode,
-                                 const QString &folderPath, bool albumMode, int albumTagId)
+                                 const QString &folderPath, bool albumMode,
+                                 const QVariantList &albumTags, bool albumMatchAll)
 {
+    QList<int> tags;
+    tags.reserve(albumTags.size());
+    for (const QVariant &v : albumTags)
+        tags.append(v.toInt());
+
     bool changed = false;
     if (m_dedupe != dedupe) { m_dedupe = dedupe; emit dedupeChanged(); changed = true; }
     if (m_sortByDate != sortByDate) { m_sortByDate = sortByDate; emit sortByDateChanged(); changed = true; }
     if (m_folderMode != folderMode) { m_folderMode = folderMode; emit folderModeChanged(); changed = true; }
     if (m_folderPath != folderPath) { m_folderPath = folderPath; emit folderPathChanged(); changed = true; }
     if (m_albumMode != albumMode) { m_albumMode = albumMode; changed = true; }
-    if (m_albumTagId != albumTagId) { m_albumTagId = albumTagId; changed = true; }
+    if (m_albumTags != tags) { m_albumTags = tags; changed = true; }
+    if (m_albumMatchAll != albumMatchAll) { m_albumMatchAll = albumMatchAll; changed = true; }
     if (!changed)
         return;
     // One re-filter + re-sort against the final mode, rather than one per setter.
@@ -170,7 +177,7 @@ void PhotoFilterModel::setAlbumTagIds(const QList<int> &ids)
         return;
     m_albumTagIds = next;
     // Only affects the flattened album-list search; re-filter there.
-    if (m_albumMode && m_albumTagId <= 0 && !m_search.isEmpty()) {
+    if (m_albumMode && m_albumTags.isEmpty() && !m_search.isEmpty()) {
         invalidateRowFilter();
         emit countChanged();
     }
@@ -327,17 +334,28 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
     }
 
     // Album-view gate (no-op outside album mode). Inside an album, require the
-    // photo to carry that album's tag. At the album-list level the grid is hidden,
-    // so show nothing unless a search is active — then flatten to every photo that
-    // belongs to some album (mirroring folder view's flattened search).
+    // photo to match the album's query — a regular album is a single-tag query,
+    // a smart album its saved (tag set + AND/OR). At the album-list level the grid
+    // is hidden, so show nothing unless a search is active — then flatten to every
+    // photo that belongs to some album (mirroring folder view's flattened search).
     if (m_albumMode) {
         const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
-        if (m_albumTagId > 0) {
-            bool has = false;
+        if (!m_albumTags.isEmpty()) {
+            QSet<int> tags;
+            tags.reserve(raw.size());
             for (const QVariant &v : raw)
-                if (v.toInt() == m_albumTagId) { has = true; break; }
-            if (!has)
-                return false;
+                tags.insert(v.toInt());
+            if (m_albumMatchAll) {
+                for (int t : m_albumTags)
+                    if (!tags.contains(t))
+                        return false;
+            } else {
+                bool any = false;
+                for (int t : m_albumTags)
+                    if (tags.contains(t)) { any = true; break; }
+                if (!any)
+                    return false;
+            }
         } else {
             if (m_search.isEmpty())
                 return false; // album-list level shows tiles, not a photo grid

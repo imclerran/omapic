@@ -16,6 +16,13 @@ int TagModel::rowCount(const QModelIndex &parent) const
     return m_tags.size();
 }
 
+int TagModel::idAt(int row) const
+{
+    if (row < 0 || row >= m_tags.size())
+        return -1;
+    return m_tags[row].id;
+}
+
 QVariant TagModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_tags.size())
