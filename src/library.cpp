@@ -317,6 +317,16 @@ bool Library::implicationWouldCycle(int antecedentId, int consequentId) const
     return m_db.implicationWouldCycle(antecedentId, consequentId);
 }
 
+int Library::ensureTag(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return -1;
+    // A tag with no memberships yet; the caller wires it into an association,
+    // whose migration then applies it to photos (and refreshes the models).
+    return m_db.ensureTag(trimmed);
+}
+
 QVariantList Library::folders() const
 {
     QVariantList out;
