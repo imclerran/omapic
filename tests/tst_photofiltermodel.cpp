@@ -7,6 +7,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QList>
+#include <QLocale>
 #include <QSet>
 #include <QStringList>
 #include <QVariantList>
@@ -444,5 +445,18 @@ void TestPhotoFilterModel::accessorsHandleOutOfRange()
     QVERIFY(m_proxy->photoAt(999).isEmpty());
 }
 
-QTEST_GUILESS_MAIN(TestPhotoFilterModel)
+// Custom entry point instead of QTEST_GUILESS_MAIN: PhotoFilterModel sorts with a
+// QCollator in numeric mode, and ICU only applies numeric collation under a real
+// locale — the C/POSIX locale (common in minimal CI containers) silently degrades
+// to lexical order. Pin a known locale so the natural-sort assertion is
+// deterministic regardless of the host's configured locale. The app itself keeps
+// following the user's locale; this only steers the test process.
+int main(int argc, char *argv[])
+{
+    QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
+    QCoreApplication app(argc, argv);
+    QTEST_SET_MAIN_SOURCE_PATH
+    TestPhotoFilterModel tc;
+    return QTest::qExec(&tc, argc, argv);
+}
 #include "tst_photofiltermodel.moc"
