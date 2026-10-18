@@ -932,6 +932,10 @@ Dialog {
                     readonly property string query: TextMatch.fold(antField.text.trim())
                     readonly property int antId: root.tagIdByName(antField.text)
                     readonly property int conId: root.tagIdByName(conField.text)
+                    // The typed consequent, and whether it names a tag that doesn't
+                    // exist yet — in which case Add creates it (see submit()).
+                    readonly property string conName: conField.text.trim()
+                    readonly property bool conIsNew: assoc.conName !== "" && assoc.conId < 0
                     readonly property bool isSelf: assoc.antId >= 0 && assoc.antId === assoc.conId
                     readonly property bool wouldCycle: assoc.antId >= 0 && assoc.conId >= 0 && !assoc.isSelf
                                                        && root.library.implicationWouldCycle(assoc.antId, assoc.conId)
@@ -943,7 +947,9 @@ Dialog {
                         }
                         return false
                     }
-                    readonly property bool canAdd: assoc.antId >= 0 && assoc.conId >= 0
+                    // A brand-new consequent can't be a self-loop, a cycle, or a
+                    // duplicate, so those guards fall away when conIsNew.
+                    readonly property bool canAdd: assoc.antId >= 0 && assoc.conName !== ""
                                                    && !assoc.isSelf && !assoc.wouldCycle && !assoc.exists
                 }
 
@@ -954,7 +960,15 @@ Dialog {
                     function submit() {
                         if (!assoc.canAdd)
                             return
-                        root.library.addTagImplication(assoc.antId, assoc.conId)
+                        // Create the consequent on the fly when it's a new name;
+                        // the association's migration then applies it to photos.
+                        let conId = assoc.conId
+                        if (conId < 0) {
+                            conId = root.library.ensureTag(assoc.conName)
+                            if (conId < 0)
+                                return
+                        }
+                        root.library.addTagImplication(assoc.antId, conId)
                         antField.clear()
                         conField.clear()
                         antField.focusInput()
@@ -994,6 +1008,7 @@ Dialog {
                     text: assoc.isSelf ? qsTr("A tag can't imply itself.")
                         : assoc.wouldCycle ? qsTr("That would create a loop of associations.")
                         : assoc.exists ? qsTr("That association already exists.")
+                        : assoc.conIsNew ? qsTr("“%1” will be created as a new tag.").arg(assoc.conName)
                         : qsTr("Removing an association later won't remove tags it has already applied — "
                                + "those must be cleared by hand.")
                 }

@@ -153,6 +153,11 @@ public:
     Q_INVOKABLE void removeTagImplication(int antecedentId, int consequentId);
     // Whether antecedent -> consequent would close a loop, for live UI validation.
     Q_INVOKABLE bool implicationWouldCycle(int antecedentId, int consequentId) const;
+    // Create a standalone tag by name (or return an existing one's id),
+    // case-insensitively; -1 on a blank name. Lets the Associations tab turn a
+    // never-before-seen consequent typed into the "that tag" box into a real tag
+    // on the spot, so a rule can be defined before the tag exists anywhere.
+    Q_INVOKABLE int ensureTag(const QString &name);
 
     // --- Albums & favorites ---
     // Create an album and add the given photos to it in one step. Returns the
