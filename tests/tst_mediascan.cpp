@@ -20,7 +20,9 @@ private slots:
     void isMediaFileCaseInsensitive();
     void isMediaFileRejectsNonMedia();
     void collectFindsMediaRecursively();
+    void collectMatchesUppercaseExtensions();
     void collectHonorsNomedia();
+    void collectIgnoresEmptyAndMissingRoot();
     void collectSortedIsCaseInsensitiveOrder();
 
 private:
@@ -84,6 +86,46 @@ void TestMediaScan::collectFindsMediaRecursively()
     QVERIFY(out.contains(root + QStringLiteral("/top.jpg")));
     QVERIFY(out.contains(root + QStringLiteral("/sub/nested.png")));
     QVERIFY(out.contains(root + QStringLiteral("/sub/deep/clip.mp4")));
+}
+
+void TestMediaScan::collectMatchesUppercaseExtensions()
+{
+    // isMediaFile() lowercases the suffix, so it is case-insensitive. collect()
+    // must agree, or a file like PHOTO.JPG would be reported as media yet never
+    // picked up by a scan. This pins that the two stay consistent.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString root = dir.path();
+
+    touch(root, QStringLiteral("PHOTO.JPG"));
+    touch(root, QStringLiteral("Clip.MOV"));
+    touch(root, QStringLiteral("mixed.JpEg"));
+
+    for (const QString &rel : {QStringLiteral("PHOTO.JPG"), QStringLiteral("Clip.MOV"),
+                               QStringLiteral("mixed.JpEg")}) {
+        QVERIFY2(mediascan::isMediaFile(root + QLatin1Char('/') + rel),
+                 qPrintable(QStringLiteral("isMediaFile should accept ") + rel));
+    }
+
+    QSet<QString> out;
+    mediascan::collect(root, out);
+    QCOMPARE(out.size(), 3);
+    QVERIFY(out.contains(root + QStringLiteral("/PHOTO.JPG")));
+    QVERIFY(out.contains(root + QStringLiteral("/Clip.MOV")));
+    QVERIFY(out.contains(root + QStringLiteral("/mixed.JpEg")));
+}
+
+void TestMediaScan::collectIgnoresEmptyAndMissingRoot()
+{
+    // An empty root string returns early; a non-existent path yields nothing.
+    // Neither must throw, and both leave any pre-existing results untouched.
+    QSet<QString> out;
+    mediascan::collect(QString(), out);
+    QVERIFY(out.isEmpty());
+    mediascan::collect(QStringLiteral("/no/such/directory/omapic-test"), out);
+    QVERIFY(out.isEmpty());
+
+    QCOMPARE(mediascan::collectSorted(QString()), QStringList());
 }
 
 void TestMediaScan::collectHonorsNomedia()

@@ -19,6 +19,8 @@ private slots:
     void equivalenceClasses();
     void preservesNonDecomposable();
     void leavesInnerSpacingAndDigits();
+    void preservesCompatibilityLigatures();
+    void handlesSurrogatePairs();
     void textMatchContains();
 };
 
@@ -72,6 +74,28 @@ void TestTextFold::leavesInnerSpacingAndDigits()
 {
     // Folding must not collapse spacing or alter digits — only case and diacritics.
     QCOMPARE(foldText(QStringLiteral("São Paulo 2024")), QStringLiteral("sao paulo 2024"));
+}
+
+void TestTextFold::preservesCompatibilityLigatures()
+{
+    // foldText uses NFD (canonical), not NFKD (compatibility), so the "fi" ligature
+    // is preserved rather than split into "f" + "i". This documents the deliberate
+    // boundary: "ﬁle" does not fold to "file".
+    const QString ligature = QStringLiteral("ﬁle"); // ﬁle
+    QCOMPARE(foldText(ligature), QStringLiteral("ﬁle"));
+    QVERIFY(foldText(ligature) != QStringLiteral("file"));
+}
+
+void TestTextFold::handlesSurrogatePairs()
+{
+    // A non-BMP code point (🎉, a surrogate pair in UTF-16) must pass through intact
+    // — it is neither a combining mark nor an upper-case letter — while surrounding
+    // text still folds normally.
+    const QString party = QStringLiteral("\U0001F389"); // 🎉
+    const QString input = QStringLiteral("Café ") + party; // "Café 🎉"
+    const QString folded = foldText(input);
+    QCOMPARE(folded, QStringLiteral("cafe ") + party);
+    QVERIFY(folded.endsWith(party)); // the emoji's surrogate pair is unbroken
 }
 
 void TestTextFold::textMatchContains()

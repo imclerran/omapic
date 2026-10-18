@@ -72,6 +72,9 @@ private slots:
     void renameTagNameCollisionIsNoop();
     void insertCategoryRejectsDuplicateName();
     void contentTagOpsNoopWithoutHash();
+    void favoritesTagCannotBeDeleted();
+    void addImplicationRejectsSelfAndNegative();
+    void expandAllImplicationsResolvesDiamond();
 
 private:
     // Map a tag list to {name: count} for order-independent assertions.
@@ -723,6 +726,68 @@ void TestDatabase::contentTagOpsNoopWithoutHash()
     const int target = m_db->insertPhoto(QStringLiteral("/c/1.jpg"), QString());
     m_db->applyContentTags(target, QString());
     QVERIFY(m_db->photoTagIds(target).isEmpty());
+}
+
+void TestDatabase::favoritesTagCannotBeDeleted()
+{
+    const int fav = m_db->favoritesTagId();
+    QVERIFY(fav > 0);
+
+    // The reserved Favorites tag is permanent; deleteTag must not remove it.
+    m_db->deleteTag(fav);
+    QCOMPARE(m_db->tagName(fav), QStringLiteral("_album:Favorites")); // row still present
+    const QVector<AlbumInfo> albums = m_db->albumTags();
+    QVERIFY(!albums.isEmpty());
+    QVERIFY(albums.first().favorite);
+    QCOMPARE(albums.first().id, fav);
+
+    // A normal user tag is still deletable.
+    const int user = m_db->ensureTag(QStringLiteral("deleteme"));
+    m_db->deleteTag(user);
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("deleteme")), -1);
+}
+
+void TestDatabase::addImplicationRejectsSelfAndNegative()
+{
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    m_db->linkPhotoTag(photo, a);
+    m_db->linkPhotoTag(photo, b);
+
+    // Self-implication and negative ids are rejected outright.
+    m_db->addImplication(a, a);
+    m_db->addImplication(-1, b);
+    m_db->addImplication(a, -1);
+    QVERIFY(m_db->implications().isEmpty());
+
+    // A valid rule is still accepted, confirming the guards didn't over-reject.
+    m_db->addImplication(a, b);
+    QCOMPARE(m_db->implications().size(), 1);
+}
+
+void TestDatabase::expandAllImplicationsResolvesDiamond()
+{
+    // Diamond: a implies both b and c, which both imply d. Every photo tagged a
+    // should end up with b, c, and d, and d must not be double-counted or loop.
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    const int c = m_db->ensureTag(QStringLiteral("c"));
+    const int d = m_db->ensureTag(QStringLiteral("d"));
+    m_db->addImplication(a, b);
+    m_db->addImplication(a, c);
+    m_db->addImplication(b, d);
+    m_db->addImplication(c, d);
+
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    m_db->linkPhotoTag(photo, a);
+
+    m_db->expandAllImplications();
+    const QSet<int> ids = m_db->photoTagIds(photo);
+    QCOMPARE(ids, (QSet<int>{a, b, c, d}));
+
+    // Fixed point reached: a second pass adds nothing.
+    QCOMPARE(m_db->expandAllImplications(), 0);
 }
 
 QTEST_GUILESS_MAIN(TestDatabase)

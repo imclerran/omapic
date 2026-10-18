@@ -44,6 +44,15 @@ private slots:
     void sortByDateNewestFirstUndatedLast();
     void monthGroupsSectionsOverDateOrder();
 
+    // Album view
+    void albumModeInsideFiltersByAlbumQuery();
+    void albumModeListLevelFlattenedSearch();
+
+    // Misc ordering / combinations / bounds
+    void folderFirstGroupsByFolder();
+    void combinedTagAndSearchFilters();
+    void accessorsHandleOutOfRange();
+
 private:
     static Photo makePhoto(int id, const QString &path, const QString &name,
                            const QSet<int> &tagIds = {}, const QStringList &tagNames = {});
@@ -328,6 +337,111 @@ void TestPhotoFilterModel::monthGroupsSectionsOverDateOrder()
     QCOMPARE(g2.value(QStringLiteral("label")).toString(), QStringLiteral("Undated"));
     QCOMPARE(g2.value(QStringLiteral("firstRow")).toInt(), 3);
     QCOMPARE(g2.value(QStringLiteral("count")).toInt(), 1);
+}
+
+// --- Album view -------------------------------------------------------------
+
+void TestPhotoFilterModel::albumModeInsideFiltersByAlbumQuery()
+{
+    const int albumA = 100, albumB = 200;
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"), {albumA}),
+        makePhoto(2, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg"), {albumB}),
+        makePhoto(3, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg"), {albumA, albumB}),
+        makePhoto(4, QStringLiteral("/p/d.jpg"), QStringLiteral("d.jpg"), {}),
+    });
+
+    // A regular album is a single-tag query: show only its members.
+    m_proxy->applyView(false, false, false, QString(), /*albumMode=*/true,
+                       /*albumTags=*/QVariantList{albumA}, /*albumMatchAll=*/true);
+    QCOMPARE(proxyIds(), (QList<int>{1, 3}));
+
+    // A smart album in OR mode: carry any of its tags.
+    m_proxy->applyView(false, false, false, QString(), true,
+                       QVariantList{albumA, albumB}, /*albumMatchAll=*/false);
+    QCOMPARE(proxyIds(), (QList<int>{1, 2, 3}));
+
+    // A smart album in AND mode: carry every tag.
+    m_proxy->applyView(false, false, false, QString(), true,
+                       QVariantList{albumA, albumB}, /*albumMatchAll=*/true);
+    QCOMPARE(proxyIds(), QList<int>{3});
+}
+
+void TestPhotoFilterModel::albumModeListLevelFlattenedSearch()
+{
+    const int albumA = 100, albumB = 200;
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/p/a.jpg"), QStringLiteral("beach.jpg"), {albumA}),
+        makePhoto(2, QStringLiteral("/p/b.jpg"), QStringLiteral("beach2.jpg"), {}),      // in no album
+        makePhoto(3, QStringLiteral("/p/c.jpg"), QStringLiteral("mountain.jpg"), {albumB}),
+    });
+    m_proxy->setAlbumTagIds({albumA, albumB});
+
+    // Album-list level (no album selected): a grid of tiles, so no photos show...
+    m_proxy->applyView(false, false, false, QString(), /*albumMode=*/true,
+                       /*albumTags=*/QVariantList{}, true);
+    QCOMPARE(m_proxy->count(), 0);
+
+    // ...until a search flattens to "photos in any album matching the text". The
+    // photo in no album (beach2) is excluded despite matching the search term.
+    m_proxy->setSearchText(QStringLiteral("beach"));
+    QCOMPARE(proxyIds(), QList<int>{1});
+}
+
+// --- Misc ordering / combinations / bounds ----------------------------------
+
+void TestPhotoFilterModel::folderFirstGroupsByFolder()
+{
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/b/2.jpg"), QStringLiteral("2.jpg")),
+        makePhoto(2, QStringLiteral("/a/9.jpg"), QStringLiteral("9.jpg")),
+        makePhoto(3, QStringLiteral("/a/1.jpg"), QStringLiteral("1.jpg")),
+        makePhoto(4, QStringLiteral("/b/1.jpg"), QStringLiteral("1.jpg")),
+    });
+
+    m_proxy->setFolderFirst(true);
+    // Grouped by containing folder (/a before /b), then by natural file name
+    // within each folder: /a/1, /a/9, /b/1, /b/2.
+    QCOMPARE(proxyIds(), (QList<int>{3, 2, 4, 1}));
+}
+
+void TestPhotoFilterModel::combinedTagAndSearchFilters()
+{
+    const int dog = 1, cat = 2;
+    m_source->setPhotos({
+        makePhoto(10, QStringLiteral("/p/park1.jpg"), QStringLiteral("park.jpg"), {dog}),
+        makePhoto(11, QStringLiteral("/p/beach.jpg"), QStringLiteral("beach.jpg"), {dog}),
+        makePhoto(12, QStringLiteral("/p/park2.jpg"), QStringLiteral("park.jpg"), {cat}),
+    });
+
+    // Tag filter and text search stack: must carry the tag AND match the text.
+    m_proxy->setSelectedTagIds({dog});
+    m_proxy->setSearchText(QStringLiteral("park"));
+    QCOMPARE(proxyIds(), QList<int>{10}); // dog + "park" name; 11 fails text, 12 fails tag
+
+    // Adding an untagged-only restriction now excludes everything (all are tagged).
+    m_proxy->setTagPresence(PhotoFilterModel::UntaggedOnly);
+    QCOMPARE(m_proxy->count(), 0);
+}
+
+void TestPhotoFilterModel::accessorsHandleOutOfRange()
+{
+    m_source->setPhotos({
+        makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg")),
+    });
+
+    // Valid row.
+    QCOMPARE(m_proxy->idAt(0), 10);
+    QVERIFY(!m_proxy->sourceAt(0).isEmpty());
+    QVERIFY(!m_proxy->photoAt(0).isEmpty());
+
+    // Out-of-range rows return safe empties rather than crashing or asserting.
+    QCOMPARE(m_proxy->idAt(-1), -1);
+    QCOMPARE(m_proxy->idAt(999), -1);
+    QVERIFY(m_proxy->sourceAt(-1).isEmpty());
+    QVERIFY(m_proxy->sourceAt(999).isEmpty());
+    QVERIFY(m_proxy->photoAt(-1).isEmpty());
+    QVERIFY(m_proxy->photoAt(999).isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestPhotoFilterModel)
