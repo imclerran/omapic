@@ -29,6 +29,21 @@ cmake --build build
 ./build/omapic
 ```
 
+## Tests
+
+The logic layer (the SQLite store, text folding, media scanning, and the gallery
+filter) has a [Qt Test](https://doc.qt.io/qt-6/qttest-index.html) suite under
+[`tests/`](tests/), run via CTest and exercised in CI on every push and pull
+request:
+
+```sh
+cmake -B build -G Ninja          # tests build by default
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Pass `-DOMAPIC_BUILD_TESTS=OFF` to skip them (packaging builds do).
+
 ## License
 
 Copyright (C) 2026 Ian McLerran

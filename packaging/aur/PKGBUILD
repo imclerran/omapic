@@ -21,6 +21,7 @@ build() {
   cmake -B build -S "$pkgname-$pkgver" -G Ninja \
     -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr \
+    -DOMAPIC_BUILD_TESTS=OFF \
     -Wno-dev
   cmake --build build
 }
