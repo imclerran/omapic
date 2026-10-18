@@ -4,6 +4,7 @@
 
 #include <QtTest>
 
+#include <QHash>
 #include <QSet>
 #include <QSqlDatabase>
 #include <QString>
@@ -53,10 +54,40 @@ private slots:
     void deletePhotosUnderPathRemovesSubtree();
     void activePhotoPathsFilteredByTags();
 
+    // Aggregation queries (sidebar / manager reads)
+    void loadTagsListsActiveTagsWithTotalCount();
+    void activeTagsCountsOverActiveSetOnly();
+    void activeTagsFolderScopeRestrictsToSubtree();
+    void coOccurringTagsNarrowsBySelection();
+    void loadFoldersCountsSubtreePhotos();
+    void loadCategoriesActiveOnlyAndSystemExclusion();
+
+    // Path prefix-boundary cases (a sibling path must not be treated as nested)
+    void activeSetHonorsFolderPrefixBoundary();
+    void deletePhotosUnderPathHonorsPrefixBoundary();
+    void orphanCountHonorsPrefixBoundary();
+    void deleteOrphanPhotosKeepsContentArchive();
+
+    // Guard / rejection paths
+    void renameTagNameCollisionIsNoop();
+    void insertCategoryRejectsDuplicateName();
+    void contentTagOpsNoopWithoutHash();
+
 private:
+    // Map a tag list to {name: count} for order-independent assertions.
+    static QHash<QString, int> countsByName(const QVector<TagInfo> &tags);
+
     Database *m_db = nullptr;
     QString m_conn;
 };
+
+QHash<QString, int> TestDatabase::countsByName(const QVector<TagInfo> &tags)
+{
+    QHash<QString, int> m;
+    for (const TagInfo &t : tags)
+        m.insert(t.name, t.count);
+    return m;
+}
 
 void TestDatabase::init()
 {
@@ -430,6 +461,268 @@ void TestDatabase::activePhotoPathsFilteredByTags()
     QCOMPARE(m_db->activePhotoPaths({dog}, false).size(), 2);
     // Empty selection falls back to the whole active set.
     QCOMPARE(m_db->activePhotoPaths({}, true).size(), 3);
+}
+
+// --- Aggregation queries ----------------------------------------------------
+
+void TestDatabase::loadTagsListsActiveTagsWithTotalCount()
+{
+    // loadTags lists tags that apply to at least one ACTIVE photo, but reports the
+    // tag's TOTAL count across all photos (so the delete confirmation is honest).
+    const int folder = m_db->insertFolder(QStringLiteral("/lib"));
+    const int active = m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());
+    const int hidden = m_db->insertPhoto(QStringLiteral("/lib/b.jpg"), QString());
+
+    const int shared = m_db->ensureTag(QStringLiteral("shared"));
+    const int only = m_db->ensureTag(QStringLiteral("hiddenonly"));
+    m_db->linkPhotoTag(active, shared);
+    m_db->linkPhotoTag(hidden, shared);   // same tag on both photos
+    m_db->linkPhotoTag(hidden, only);     // this tag lives only on the hidden photo
+
+    // With the folder enabled both photos are active: both tags listed.
+    QHash<QString, int> all = countsByName(m_db->loadTags());
+    QCOMPARE(all.value(QStringLiteral("shared")), 2);
+    QCOMPARE(all.value(QStringLiteral("hiddenonly")), 1);
+
+    // Disable the folder: now neither photo is active, so no tags are listed.
+    m_db->setFolderEnabled(folder, false);
+    QVERIFY(m_db->loadTags().isEmpty());
+
+    // Make only the first photo active again (as an orphan would be): "shared"
+    // reappears with its full total count of 2, while "hiddenonly" stays hidden.
+    m_db->relocatePhoto(active, QStringLiteral("/orphan/a.jpg"));
+    QHash<QString, int> some = countsByName(m_db->loadTags());
+    QCOMPARE(some.value(QStringLiteral("shared")), 2); // total, not active-count
+    QVERIFY(!some.contains(QStringLiteral("hiddenonly")));
+}
+
+void TestDatabase::activeTagsCountsOverActiveSetOnly()
+{
+    // Unlike loadTags, activeTags counts only photos in the active set, and never
+    // lists reserved (Favorites/album) tags.
+    const int folder = m_db->insertFolder(QStringLiteral("/lib"));
+    const int p1 = m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());   // active
+    const int p2 = m_db->insertPhoto(QStringLiteral("/orphan/b.jpg"), QString()); // active (orphan)
+    const int tag = m_db->ensureTag(QStringLiteral("x"));
+    m_db->linkPhotoTag(p1, tag);
+    m_db->linkPhotoTag(p2, tag);
+    // Favorites is a reserved tag; it must never surface in activeTags.
+    m_db->linkPhotoTag(p1, m_db->favoritesTagId());
+
+    QHash<QString, int> counts = countsByName(m_db->activeTags());
+    QCOMPARE(counts.value(QStringLiteral("x")), 2);
+    QVERIFY(!counts.contains(QStringLiteral("Favorites")));
+
+    // Disabling the folder drops p1 from the active set, so the active count falls
+    // to 1 (only the orphan) — whereas loadTags would still report the total 2.
+    m_db->setFolderEnabled(folder, false);
+    QCOMPARE(countsByName(m_db->activeTags()).value(QStringLiteral("x")), 1);
+    QCOMPARE(countsByName(m_db->loadTags()).value(QStringLiteral("x")), 2);
+}
+
+void TestDatabase::activeTagsFolderScopeRestrictsToSubtree()
+{
+    m_db->insertFolder(QStringLiteral("/lib"));
+    const int inScope = m_db->insertPhoto(QStringLiteral("/lib/sub/a.jpg"), QString());
+    const int sibling = m_db->insertPhoto(QStringLiteral("/lib/subextra/b.jpg"), QString());
+    const int other = m_db->insertPhoto(QStringLiteral("/lib/other/c.jpg"), QString());
+    m_db->linkPhotoTag(inScope, m_db->ensureTag(QStringLiteral("in")));
+    m_db->linkPhotoTag(sibling, m_db->ensureTag(QStringLiteral("sib")));
+    m_db->linkPhotoTag(other, m_db->ensureTag(QStringLiteral("out")));
+
+    const QHash<QString, int> scoped = countsByName(m_db->activeTags(QStringLiteral("/lib/sub")));
+    QVERIFY(scoped.contains(QStringLiteral("in")));
+    // "/lib/subextra" shares the "/lib/sub" prefix but is NOT under it: the trailing
+    // separator in the scope match keeps the sibling folder out.
+    QVERIFY(!scoped.contains(QStringLiteral("sib")));
+    QVERIFY(!scoped.contains(QStringLiteral("out")));
+}
+
+void TestDatabase::coOccurringTagsNarrowsBySelection()
+{
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    const int c = m_db->ensureTag(QStringLiteral("c"));
+    const int p1 = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    const int p2 = m_db->insertPhoto(QStringLiteral("/p/2.jpg"), QString());
+    const int p3 = m_db->insertPhoto(QStringLiteral("/p/3.jpg"), QString());
+    m_db->linkPhotoTag(p1, a); m_db->linkPhotoTag(p1, b);
+    m_db->linkPhotoTag(p2, a); m_db->linkPhotoTag(p2, c);
+    m_db->linkPhotoTag(p3, a);
+
+    // Selecting {a}: every photo carries a, so all three tags co-occur, counted
+    // over the matching set (a on 3, b on 1, c on 1).
+    QHash<QString, int> one = countsByName(m_db->coOccurringTags({a}));
+    QCOMPARE(one.value(QStringLiteral("a")), 3);
+    QCOMPARE(one.value(QStringLiteral("b")), 1);
+    QCOMPARE(one.value(QStringLiteral("c")), 1);
+
+    // Selecting {a, b}: only p1 carries both, so the co-occurring set narrows to
+    // a and b (each on that single photo); c drops out entirely.
+    QHash<QString, int> two = countsByName(m_db->coOccurringTags({a, b}));
+    QCOMPARE(two.value(QStringLiteral("a")), 1);
+    QCOMPARE(two.value(QStringLiteral("b")), 1);
+    QVERIFY(!two.contains(QStringLiteral("c")));
+
+    // An empty selection falls back to activeTags (counts over the whole set).
+    QCOMPARE(countsByName(m_db->coOccurringTags({})).value(QStringLiteral("a")), 3);
+}
+
+void TestDatabase::loadFoldersCountsSubtreePhotos()
+{
+    const int lib = m_db->insertFolder(QStringLiteral("/lib"));
+    m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());
+    m_db->insertPhoto(QStringLiteral("/lib/sub/b.jpg"), QString());   // nested, counts
+    m_db->insertPhoto(QStringLiteral("/libraryextra/c.jpg"), QString()); // sibling, must NOT count
+    m_db->setFolderEnabled(lib, false);
+
+    const QVector<FolderInfo> folders = m_db->loadFolders();
+    QCOMPARE(folders.size(), 1);
+    QCOMPARE(folders.first().path, QStringLiteral("/lib"));
+    QCOMPARE(folders.first().count, 2); // /lib/a.jpg and /lib/sub/b.jpg only
+    QVERIFY(!folders.first().enabled); // reflects the enabled flag
+}
+
+void TestDatabase::loadCategoriesActiveOnlyAndSystemExclusion()
+{
+    const int people = m_db->insertCategory(QStringLiteral("People"), 0);
+    const int ghosts = m_db->insertCategory(QStringLiteral("Ghosts"), 1);
+    QVERIFY(people > 0 && ghosts > 0);
+
+    const int alice = m_db->ensureTag(QStringLiteral("alice"));
+    const int boo = m_db->ensureTag(QStringLiteral("boo"));
+    m_db->setTagCategory(alice, people);
+    m_db->setTagCategory(boo, ghosts);
+
+    const int active = m_db->insertPhoto(QStringLiteral("/orphan/a.jpg"), QString());
+    m_db->linkPhotoTag(active, alice); // People has a tag on an active photo
+    const int folder = m_db->insertFolder(QStringLiteral("/hidden"));
+    const int buried = m_db->insertPhoto(QStringLiteral("/hidden/b.jpg"), QString());
+    m_db->linkPhotoTag(buried, boo);   // Ghosts' only tag lives on a hidden photo
+    m_db->setFolderEnabled(folder, false);
+
+    // activeOnly keeps only categories with a tag on an active photo; the reserved
+    // "Albums" category is always excluded.
+    QHash<QString, int> active_m;
+    for (const CategoryInfo &c : m_db->loadCategories(/*activeOnly=*/true))
+        active_m.insert(c.name, c.tagCount);
+    QVERIFY(active_m.contains(QStringLiteral("People")));
+    QVERIFY(!active_m.contains(QStringLiteral("Ghosts")));
+    QVERIFY(!active_m.contains(QStringLiteral("Albums")));
+    QCOMPARE(active_m.value(QStringLiteral("People")), 1);
+
+    // Without activeOnly, every user category is listed (still no system ones).
+    QHash<QString, int> all_m;
+    for (const CategoryInfo &c : m_db->loadCategories(/*activeOnly=*/false))
+        all_m.insert(c.name, c.tagCount);
+    QVERIFY(all_m.contains(QStringLiteral("People")));
+    QVERIFY(all_m.contains(QStringLiteral("Ghosts")));
+    QVERIFY(!all_m.contains(QStringLiteral("Albums")));
+}
+
+// --- Path prefix-boundary cases ---------------------------------------------
+
+void TestDatabase::activeSetHonorsFolderPrefixBoundary()
+{
+    // A photo at "/libraryextra/..." shares the "/lib" prefix but is NOT under the
+    // folder "/lib" — it is an orphan, governed by no folder's enabled flag.
+    const int folder = m_db->insertFolder(QStringLiteral("/lib"));
+    m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());
+    m_db->insertPhoto(QStringLiteral("/libraryextra/b.jpg"), QString());
+
+    QCOMPARE(m_db->activePhotoPaths().size(), 2);
+
+    // Disabling "/lib" hides only its own subtree; the sibling-prefix orphan stays.
+    m_db->setFolderEnabled(folder, false);
+    QCOMPARE(m_db->activePhotoPaths(), QStringList{QStringLiteral("/libraryextra/b.jpg")});
+}
+
+void TestDatabase::deletePhotosUnderPathHonorsPrefixBoundary()
+{
+    m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());
+    m_db->insertPhoto(QStringLiteral("/lib/sub/b.jpg"), QString());
+    m_db->insertPhoto(QStringLiteral("/libraryextra/c.jpg"), QString()); // sibling prefix
+
+    m_db->deletePhotosUnderPath(QStringLiteral("/lib"));
+
+    // Only the real "/lib" subtree is gone; "/libraryextra" is untouched.
+    QCOMPARE(m_db->activePhotoPaths(), QStringList{QStringLiteral("/libraryextra/c.jpg")});
+}
+
+void TestDatabase::orphanCountHonorsPrefixBoundary()
+{
+    m_db->insertFolder(QStringLiteral("/lib"));
+    m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());        // under the folder
+    m_db->insertPhoto(QStringLiteral("/libraryextra/b.jpg"), QString()); // sibling -> orphan
+    m_db->insertPhoto(QStringLiteral("/elsewhere/c.jpg"), QString());  // orphan
+
+    // The sibling-prefix photo is an orphan, not "under /lib".
+    QCOMPARE(m_db->orphanPhotoCount(), 2);
+}
+
+void TestDatabase::deleteOrphanPhotosKeepsContentArchive()
+{
+    const QString hash = QStringLiteral("HASH_ORPHAN");
+    const int tag = m_db->ensureTag(QStringLiteral("archived"));
+    const int orphan = m_db->insertPhoto(QStringLiteral("/loose/1.jpg"), hash);
+    m_db->linkPhotoTag(orphan, tag);
+    m_db->rememberContentTag(hash, tag);
+
+    QCOMPARE(m_db->orphanPhotoCount(), 1);
+    m_db->deleteOrphanPhotos();
+    QCOMPARE(m_db->orphanPhotoCount(), 0);
+
+    // The content archive is keyed by hash, so re-importing the same content
+    // restores the tag even though the orphan row was purged.
+    const int reimport = m_db->insertPhoto(QStringLiteral("/loose/again.jpg"), hash);
+    m_db->applyContentTags(reimport, hash);
+    QVERIFY(m_db->photoTagIds(reimport).contains(tag));
+}
+
+// --- Guard / rejection paths ------------------------------------------------
+
+void TestDatabase::renameTagNameCollisionIsNoop()
+{
+    const int keep = m_db->ensureTag(QStringLiteral("keep"));
+    const int other = m_db->ensureTag(QStringLiteral("other"));
+
+    // Renaming onto an existing name (NOCASE) violates UNIQUE and is a no-op: both
+    // tags keep their names and ids.
+    m_db->renameTag(other, QStringLiteral("KEEP"));
+    QCOMPARE(m_db->tagName(other), QStringLiteral("other"));
+    QCOMPARE(m_db->tagName(keep), QStringLiteral("keep"));
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("keep")), keep);
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("other")), other);
+}
+
+void TestDatabase::insertCategoryRejectsDuplicateName()
+{
+    const int first = m_db->insertCategory(QStringLiteral("Places"), 0);
+    QVERIFY(first > 0);
+    // A duplicate name (NOCASE) is rejected with -1; the original is untouched.
+    QCOMPARE(m_db->insertCategory(QStringLiteral("places"), 2), -1);
+    QCOMPARE(m_db->categoryIdByName(QStringLiteral("Places")), first);
+}
+
+void TestDatabase::contentTagOpsNoopWithoutHash()
+{
+    const int tag = m_db->ensureTag(QStringLiteral("t"));
+
+    // Empty-hash archive operations are no-ops and must not throw or create rows.
+    m_db->rememberContentTag(QString(), tag);
+    m_db->forgetContentTag(QString(), tag);
+
+    // linkTagToContent falls back to the single row when the photo has no hash.
+    const int noHash1 = m_db->insertPhoto(QStringLiteral("/a/1.jpg"), QString());
+    const int noHash2 = m_db->insertPhoto(QStringLiteral("/b/1.jpg"), QString());
+    m_db->linkTagToContent(noHash1, tag);
+    QVERIFY(m_db->photoTagIds(noHash1).contains(tag));
+    QVERIFY(!m_db->photoTagIds(noHash2).contains(tag)); // not spread by content
+
+    // applyContentTags with an empty hash does nothing.
+    const int target = m_db->insertPhoto(QStringLiteral("/c/1.jpg"), QString());
+    m_db->applyContentTags(target, QString());
+    QVERIFY(m_db->photoTagIds(target).isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestDatabase)

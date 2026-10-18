@@ -4,9 +4,13 @@
 
 #include <QtTest>
 
+#include <QDate>
+#include <QDateTime>
 #include <QList>
 #include <QSet>
 #include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QVector>
 
 #include "photo.h"
@@ -31,9 +35,20 @@ private slots:
     void naturalSortOrder();
     void containsIdTracksVisibility();
 
+    // Folder-view directory gate
+    void folderModeRootShowsOrphansOnly();
+    void folderModeInsideShowsImmediateChildren();
+    void folderModeSearchFlattensSubtree();
+
+    // Timeline (date sort + month sections)
+    void sortByDateNewestFirstUndatedLast();
+    void monthGroupsSectionsOverDateOrder();
+
 private:
     static Photo makePhoto(int id, const QString &path, const QString &name,
                            const QSet<int> &tagIds = {}, const QStringList &tagNames = {});
+    // A photo with a capture time, named after its path's last component.
+    static Photo datedPhoto(int id, const QString &path, qint64 takenAt);
     // Current proxy order as a list of photo ids.
     QList<int> proxyIds() const;
 
@@ -50,6 +65,13 @@ Photo TestPhotoFilterModel::makePhoto(int id, const QString &path, const QString
     p.fileName = name;
     p.tagIds = tagIds;
     p.tagNames = tagNames;
+    return p;
+}
+
+Photo TestPhotoFilterModel::datedPhoto(int id, const QString &path, qint64 takenAt)
+{
+    Photo p = makePhoto(id, path, path.mid(path.lastIndexOf(QLatin1Char('/')) + 1));
+    p.takenAt = takenAt;
     return p;
 }
 
@@ -201,6 +223,111 @@ void TestPhotoFilterModel::containsIdTracksVisibility()
     QVERIFY(m_proxy->containsId(10));   // passes the filter
     QVERIFY(!m_proxy->containsId(11));  // filtered out
     QVERIFY(!m_proxy->containsId(999)); // not in the source at all
+}
+
+// --- Folder-view directory gate ---------------------------------------------
+
+void TestPhotoFilterModel::folderModeRootShowsOrphansOnly()
+{
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/lib/a.jpg"), QStringLiteral("a.jpg")),
+        makePhoto(2, QStringLiteral("/lib/sub/b.jpg"), QStringLiteral("b.jpg")),
+        makePhoto(3, QStringLiteral("/orphan/c.jpg"), QStringLiteral("c.jpg")),
+    });
+    m_proxy->setFolderRoots({QStringLiteral("/lib")});
+
+    // Folder-view root with no search: only orphans (photos under no root) show.
+    m_proxy->applyView(/*dedupe=*/false, /*sortByDate=*/false, /*folderMode=*/true,
+                       /*folderPath=*/QString());
+    QCOMPARE(proxyIds(), QList<int>{3});
+}
+
+void TestPhotoFilterModel::folderModeInsideShowsImmediateChildren()
+{
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/lib/a.jpg"), QStringLiteral("a.jpg")),     // immediate child
+        makePhoto(2, QStringLiteral("/lib/sub/b.jpg"), QStringLiteral("b.jpg")), // nested, excluded
+        makePhoto(3, QStringLiteral("/other/c.jpg"), QStringLiteral("c.jpg")),   // elsewhere
+    });
+
+    // Inside "/lib": only photos directly in that directory, not nested deeper
+    // (those are reached by descending into the subfolder).
+    m_proxy->applyView(false, false, /*folderMode=*/true, /*folderPath=*/QStringLiteral("/lib"));
+    QCOMPARE(proxyIds(), QList<int>{1});
+}
+
+void TestPhotoFilterModel::folderModeSearchFlattensSubtree()
+{
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/lib/IMG1.jpg"), QStringLiteral("IMG1.jpg")),
+        makePhoto(2, QStringLiteral("/lib/sub/IMG2.jpg"), QStringLiteral("IMG2.jpg")),
+        makePhoto(3, QStringLiteral("/outside/IMG3.jpg"), QStringLiteral("IMG3.jpg")),
+    });
+
+    m_proxy->applyView(false, false, /*folderMode=*/true, /*folderPath=*/QStringLiteral("/lib"));
+    // Searching flattens the folder to its whole subtree: the nested IMG2 now shows
+    // alongside the immediate IMG1, but IMG3 outside "/lib" stays out.
+    m_proxy->setSearchText(QStringLiteral("img"));
+    QCOMPARE(proxyIds(), (QList<int>{1, 2}));
+}
+
+// --- Timeline (date sort + month sections) ----------------------------------
+
+void TestPhotoFilterModel::sortByDateNewestFirstUndatedLast()
+{
+    const qint64 mar20 = QDateTime(QDate(2024, 3, 20), QTime(12, 0)).toSecsSinceEpoch();
+    const qint64 mar15 = QDateTime(QDate(2024, 3, 15), QTime(12, 0)).toSecsSinceEpoch();
+    const qint64 dec15 = QDateTime(QDate(2023, 12, 15), QTime(12, 0)).toSecsSinceEpoch();
+
+    m_source->setPhotos({
+        datedPhoto(1, QStringLiteral("/p/a.jpg"), mar15),
+        datedPhoto(2, QStringLiteral("/p/b.jpg"), mar20),
+        datedPhoto(3, QStringLiteral("/p/c.jpg"), dec15),
+        datedPhoto(4, QStringLiteral("/p/d.jpg"), 0), // undated
+    });
+
+    m_proxy->applyView(false, /*sortByDate=*/true, false, QString());
+    // Newest first; the undated photo (takenAt 0) sorts last.
+    QCOMPARE(proxyIds(), (QList<int>{2, 1, 3, 4}));
+}
+
+void TestPhotoFilterModel::monthGroupsSectionsOverDateOrder()
+{
+    const qint64 mar20 = QDateTime(QDate(2024, 3, 20), QTime(12, 0)).toSecsSinceEpoch();
+    const qint64 mar15 = QDateTime(QDate(2024, 3, 15), QTime(12, 0)).toSecsSinceEpoch();
+    const qint64 dec15 = QDateTime(QDate(2023, 12, 15), QTime(12, 0)).toSecsSinceEpoch();
+
+    m_source->setPhotos({
+        datedPhoto(1, QStringLiteral("/p/a.jpg"), mar15),
+        datedPhoto(2, QStringLiteral("/p/b.jpg"), mar20),
+        datedPhoto(3, QStringLiteral("/p/c.jpg"), dec15),
+        datedPhoto(4, QStringLiteral("/p/d.jpg"), 0),
+    });
+    m_proxy->applyView(false, /*sortByDate=*/true, false, QString());
+
+    const QVariantList groups = m_proxy->monthGroups();
+    QCOMPARE(groups.size(), 3); // 2024-03, 2023-12, then undated
+
+    // Month keys are computed the same way the model does (local time), so derive
+    // the expected keys rather than hard-coding them.
+    const QString marKey = QDateTime::fromSecsSinceEpoch(mar20).toString(QStringLiteral("yyyy-MM"));
+    const QString decKey = QDateTime::fromSecsSinceEpoch(dec15).toString(QStringLiteral("yyyy-MM"));
+
+    const QVariantMap g0 = groups.at(0).toMap();
+    QCOMPARE(g0.value(QStringLiteral("key")).toString(), marKey);
+    QCOMPARE(g0.value(QStringLiteral("firstRow")).toInt(), 0);
+    QCOMPARE(g0.value(QStringLiteral("count")).toInt(), 2); // the two March photos
+
+    const QVariantMap g1 = groups.at(1).toMap();
+    QCOMPARE(g1.value(QStringLiteral("key")).toString(), decKey);
+    QCOMPARE(g1.value(QStringLiteral("firstRow")).toInt(), 2);
+    QCOMPARE(g1.value(QStringLiteral("count")).toInt(), 1);
+
+    const QVariantMap g2 = groups.at(2).toMap();
+    QCOMPARE(g2.value(QStringLiteral("key")).toString(), QStringLiteral("0000-00"));
+    QCOMPARE(g2.value(QStringLiteral("label")).toString(), QStringLiteral("Undated"));
+    QCOMPARE(g2.value(QStringLiteral("firstRow")).toInt(), 3);
+    QCOMPARE(g2.value(QStringLiteral("count")).toInt(), 1);
 }
 
 QTEST_GUILESS_MAIN(TestPhotoFilterModel)
