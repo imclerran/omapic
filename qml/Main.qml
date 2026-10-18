@@ -2299,12 +2299,8 @@ ApplicationWindow {
         MenuSeparator {}
 
         MenuItem {
-            text: qsTr("Remove from library")
+            text: qsTr("Remove from library…")
             onTriggered: removeConfirm.open()
-        }
-        MenuItem {
-            text: qsTr("Delete from disk")
-            onTriggered: deleteConfirm.open()
         }
     }
 
@@ -2323,61 +2319,62 @@ ApplicationWindow {
         MenuSeparator {}
 
         MenuItem {
-            text: qsTr("Remove from library")
+            text: qsTr("Remove from library…")
             onTriggered: removeConfirm.open()
-        }
-        MenuItem {
-            text: qsTr("Delete from disk")
-            onTriggered: deleteConfirm.open()
         }
     }
 
-    // "Remove from library": drops the entry but leaves the file on disk.
+    // Removing a photo: one prompt offering the two outcomes plus Cancel.
+    // "Remove from library only" drops the entry but leaves the file on disk;
+    // "Delete from disk" moves the file to the Trash, then drops the entry.
     Dialog {
         id: removeConfirm
         title: qsTr("Remove from library")
         anchors.centerIn: parent
         modal: true
-        width: 420
-        standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: win.withPreservedGalleryScroll(function () {
-            library.removeFromLibrary(win.selectedIds)
-        })
+        width: 460
 
-        Label {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: win.selectedIds.length > 1
-                  ? qsTr("Remove these %1 photos from the library?\n\nThe files stay on disk — only their library entries and tags are removed.")
-                        .arg(win.selectedIds.length)
-                  : qsTr("Remove “%1” from the library?\n\nThe file stays on disk — only its library entry and tags are removed.")
-                        .arg(win.menuPhotoName)
+        function removeOnly() {
+            close()
+            win.withPreservedGalleryScroll(function () {
+                library.removeFromLibrary(win.selectedIds)
+            })
         }
-    }
+        function deleteFromDisk() {
+            close()
+            win.withPreservedGalleryScroll(function () {
+                const failed = library.deleteFromDisk(win.selectedIds)
+                if (failed === 1)
+                    win.toast(qsTr("Couldn't delete the file"))
+                else if (failed > 1)
+                    win.toast(qsTr("Couldn't delete %1 files").arg(failed))
+            })
+        }
 
-    // "Delete from disk": moves the file to the Trash, then drops the entry.
-    Dialog {
-        id: deleteConfirm
-        title: qsTr("Delete from disk")
-        anchors.centerIn: parent
-        modal: true
-        width: 420
-        standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: win.withPreservedGalleryScroll(function () {
-            const failed = library.deleteFromDisk(win.selectedIds)
-            if (failed === 1)
-                win.toast(qsTr("Couldn't delete the file"))
-            else if (failed > 1)
-                win.toast(qsTr("Couldn't delete %1 files").arg(failed))
-        })
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+            Button {
+                text: qsTr("Remove from library only")
+                DialogButtonBox.buttonRole: DialogButtonBox.ActionRole
+                onClicked: removeConfirm.removeOnly()
+            }
+            Button {
+                text: qsTr("Delete from disk")
+                DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
+                onClicked: removeConfirm.deleteFromDisk()
+            }
+        }
 
         Label {
             width: parent.width
             wrapMode: Text.WordWrap
             text: win.selectedIds.length > 1
-                  ? qsTr("Delete these %1 photos?\n\nThe files are moved to the Trash and removed from the library.")
+                  ? qsTr("Remove these %1 photos from the library?\n\n“Remove from library only” keeps the files on disk and removes just their library entries and tags. “Delete from disk” moves the files to the Trash.")
                         .arg(win.selectedIds.length)
-                  : qsTr("Delete “%1”?\n\nThe file is moved to the Trash and removed from the library.")
+                  : qsTr("Remove “%1” from the library?\n\n“Remove from library only” keeps the file on disk and removes just its library entry and tags. “Delete from disk” moves the file to the Trash.")
                         .arg(win.menuPhotoName)
         }
     }
