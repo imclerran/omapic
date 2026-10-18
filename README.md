@@ -1,4 +1,4 @@
-# omapic
+# Omapic
 
 A photo and video gallery for [Omarchy](https://omarchy.org), built around tagging.
 
