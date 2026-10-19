@@ -13,6 +13,7 @@ A photo and video gallery for [Omarchy](https://omarchy.org), built around taggi
 - **Slideshows** — from any filter, selection, or album, with folder-aware shuffle and intervals down to 0.1 s.
 - **Default image viewer** — `omapic photo.jpg` or `omapic <dir>` opens a lightweight viewer without loading your library.
 - **Omarchy integration** — follows your theme live. Add any photo to your wallpaper rotation, or generate a whole theme from it with [Aether](https://github.com/bjarneo/aether).
+- **Works on other Linux desktops too** — with reduced integration: set any photo as the wallpaper (via the desktop portal, or a supported wallpaper tool) and open files in your file manager. Omarchy- and Aether-specific actions simply hide when those aren't installed.
 - **HEIC and AVIF support**, plus video.
 
 ## Install

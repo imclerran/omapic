@@ -1840,6 +1840,11 @@ ApplicationWindow {
         shuffle: win.slideshowShuffleActive
         transitionMs: appSettings.fade ? 280 : 0
         loop: appSettings.loop
+        // Gate the slideshow's theme/wallpaper menu items the same way the grid's
+        // photo menu is gated (SlideshowView has no Library reference of its own).
+        omarchyAvailable: library.omarchyAvailable
+        aetherAvailable: library.aetherAvailable
+        wallpaperAvailable: library.wallpaperAvailable
         onToggleShuffleRequested: win.toggleSlideshowShuffle()
         onToggleLoopRequested: appSettings.loop = !appSettings.loop
 
@@ -1861,6 +1866,10 @@ ApplicationWindow {
             if (!library.setAetherThemeUrl(source))
                 slideshow.flashMessage(qsTr("Couldn't launch Aether"))
         }
+        onSetAsWallpaperRequested: (source) => slideshow.flashMessage(
+            library.setAsWallpaperUrl(source)
+                ? qsTr("Set as wallpaper")
+                : qsTr("Couldn't set the wallpaper"))
     }
 
     // Single-item viewer (fit/pan/zoom), the Enter / double-click "view" action.
@@ -2303,10 +2312,16 @@ ApplicationWindow {
         MenuSeparator {}
         AddToAlbumMenu {}
 
-        // Theme actions apply to still images only.
-        MenuSeparator { visible: !win.menuPhotoIsVideo; height: visible ? implicitHeight : 0 }
-        MenuItem {
+        // Theme/wallpaper actions apply to still images only, and only when the
+        // matching integration is present (Omarchy for theme wallpapers, Aether
+        // for the Aether items, any wallpaper backend for the generic setter).
+        MenuSeparator {
             visible: !win.menuPhotoIsVideo
+                     && (library.omarchyAvailable || library.aetherAvailable || library.wallpaperAvailable)
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            visible: !win.menuPhotoIsVideo && library.omarchyAvailable
             height: visible ? implicitHeight : 0
             text: qsTr("Add to theme wallpapers")
             onTriggered: win.toast(library.addToThemeWallpapers(win.menuPhotoId)
@@ -2314,7 +2329,7 @@ ApplicationWindow {
                                    : qsTr("Couldn't add to theme wallpapers"))
         }
         MenuItem {
-            visible: !win.menuPhotoIsVideo
+            visible: !win.menuPhotoIsVideo && library.aetherAvailable
             height: visible ? implicitHeight : 0
             text: qsTr("Edit theme in Aether")
             onTriggered: {
@@ -2323,13 +2338,22 @@ ApplicationWindow {
             }
         }
         MenuItem {
-            visible: !win.menuPhotoIsVideo
+            visible: !win.menuPhotoIsVideo && library.aetherAvailable
             height: visible ? implicitHeight : 0
             text: qsTr("Set as Aether theme")
             onTriggered: {
                 if (!library.setAetherTheme(win.menuPhotoId))
                     win.toast(qsTr("Couldn't launch Aether"))
             }
+        }
+        MenuItem {
+            // Generic wallpaper setter for non-Aether desktops.
+            visible: !win.menuPhotoIsVideo && !library.aetherAvailable && library.wallpaperAvailable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Set as wallpaper")
+            onTriggered: win.toast(library.setAsWallpaper(win.menuPhotoId)
+                                   ? qsTr("Set as wallpaper")
+                                   : qsTr("Couldn't set the wallpaper"))
         }
 
         MenuSeparator {}
