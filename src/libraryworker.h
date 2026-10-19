@@ -32,7 +32,6 @@ public slots:
     void addTagToPhotos(const QList<int> &photoIds, const QString &name);
     void removeTagFromPhotos(const QList<int> &photoIds, int tagId);
     void flushSidecars();                     // write queued photos' XMP sidecars
-    void flushSidecarsForFolder(int folderId); // queue a folder's photos, then flush
 
 signals:
     void progress(const QString &phase, int done, int total); // total <= 0 means indeterminate

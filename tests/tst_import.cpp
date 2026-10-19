@@ -43,7 +43,6 @@ private slots:
     void flushImportsNewerSidecarFirst();
     void flushRemovesOmapicSidecarWhenUntagged();
     void flushSkipsDisabledFolderUntilReenabled();
-    void reenableWritesNeverQueuedFolderTags();
     void rescanPrunesOldRemovedTags();
 
 private:
@@ -401,43 +400,6 @@ void TestImport::flushSkipsDisabledFolderUntilReenabled()
     m_worker->flushSidecars();
     QVERIFY(QFile::exists(side));
     QVERIFY(sidecar::readSidecar(photo)->flat.contains(QStringLiteral("hiddentag")));
-}
-
-void TestImport::reenableWritesNeverQueuedFolderTags()
-{
-    // Simulates the real bug: a folder's photos carry tags that were never put in
-    // the dirty queue (tagged before sidecar-writing existed). Re-enabling the
-    // folder must still write them — which is why setFolderEnabled enqueues the
-    // whole folder via photoIdsUnderFolder rather than trusting the queue.
-    const QString photo = pics() + QStringLiteral("/legacy.jpg");
-    writeFile(photo, "bytes");
-    const int id = importAndId(photo);
-    QVERIFY(id > 0);
-    const QString side = photo + QStringLiteral(".xmp");
-
-    int folderId = -1;
-    {
-        Database db;
-        QVERIFY(db.open(dbFile(), QStringLiteral("leg")));
-        // Tag it WITHOUT enqueuing (as a pre-sidecar tag would be).
-        const int tag = db.ensureTag(QStringLiteral("legacytag"));
-        db.linkTagToContent(id, tag);
-        db.rememberContentTag(db.photoHash(id), tag);
-        QVERIFY(db.sidecarDirtyIds().isEmpty()); // nothing queued, and no sidecar yet
-        for (const FolderInfo &f : db.loadFolders())
-            if (f.path == pics())
-                folderId = f.id;
-    }
-    QSqlDatabase::removeDatabase(QStringLiteral("leg"));
-    QVERIFY(!QFile::exists(side));
-    QVERIFY(folderId > 0);
-
-    // The worker slot queues the folder's whole set, then flushes — what
-    // Library::setFolderEnabled triggers on re-enable.
-    m_worker->flushSidecarsForFolder(folderId);
-
-    QVERIFY2(QFile::exists(side), "re-enabling must write never-queued folder tags");
-    QVERIFY(sidecar::readSidecar(photo)->flat.contains(QStringLiteral("legacytag")));
 }
 
 void TestImport::rescanPrunesOldRemovedTags()

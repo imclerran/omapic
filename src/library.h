@@ -297,7 +297,6 @@ signals:
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
-    void requestFolderSidecarFlush(int folderId);
 
 private:
     // How to set the desktop wallpaper, resolved once at startup. Omarchy's own
