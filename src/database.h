@@ -58,10 +58,13 @@ public:
 
     // id (existing or new), -1 on error. takenAt is the capture time in Unix
     // seconds (0 = unknown; stored as NULL), used by the timeline view.
-    int insertPhoto(const QString &path, const QString &hash, qint64 takenAt = 0);
-    void relocatePhoto(int photoId, const QString &newPath);   // move a row to a new path (rescan)
+    int insertPhoto(const QString &path, const QString &hash, qint64 takenAt = 0,
+                    qint64 mtime = 0, qint64 size = 0);
+    void relocatePhoto(int photoId, const QString &newPath,
+                       qint64 mtime = 0, qint64 size = 0);     // move a row to a new path (rescan)
+    void setPhotoFileStats(int photoId, qint64 mtime, qint64 size); // refresh mtime/size (rescan)
     void deletePhoto(int photoId);                 // delete one photo row (cascades photo_tags)
-    QVector<PhotoRef> allPhotoRefs();              // id/path/hash of every row, for rescan
+    QVector<PhotoRef> allPhotoRefs();              // id/path/hash/stats of every row, for rescan
     int ensureTag(const QString &name);            // returns tag id, creating if needed
     int tagIdByName(const QString &name);          // case-insensitive lookup, -1 if none
     QString tagName(int tagId);                    // current name, empty if unknown
@@ -137,6 +140,9 @@ public:
     // is always the category's total tag count.
     QVector<CategoryInfo> loadCategories(bool activeOnly = false);
     int insertCategory(const QString &name, int colorSlot); // new id, -1 on error/duplicate
+    // Resolve a user category by name, creating it with a spread-out color slot
+    // if absent. For tag import, which has no palette size to work from.
+    int ensureCategory(const QString &name);
     int categoryIdByName(const QString &name);         // case-insensitive lookup of a user category, -1 if none
     QString categoryName(int categoryId);              // current display name, empty if unknown
     // The three below never touch reserved (system) categories.
@@ -152,12 +158,18 @@ public:
     void applyContentTags(int photoId, const QString &hash); // link archived tags onto a photo
     void rememberContentTag(const QString &hash, int tagId); // archive a tag for this content
     void forgetContentTag(const QString &hash, int tagId);   // drop from archive if no live photo uses it
+    // Move a content archive from oldHash to newHash: copy its content_tags rows
+    // forward, then drop the old hash's rows only if no photo still references it
+    // (protects the untouched twin of an edited duplicate). Used by the rescan
+    // rekey (an in-place edit changed the hash) and the sidecar hash link.
+    void supersedeHash(const QString &oldHash, const QString &newHash);
 
     // Migration helpers. Hashing is slow, so it runs on a worker thread in
     // bite-sized steps instead of all at once inside open().
     int unhashedPhotoCount();                             // photos still missing a hash
     QVector<QPair<int, QString>> photosMissingHash();     // (id, path) of those photos
     void setPhotoHash(int photoId, const QString &hash);
+    void setSidecarWrittenAt(int photoId, qint64 whenSecs); // last sidecar sync marker
     void backfillContentTags(); // seed the archive from current photo tags
 
     // Capture-time backfill (timeline view), same bite-sized worker pattern as
@@ -209,6 +221,7 @@ private:
     void migrate_6_to_7(); // smart_albums
     void migrate_7_to_8(); // photos.taken_at
     void migrate_8_to_9(); // _system:Albums category rename (non-additive)
+    void migrate_9_to_10(); // photos.mtime/size/sidecar_written_at + orphaned_hashes (additive)
     // True when migrate_8_to_9 would actually move rows (a legacy bare "Albums"
     // system category is present). Gates the pre-migration backup so a fresh
     // library isn't backed up pointlessly.
@@ -218,6 +231,13 @@ private:
     // recent backups.
     void backupDatabase(int fromVersion);
     void pruneBackups(const QString &dbPath);
+
+    // Orphan-hash upkeep (schema v10+). A hash is "orphaned" while it has
+    // content_tags archive rows but no live photo row — the retention policy
+    // (a later phase) prunes these after a cutoff. recordOrphanIfUnreferenced is
+    // called after a photo row goes away; clearOrphanedHash after one appears.
+    void recordOrphanIfUnreferenced(const QString &hash);
+    void clearOrphanedHash(const QString &hash);
 
     QSqlDatabase m_db;
     QString m_connectionName;

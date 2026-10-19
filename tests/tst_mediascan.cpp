@@ -4,8 +4,10 @@
 
 #include <QtTest>
 
+#include <QDateTime>
 #include <QDir>
-#include <QSet>
+#include <QFileInfo>
+#include <QHash>
 #include <QTemporaryDir>
 
 #include "mediascan.h"
@@ -26,6 +28,7 @@ private slots:
     void collectUnionsIntoExistingSet();
     void collectIgnoresEmptyAndMissingRoot();
     void collectSortedIsCaseInsensitiveOrder();
+    void collectCapturesMtimeAndSize();
 
 private:
     // Create an empty file at dir/relPath, making parent directories as needed.
@@ -81,7 +84,7 @@ void TestMediaScan::collectFindsMediaRecursively()
     touch(root, QStringLiteral("sub/readme.txt"));   // not media
     touch(root, QStringLiteral("sub/archive.zip"));  // not media
 
-    QSet<QString> out;
+    QHash<QString, mediascan::FileEntry> out;
     mediascan::collect(root, out);
 
     QCOMPARE(out.size(), 3);
@@ -109,7 +112,7 @@ void TestMediaScan::collectMatchesUppercaseExtensions()
                  qPrintable(QStringLiteral("isMediaFile should accept ") + rel));
     }
 
-    QSet<QString> out;
+    QHash<QString, mediascan::FileEntry> out;
     mediascan::collect(root, out);
     QCOMPARE(out.size(), 3);
     QVERIFY(out.contains(root + QStringLiteral("/PHOTO.JPG")));
@@ -127,7 +130,7 @@ void TestMediaScan::collectHonorsNomediaInRoot()
     touch(root, QStringLiteral("sub/b.png"));
     touch(root, QStringLiteral(".nomedia"));
 
-    QSet<QString> out;
+    QHash<QString, mediascan::FileEntry> out;
     mediascan::collect(root, out);
     QVERIFY(out.isEmpty());
 }
@@ -141,7 +144,7 @@ void TestMediaScan::collectUnionsIntoExistingSet()
     touch(dirA.path(), QStringLiteral("one.jpg"));
     touch(dirB.path(), QStringLiteral("two.png"));
 
-    QSet<QString> out;
+    QHash<QString, mediascan::FileEntry> out;
     mediascan::collect(dirA.path(), out);
     mediascan::collect(dirB.path(), out);
 
@@ -154,7 +157,7 @@ void TestMediaScan::collectIgnoresEmptyAndMissingRoot()
 {
     // An empty root string returns early; a non-existent path yields nothing.
     // Neither must throw, and both leave any pre-existing results untouched.
-    QSet<QString> out;
+    QHash<QString, mediascan::FileEntry> out;
     mediascan::collect(QString(), out);
     QVERIFY(out.isEmpty());
     mediascan::collect(QStringLiteral("/no/such/directory/omapic-test"), out);
@@ -176,7 +179,7 @@ void TestMediaScan::collectHonorsNomedia()
     touch(root, QStringLiteral("private/more/also_secret.png"));
     touch(root, QStringLiteral("shared/ok.png"));
 
-    QSet<QString> out;
+    QHash<QString, mediascan::FileEntry> out;
     mediascan::collect(root, out);
 
     QCOMPARE(out.size(), 2);
@@ -203,6 +206,47 @@ void TestMediaScan::collectSortedIsCaseInsensitiveOrder()
     QVERIFY(sorted.at(0).endsWith(QStringLiteral("apple.jpg")));
     QVERIFY(sorted.at(1).endsWith(QStringLiteral("Banana.jpg")));
     QVERIFY(sorted.at(2).endsWith(QStringLiteral("cherry.png")));
+}
+
+void TestMediaScan::collectCapturesMtimeAndSize()
+{
+    // The walk carries each file's mtime and size out, so rescan can tell an
+    // in-place edit from an untouched file without a second stat pass.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString root = dir.path();
+
+    const QString rel = QStringLiteral("pic.jpg");
+    const QString full = root + QLatin1Char('/') + rel;
+    {
+        QFile f(full);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("12345"); // 5 bytes
+        f.close();
+    }
+
+    QHash<QString, mediascan::FileEntry> out;
+    mediascan::collect(root, out);
+    QVERIFY(out.contains(full));
+    const mediascan::FileEntry first = out.value(full);
+    QCOMPARE(first.size, qint64(5));
+    QCOMPARE(first.mtime, QFileInfo(full).lastModified().toSecsSinceEpoch());
+
+    // Rewrite with different content; the walk reports the new size, so rescan
+    // can tell the file was touched (size and/or mtime differ from the stored row).
+    {
+        QFile f(full);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("1234567890"); // 10 bytes
+        f.close();
+    }
+
+    QHash<QString, mediascan::FileEntry> out2;
+    mediascan::collect(root, out2);
+    const mediascan::FileEntry second = out2.value(full);
+    QCOMPARE(second.size, qint64(10));
+    QVERIFY2(second.mtime != first.mtime || second.size != first.size,
+             "a touched file must look changed");
 }
 
 QTEST_GUILESS_MAIN(TestMediaScan)

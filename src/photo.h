@@ -100,9 +100,15 @@ struct FolderInfo {
     bool enabled = true;  // whether its photos are shown in the gallery
 };
 
-// Minimal row view used by the rescan reconciliation (id, path, content hash).
+// Minimal row view used by the rescan reconciliation (id, path, content hash),
+// plus the file stats and sidecar sync marker rescan needs to detect in-place
+// edits and externally-changed sidecars. mtime/size/sidecarWrittenAt are -1 when
+// the stored column is NULL (e.g. a row from before schema v10).
 struct PhotoRef {
     int id = -1;
     QString path;
     QString hash;
+    qint64 mtime = -1;
+    qint64 size = -1;
+    qint64 sidecarWrittenAt = -1;
 };

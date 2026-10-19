@@ -45,6 +45,7 @@ qt_add_qml_module(omapic
         src/library.h src/library.cpp
         src/libraryworker.h src/libraryworker.cpp
         src/mediascan.h src/mediascan.cpp
+        src/sidecar.h src/sidecar.cpp
         src/mediascanner.h src/mediascanner.cpp
         src/thumbnailprovider.h src/thumbnailprovider.cpp
         src/omarchytheme.h src/omarchytheme.cpp

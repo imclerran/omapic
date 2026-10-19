@@ -9,6 +9,7 @@
 #include <QString>
 
 #include "database.h"
+#include "photometadata.h"
 
 // Runs the slow, file-hashing-heavy jobs (startup migration and folder import)
 // on a background thread so the GUI stays responsive, reporting progress as it
@@ -38,6 +39,15 @@ signals:
     void tagJobFinished();
 
 private:
+    // Apply a photo's sidecar + embedded tags to its row (and archive them
+    // against the content hash), additively. `embedded` carries keywords already
+    // read from the file itself (empty on the sidecar-changed rescan path, where
+    // only the sidecar is new). If the sidecar records a different content hash,
+    // that old hash is superseded so its archived tags carry forward. Returns the
+    // sidecar's mtime to record as the sync marker, or 0 when there was no sidecar.
+    qint64 applyImportedTags(int photoId, const QString &path, const QString &hash,
+                             const ImportMetadata &embedded);
+
     QString m_dbPath;
     Database m_db;
 };
