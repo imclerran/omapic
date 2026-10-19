@@ -685,6 +685,27 @@ QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matc
     return paths;
 }
 
+QList<int> Database::activePhotoIds()
+{
+    QList<int> ids;
+    QSqlQuery q(QStringLiteral("SELECT p.id FROM photos p WHERE %1 ORDER BY p.id")
+                    .arg(activeClause(QStringLiteral("p"))),
+                m_db);
+    while (q.next())
+        ids.append(q.value(0).toInt());
+    return ids;
+}
+
+bool Database::isPhotoActive(int photoId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT 1 FROM photos p WHERE p.id = ? AND %1")
+                  .arg(activeClause(QStringLiteral("p"))));
+    q.addBindValue(photoId);
+    q.exec();
+    return q.next();
+}
+
 void Database::backfillContentTags()
 {
     QSqlQuery q(m_db);

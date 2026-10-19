@@ -300,6 +300,12 @@ void Library::setAutoWriteSidecars(bool on)
         return;
     m_autoWriteSidecars = on;
     emit autoWriteSidecarsChanged();
+    // Turning it on catches up: the dirty queue is fed on every edit regardless of
+    // this setting, so it already holds everything changed (and unsynced) while it
+    // was off. Flush that backlog now, silently (debounced). At startup this is a
+    // no-op unless a previous session left a genuine backlog.
+    if (on)
+        scheduleSidecarFlush();
 }
 
 void Library::scheduleSidecarFlush()
@@ -328,9 +334,9 @@ void Library::exportSidecars(const QVariantList &photoIds)
 
 void Library::exportAllSidecars()
 {
-    QList<int> ids;
-    for (const PhotoRef &r : m_db.allPhotoRefs())
-        ids.append(r.id);
+    // Only the active set (orphans + enabled folders): a disabled folder is left
+    // untouched, matching what the gallery shows.
+    const QList<int> ids = m_db.activePhotoIds();
     if (ids.isEmpty())
         return;
     m_db.enqueueSidecarDirty(ids);

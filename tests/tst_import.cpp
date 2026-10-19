@@ -40,6 +40,7 @@ private slots:
     void flushWritesTaggedPhotoSidecar();
     void flushImportsNewerSidecarFirst();
     void flushRemovesOmapicSidecarWhenUntagged();
+    void flushSkipsDisabledFolderUntilReenabled();
 
 private:
     QString pics() const { return m_dir->filePath(QStringLiteral("pics")); }
@@ -348,6 +349,54 @@ void TestImport::flushRemovesOmapicSidecarWhenUntagged()
     QSqlDatabase::removeDatabase(QStringLiteral("mut4"));
     m_worker->flushSidecars();
     QVERIFY(!QFile::exists(side));
+}
+
+void TestImport::flushSkipsDisabledFolderUntilReenabled()
+{
+    const QString photo = pics() + QStringLiteral("/hidden.jpg");
+    writeFile(photo, "bytes");
+    const int id = importAndId(photo); // importDirectory registers pics() as a folder
+    QVERIFY(id > 0);
+    const QString side = photo + QStringLiteral(".xmp");
+
+    int folderId = -1;
+    const auto setPicsEnabled = [&](bool on) {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("fld")));
+        for (const FolderInfo &f : db.loadFolders())
+            if (f.path == pics())
+                folderId = f.id;
+        if (folderId > 0)
+            db.setFolderEnabled(folderId, on);
+        QSqlDatabase::removeDatabase(QStringLiteral("fld"));
+    };
+
+    // Tag + queue the photo, then disable its folder before flushing.
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("mut5")));
+        const int tag = db.ensureTag(QStringLiteral("hiddentag"));
+        db.linkTagToContent(id, tag);
+        db.rememberContentTag(db.photoHash(id), tag);
+        db.enqueueSidecarDirty({id});
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("mut5"));
+    setPicsEnabled(false);
+
+    m_worker->flushSidecars();
+    QVERIFY2(!QFile::exists(side), "a disabled folder must never be written");
+
+    // The entry stays queued; re-enabling and flushing writes it.
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("q5")));
+        QVERIFY(db.sidecarDirtyIds().contains(id)); // still pending, not dropped
+        QSqlDatabase::removeDatabase(QStringLiteral("q5"));
+    }
+    setPicsEnabled(true);
+    m_worker->flushSidecars();
+    QVERIFY(QFile::exists(side));
+    QVERIFY(sidecar::readSidecar(photo)->flat.contains(QStringLiteral("hiddentag")));
 }
 
 QTEST_GUILESS_MAIN(TestImport)

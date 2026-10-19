@@ -432,6 +432,13 @@ void LibraryWorker::flushSidecars()
             continue;
         }
 
+        // Never write into a disabled folder. Leave the entry queued so it's
+        // written if the folder is re-enabled later.
+        if (!m_db.isPhotoActive(id)) {
+            ++done;
+            continue;
+        }
+
         // If another app changed the sidecar since we last synced it, import those
         // keywords first so the rewrite below doesn't drop them.
         const QString side = sidecar::sidecarPath(path);

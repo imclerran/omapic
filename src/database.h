@@ -204,6 +204,12 @@ public:
     // paths. Lets the folder view show only folders holding the filtered photos.
     QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll);
 
+    // Ids of every photo in the active (shown) set — orphans plus photos under an
+    // enabled folder. Used to scope "export all" and the sidecar flush so a
+    // disabled folder is never written to.
+    QList<int> activePhotoIds();
+    bool isPhotoActive(int photoId);
+
 private:
     bool hasColumn(const QString &table, const QString &column);
     // SQL boolean (for the given photos-table alias) that is true when a photo is
