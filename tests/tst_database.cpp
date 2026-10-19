@@ -4,6 +4,7 @@
 
 #include <QtTest>
 
+#include <QDateTime>
 #include <QHash>
 #include <QSet>
 #include <QSqlDatabase>
@@ -53,6 +54,7 @@ private slots:
     void sidecarDirtyQueueEnqueueDequeue();
     void sidecarTagsForPhotoClassifies();
     void activePhotoIdsExcludeDisabledFolders();
+    void retentionPrunesOrphansOlderThanCutoff();
 
     // Folders / active set
     void orphanPhotosAreActive();
@@ -471,6 +473,49 @@ void TestDatabase::orphanHashLifecycleAcrossRemovalAndReimport()
     m_db->applyContentTags(p2, hash);
     QCOMPARE(orphanCount(hash), 0);
     QVERIFY(m_db->photoTagIds(p2).contains(tag));
+}
+
+void TestDatabase::retentionPrunesOrphansOlderThanCutoff()
+{
+    const QString oldHash = QStringLiteral("OLD");
+    const QString newHash = QStringLiteral("NEW");
+    const int tagA = m_db->ensureTag(QStringLiteral("a"));
+    const int tagB = m_db->ensureTag(QStringLiteral("b"));
+
+    // Two removed files: archive a tag for each, then delete the photos so each
+    // hash is orphaned.
+    const int p1 = m_db->insertPhoto(QStringLiteral("/p/old.jpg"), oldHash);
+    m_db->linkTagToContent(p1, tagA);
+    m_db->rememberContentTag(oldHash, tagA);
+    m_db->deletePhoto(p1);
+    const int p2 = m_db->insertPhoto(QStringLiteral("/p/new.jpg"), newHash);
+    m_db->linkTagToContent(p2, tagB);
+    m_db->rememberContentTag(newHash, tagB);
+    m_db->deletePhoto(p2);
+    QCOMPARE(m_db->rememberedRemovedCount(), 2);
+
+    // Backdate the "old" one to 100 days ago.
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    {
+        QSqlQuery u(QSqlDatabase::database(m_conn));
+        u.prepare(QStringLiteral("UPDATE orphaned_hashes SET orphaned_at = ? WHERE hash = ?"));
+        u.addBindValue(now - qint64(100) * 24 * 60 * 60);
+        u.addBindValue(oldHash);
+        QVERIFY(u.exec());
+    }
+
+    // Prune everything orphaned more than 30 days ago.
+    m_db->pruneOrphanedTags(now - qint64(30) * 24 * 60 * 60);
+
+    QCOMPARE(m_db->rememberedRemovedCount(), 1); // only the recent one remains
+    // The old archive is gone...
+    const int pa = m_db->insertPhoto(QStringLiteral("/p/reold.jpg"), oldHash);
+    m_db->applyContentTags(pa, oldHash);
+    QVERIFY(!m_db->photoTagIds(pa).contains(tagA));
+    // ...the recent one survives.
+    const int pb = m_db->insertPhoto(QStringLiteral("/p/renew.jpg"), newHash);
+    m_db->applyContentTags(pb, newHash);
+    QVERIFY(m_db->photoTagIds(pb).contains(tagB));
 }
 
 void TestDatabase::sidecarDirtyQueueEnqueueDequeue()

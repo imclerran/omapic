@@ -7,6 +7,7 @@
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusMessage>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -121,6 +122,10 @@ Library::Library(QObject *parent)
     updateAlbumTagIds();
     // Keep the folder-view's orphan detection in step as folders come and go.
     connect(this, &Library::foldersChanged, this, &Library::updateFolderRoots);
+    // The remembered-removed-files count changes whenever the photo set does
+    // (removals archive a hash; re-adds clear one), which is exactly when
+    // foldersChanged fires — so refresh the settings stat off the same signal.
+    connect(this, &Library::foldersChanged, this, &Library::rememberedRemovedCountChanged);
 
     // Hashing runs on a worker thread so the window stays responsive. The worker
     // owns its own DB connection; we only touch the models here on the GUI thread.
@@ -263,7 +268,7 @@ void Library::rescan()
     // Non-modal: runs on the worker thread, so report in the status bar and keep
     // the library usable (same as import), rather than blocking behind the overlay.
     beginBusy(tr("Scanning folders…"), /*modal=*/false);
-    emit requestRescan(); // runs on the worker thread
+    emit requestRescan(m_tagRetentionDays); // runs on the worker thread
 }
 
 void Library::onRescanFinished()
@@ -272,7 +277,7 @@ void Library::onRescanFinished()
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
     endBusy(/*modal=*/false); // rescan reports in the status bar
-    emit foldersChanged();
+    emit foldersChanged(); // also refreshes the remembered-removed stat (see ctor)
     scheduleSidecarFlush(); // flush anything queued before the rescan, if auto-write is on
 }
 
@@ -293,6 +298,23 @@ void Library::onTagJobFinished()
     refreshTags(); // tagsChanged refreshes the detail panel in one pass
     endBusy(/*modal=*/false); // bulk tagging reports in the status bar
     scheduleSidecarFlush(); // the bulk tag change is committed; write sidecars if auto-write is on
+}
+
+void Library::setTagRetentionDays(int days)
+{
+    const int d = qMax(0, days);
+    if (m_tagRetentionDays == d)
+        return;
+    m_tagRetentionDays = d;
+    emit tagRetentionDaysChanged();
+}
+
+void Library::forgetRemovedTags()
+{
+    // Forget everything currently remembered (cutoff = now). One transaction, so
+    // fast even for a large archive; safe on the GUI thread.
+    m_db.pruneOrphanedTags(QDateTime::currentSecsSinceEpoch());
+    emit rememberedRemovedCountChanged();
 }
 
 void Library::setAutoWriteSidecars(bool on)

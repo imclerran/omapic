@@ -581,6 +581,30 @@ int Database::sidecarDirtyCount()
     return q.next() ? q.value(0).toInt() : 0;
 }
 
+int Database::rememberedRemovedCount()
+{
+    QSqlQuery q(QStringLiteral("SELECT COUNT(*) FROM orphaned_hashes"), m_db);
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+void Database::pruneOrphanedTags(qint64 cutoffEpoch)
+{
+    const bool txn = m_db.transaction();
+    QSqlQuery del(m_db);
+    del.prepare(QStringLiteral(
+        "DELETE FROM content_tags WHERE hash IN "
+        "(SELECT hash FROM orphaned_hashes WHERE orphaned_at < ?)"));
+    del.addBindValue(cutoffEpoch);
+    del.exec();
+
+    QSqlQuery delOrphans(m_db);
+    delOrphans.prepare(QStringLiteral("DELETE FROM orphaned_hashes WHERE orphaned_at < ?"));
+    delOrphans.addBindValue(cutoffEpoch);
+    delOrphans.exec();
+    if (txn)
+        m_db.commit();
+}
+
 void Database::dequeueSidecarDirty(int photoId)
 {
     QSqlQuery q(m_db);

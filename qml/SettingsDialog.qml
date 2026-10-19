@@ -109,6 +109,23 @@ Dialog {
         }
     }
 
+    Dialog {
+        id: forgetConfirm
+        title: qsTr("Forget remembered tags?")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(460, root.width - 40)
+        standardButtons: Dialog.Yes | Dialog.No
+
+        onAccepted: root.library.forgetRemovedTags()
+
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: qsTr("Forget the tags remembered for %n removed file(s)?\n\nThis can't be undone unless those files are added again with byte-identical content.", "", root.library.rememberedRemovedCount)
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
@@ -249,6 +266,61 @@ Dialog {
                         onToggled: if (root.gallerySettings) root.gallerySettings.writeSidecars = checked
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Keep a <photo>.xmp next to each file in sync so other apps can read its tags")
+                    }
+                }
+
+                // Tag retention for removed files.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        Label {
+                            text: qsTr("Remember tags for removed files")
+                            Layout.fillWidth: true
+                        }
+                        ComboBox {
+                            id: retentionCombo
+                            textRole: "label"
+                            // Each entry's `days`: 0 = forever.
+                            model: [
+                                { label: qsTr("Forever"), days: 0 },
+                                { label: qsTr("1 year"), days: 365 },
+                                { label: qsTr("6 months"), days: 182 },
+                                { label: qsTr("30 days"), days: 30 }
+                            ]
+                            function indexForDays(d) {
+                                for (let i = 0; i < model.length; ++i)
+                                    if (model[i].days === d)
+                                        return i
+                                return 0
+                            }
+                            Component.onCompleted: currentIndex =
+                                indexForDays(root.gallerySettings ? root.gallerySettings.tagRetentionDays : 0)
+                            onActivated: if (root.gallerySettings)
+                                root.gallerySettings.tagRetentionDays = model[currentIndex].days
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: 12
+                            color: palette.placeholderText
+                            text: root.library.rememberedRemovedCount > 0
+                                  ? qsTr("Tags remembered for %n removed file(s). Recovery needs byte-identical files.", "", root.library.rememberedRemovedCount)
+                                  : qsTr("No removed files have remembered tags.")
+                        }
+                        Button {
+                            text: qsTr("Forget now…")
+                            enabled: root.library.rememberedRemovedCount > 0
+                            onClicked: forgetConfirm.open()
+                        }
                     }
                 }
 

@@ -1143,6 +1143,8 @@ ApplicationWindow {
         // When true, tag/album/favorite changes are written back to XMP sidecars
         // automatically. Off by default; on-demand export is always available.
         property bool writeSidecars: false
+        // How long to keep a removed file's tags, in days (0 = forever).
+        property int tagRetentionDays: 0
     }
 
     // Keep the gallery sort order in step with the saved setting (also applies it
@@ -1159,6 +1161,13 @@ ApplicationWindow {
         target: library
         property: "autoWriteSidecars"
         value: gallerySettings.writeSidecars
+    }
+
+    // Apply the tag-retention policy to the library (used at the end of a rescan).
+    Binding {
+        target: library
+        property: "tagRetentionDays"
+        value: gallerySettings.tagRetentionDays
     }
 
     // Report the result of an on-demand "Export tags" (the debounced auto-write

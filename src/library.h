@@ -66,6 +66,14 @@ class Library : public QObject {
     // default. On-demand export works regardless.
     Q_PROPERTY(bool autoWriteSidecars READ autoWriteSidecars WRITE setAutoWriteSidecars
                    NOTIFY autoWriteSidecarsChanged)
+    // How long to keep the archived tags of removed files before forgetting them,
+    // in days (0 = forever, the default). Bound from the gallery setting; applied
+    // at the end of each rescan.
+    Q_PROPERTY(int tagRetentionDays READ tagRetentionDays WRITE setTagRetentionDays
+                   NOTIFY tagRetentionDaysChanged)
+    // How many removed files still have tags remembered (for the settings stats).
+    Q_PROPERTY(int rememberedRemovedCount READ rememberedRemovedCount
+                   NOTIFY rememberedRemovedCountChanged)
 
 public:
     enum RenameResult {
@@ -106,6 +114,9 @@ public:
     bool wallpaperAvailable() const { return m_wallpaperBackend != WallpaperBackend::None; }
     bool autoWriteSidecars() const { return m_autoWriteSidecars; }
     void setAutoWriteSidecars(bool on);
+    int tagRetentionDays() const { return m_tagRetentionDays; }
+    void setTagRetentionDays(int days);
+    int rememberedRemovedCount() const { return m_db.rememberedRemovedCount(); }
 
     Q_INVOKABLE void importDirectory(const QUrl &dir);
     Q_INVOKABLE void removeFolder(int folderId);
@@ -116,6 +127,10 @@ public:
     // Enqueues them and flushes on the worker; reports via sidecarsExported.
     Q_INVOKABLE void exportSidecars(const QVariantList &photoIds);
     Q_INVOKABLE void exportAllSidecars();
+    // Forget the archived tags of every removed file remembered so far (ignores
+    // the retention window). Irreversible unless the files are re-added with
+    // byte-identical content.
+    Q_INVOKABLE void forgetRemovedTags();
     // Tells the library whether the gallery filter is in "match all" mode, so the
     // sidebar can narrow its tags to those on the currently-matching photos.
     Q_INVOKABLE void setMatchAll(bool matchAll);
@@ -269,13 +284,15 @@ signals:
     void statusChanged();
     void fatalErrorChanged();
     void autoWriteSidecarsChanged();
+    void tagRetentionDaysChanged();
+    void rememberedRemovedCountChanged();
     // A sidecar export finished: counts of files written and failures, for a toast.
     void sidecarsExported(int written, int failed);
 
     // Internal: hands a job to the worker thread via a queued connection.
     void requestMigration();
     void requestImport(const QString &root);
-    void requestRescan();
+    void requestRescan(int retentionDays);
     void requestImplicationMigration();
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
@@ -356,6 +373,7 @@ private:
     WallpaperBackend m_wallpaperBackend = WallpaperBackend::None;
 
     bool m_autoWriteSidecars = false;
+    int m_tagRetentionDays = 0; // 0 = keep removed files' tags forever
     QTimer *m_sidecarDebounce = nullptr; // coalesces auto-write flushes after edits
     int m_explicitFlushes = 0; // in-flight user-triggered exports (show busy + toast)
     int m_quietBarFlushes = 0; // in-flight catch-up flushes (show busy, no toast)

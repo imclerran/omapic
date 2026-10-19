@@ -179,6 +179,16 @@ public:
     // drained by the worker's flush. INSERT OR IGNORE coalesces repeats.
     void enqueueSidecarDirty(const QList<int> &photoIds);
     void enqueueSidecarDirtyForTag(int tagId); // every photo currently carrying the tag
+
+    // --- Tag retention for removed files ---
+    // Tags of a deleted photo survive in content_tags, keyed by hash, and the
+    // hash is tracked in orphaned_hashes. These let a retention policy forget the
+    // oldest ones. rememberedRemovedCount is the number of such archived hashes.
+    int rememberedRemovedCount();
+    // Forget the archived tags of files removed before `cutoffEpoch` (Unix secs):
+    // drop their content_tags rows and the orphaned_hashes entries, in one
+    // transaction. A cutoff of "now" forgets everything currently remembered.
+    void pruneOrphanedTags(qint64 cutoffEpoch);
     QList<int> sidecarDirtyIds();
     int sidecarDirtyCount(); // how many photos are queued (for the "catch up on enable" check)
     void dequeueSidecarDirty(int photoId);
