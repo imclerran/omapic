@@ -33,6 +33,7 @@ private slots:
     void upgradesToV10SeedsOrphansAndAddsColumns();
     void upgradesToV11AddsSidecarDirty();
     void seedsSidecarDirtyForNeverSyncedTaggedPhotos();
+    void convertsPipeNamesAndMergesCollisions();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -329,6 +330,55 @@ void TestSchema::seedsSidecarDirtyForNeverSyncedTaggedPhotos()
         QVERIFY(backupFiles().isEmpty());        // additive step → no backup
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v12"));
+}
+
+void TestSchema::convertsPipeNamesAndMergesCollisions()
+{
+    // Create the current schema, then insert '|' names via raw SQL (the API would
+    // sanitize them) and rewind to v12 so the v13 rename migration runs.
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_seed13")));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_seed13"));
+
+    execRaw(dbPath(), QStringLiteral(
+        "INSERT INTO photos(id, path) VALUES (1, '/a.jpg');"
+        "INSERT INTO photos(id, path) VALUES (2, '/b.jpg');"
+        // 'a|b' collides with the existing 'a/b' once converted; 'c|d' does not.
+        "INSERT INTO tags(id, name) VALUES (10, 'a|b');"
+        "INSERT INTO tags(id, name) VALUES (11, 'a/b');"
+        "INSERT INTO tags(id, name) VALUES (12, 'c|d');"
+        "INSERT INTO photo_tags(photo_id, tag_id) VALUES (1, 10);"
+        "INSERT INTO photo_tags(photo_id, tag_id) VALUES (2, 11);"
+        "INSERT INTO tag_categories(id, name, color_slot, system) VALUES (20, 'x|y', 0, 0);"
+        "PRAGMA user_version = 12;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v13")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+
+        // No '|' names survive.
+        QCOMPARE(db.tagIdByName(QStringLiteral("c|d")), -1);
+        QVERIFY(db.tagIdByName(QStringLiteral("c/d")) >= 0);   // plain rename
+        QCOMPARE(db.tagIdByName(QStringLiteral("a|b")), -1);
+        QVERIFY(db.tagName(10).isEmpty());                     // the colliding tag was merged away
+
+        // The collision merged into the existing 'a/b', keeping both photos' links.
+        const int merged = db.tagIdByName(QStringLiteral("a/b"));
+        QVERIFY(merged >= 0);
+        QVERIFY(db.photoTagIds(1).contains(merged));
+        QVERIFY(db.photoTagIds(2).contains(merged));
+
+        // Category converted too.
+        QCOMPARE(db.categoryIdByName(QStringLiteral("x|y")), -1);
+        QVERIFY(db.categoryIdByName(QStringLiteral("x/y")) >= 0);
+
+        // '|' names were present, so the non-additive step wrote a backup.
+        QVERIFY(!backupFiles().isEmpty());
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v13"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)

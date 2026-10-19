@@ -36,6 +36,9 @@ Item {
         id: field
         anchors.fill: parent
         placeholderText: root.placeholderText
+        // '|' is the XMP sidecar hierarchy separator, so it can't be part of a
+        // tag name; reject it on entry (the backend also strips it as a safety net).
+        validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
 
         property var suggestions: []
         property int highlighted: -1

@@ -55,6 +55,7 @@ private slots:
     void sidecarTagsForPhotoClassifies();
     void activePhotoIdsExcludeDisabledFolders();
     void retentionPrunesOrphansOlderThanCutoff();
+    void nameInputStripsPipe();
 
     // Folders / active set
     void orphanPhotosAreActive();
@@ -516,6 +517,22 @@ void TestDatabase::retentionPrunesOrphansOlderThanCutoff()
     const int pb = m_db->insertPhoto(QStringLiteral("/p/renew.jpg"), newHash);
     m_db->applyContentTags(pb, newHash);
     QVERIFY(m_db->photoTagIds(pb).contains(tagB));
+}
+
+void TestDatabase::nameInputStripsPipe()
+{
+    // '|' is forbidden in tag/category names (it's the sidecar hierarchy
+    // separator); the backend converts it to '/' as a safety net behind the editor.
+    const int tag = m_db->ensureTag(QStringLiteral("a|b"));
+    QCOMPARE(m_db->tagName(tag), QStringLiteral("a/b"));
+    m_db->renameTag(tag, QStringLiteral("c|d|e"));
+    QCOMPARE(m_db->tagName(tag), QStringLiteral("c/d/e"));
+
+    const int cat = m_db->insertCategory(QStringLiteral("p|q"), 0);
+    QVERIFY(cat > 0);
+    QCOMPARE(m_db->categoryName(cat), QStringLiteral("p/q"));
+    m_db->renameCategory(cat, QStringLiteral("r|s"));
+    QCOMPARE(m_db->categoryName(cat), QStringLiteral("r/s"));
 }
 
 void TestDatabase::sidecarDirtyQueueEnqueueDequeue()

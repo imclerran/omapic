@@ -303,6 +303,8 @@ Dialog {
                 id: field
                 Layout.fillWidth: true
                 selectByMouse: true
+                // '|' is the sidecar hierarchy separator; not allowed in names.
+                validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
                 onAccepted: renameDialog.apply()
                 ClearButton { field: field }
             }
@@ -379,6 +381,8 @@ Dialog {
                 Layout.fillWidth: true
                 selectByMouse: true
                 placeholderText: qsTr("Category name (e.g. Place, Event, Artist)")
+                // '|' is the sidecar hierarchy separator; not allowed in names.
+                validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
                 onAccepted: newCategoryDialog.apply()
                 ClearButton { field: newField }
             }

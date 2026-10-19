@@ -18,7 +18,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 12;
+constexpr int kSchemaVersion = 13;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -37,6 +37,17 @@ QString systemStoredName(const QString &display) { return kSystemPrefix + displa
 QString systemDisplayName(const QString &stored)
 {
     return stored.startsWith(kSystemPrefix) ? stored.mid(kSystemPrefix.size()) : stored;
+}
+
+// '|' is the hierarchy separator in the XMP sidecar (Category|Tag), so it must
+// never appear in a tag or category name or it would corrupt the exported
+// hierarchy. Replace it with '/' on the way in; the editor also rejects it, and
+// a migration converts any pre-existing names.
+QString sanitizeName(const QString &name)
+{
+    QString s = name;
+    s.replace(QLatin1Char('|'), QLatin1Char('/'));
+    return s;
 }
 }
 
@@ -122,6 +133,7 @@ bool Database::runMigrations(int fromVersion)
         {10, &Database::migrate_9_to_10, nullptr},
         {11, &Database::migrate_10_to_11, nullptr},
         {12, &Database::migrate_11_to_12, nullptr},
+        {13, &Database::migrate_12_to_13, &Database::namesContainPipe},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -364,6 +376,126 @@ void Database::migrate_11_to_12()
         "SELECT DISTINCT pt.photo_id FROM photo_tags pt "
         "JOIN photos p ON p.id = pt.photo_id "
         "WHERE p.sidecar_written_at IS NULL"));
+}
+
+bool Database::namesContainPipe()
+{
+    QSqlQuery q(QStringLiteral(
+                    "SELECT 1 FROM tags WHERE name LIKE '%|%' "
+                    "UNION ALL SELECT 1 FROM tag_categories WHERE name LIKE '%|%' LIMIT 1"),
+                m_db);
+    return q.next();
+}
+
+void Database::migrate_12_to_13()
+{
+    // Non-additive: '|' is the hierarchy separator in the XMP sidecar, so it can't
+    // appear in a tag or category name. Replace it with '/', merging any name that
+    // would collide (case-insensitively, since the name columns are COLLATE NOCASE)
+    // into the existing row rather than hitting the UNIQUE constraint.
+
+    // Tags. Collect the offenders first (the loop rewrites the table).
+    QVector<QPair<int, QString>> tags;
+    {
+        QSqlQuery q(QStringLiteral("SELECT id, name FROM tags WHERE name LIKE '%|%'"), m_db);
+        while (q.next())
+            tags.append({q.value(0).toInt(), q.value(1).toString()});
+    }
+    for (const auto &t : tags) {
+        const int oldId = t.first;
+        const QString target = sanitizeName(t.second);
+
+        int existing = -1;
+        QSqlQuery sel(m_db);
+        sel.prepare(QStringLiteral("SELECT id FROM tags WHERE name = ? AND id <> ?"));
+        sel.addBindValue(target);
+        sel.addBindValue(oldId);
+        sel.exec();
+        if (sel.next())
+            existing = sel.value(0).toInt();
+
+        if (existing < 0) {
+            QSqlQuery ren(m_db);
+            ren.prepare(QStringLiteral("UPDATE tags SET name = ? WHERE id = ?"));
+            ren.addBindValue(target);
+            ren.addBindValue(oldId);
+            ren.exec();
+            continue;
+        }
+
+        // Merge oldId into existing across every table that references a tag id.
+        // UPDATE OR IGNORE skips rows that would duplicate a primary key, and the
+        // follow-up DELETE clears whatever was left behind.
+        const char *const refs[][2] = {
+            {"photo_tags", "tag_id"},
+            {"content_tags", "tag_id"},
+            {"smart_album_tags", "tag_id"},
+            {"tag_implications", "antecedent_id"},
+            {"tag_implications", "consequent_id"},
+        };
+        for (const auto &r : refs) {
+            QSqlQuery up(m_db);
+            up.prepare(QStringLiteral("UPDATE OR IGNORE %1 SET %2 = ? WHERE %2 = ?")
+                           .arg(QLatin1String(r[0]), QLatin1String(r[1])));
+            up.addBindValue(existing);
+            up.addBindValue(oldId);
+            up.exec();
+            QSqlQuery del(m_db);
+            del.prepare(QStringLiteral("DELETE FROM %1 WHERE %2 = ?")
+                            .arg(QLatin1String(r[0]), QLatin1String(r[1])));
+            del.addBindValue(oldId);
+            del.exec();
+        }
+        // The merge can create a self-implication (a -> a); drop any.
+        QSqlQuery loop(m_db);
+        loop.exec(QStringLiteral(
+            "DELETE FROM tag_implications WHERE antecedent_id = consequent_id"));
+        QSqlQuery drop(m_db);
+        drop.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?"));
+        drop.addBindValue(oldId);
+        drop.exec();
+    }
+
+    // Categories. Only tags.category_id references a category, so the merge is
+    // just reassigning that column.
+    QVector<QPair<int, QString>> cats;
+    {
+        QSqlQuery q(QStringLiteral(
+            "SELECT id, name FROM tag_categories WHERE name LIKE '%|%'"), m_db);
+        while (q.next())
+            cats.append({q.value(0).toInt(), q.value(1).toString()});
+    }
+    for (const auto &c : cats) {
+        const int oldId = c.first;
+        const QString target = sanitizeName(c.second);
+
+        int existing = -1;
+        QSqlQuery sel(m_db);
+        sel.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ? AND id <> ?"));
+        sel.addBindValue(target);
+        sel.addBindValue(oldId);
+        sel.exec();
+        if (sel.next())
+            existing = sel.value(0).toInt();
+
+        if (existing < 0) {
+            QSqlQuery ren(m_db);
+            ren.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ?"));
+            ren.addBindValue(target);
+            ren.addBindValue(oldId);
+            ren.exec();
+            continue;
+        }
+        QSqlQuery mv(m_db);
+        mv.prepare(QStringLiteral("UPDATE tags SET category_id = ? WHERE category_id = ?"));
+        mv.addBindValue(existing);
+        mv.addBindValue(oldId);
+        mv.exec();
+        QSqlQuery drop(m_db);
+        drop.prepare(QStringLiteral("DELETE FROM tag_categories WHERE id = ?"));
+        drop.addBindValue(oldId);
+        drop.exec();
+    }
 }
 
 bool Database::legacyAlbumsNeedRename()
@@ -1364,8 +1496,9 @@ void Database::clearOrphanedHash(const QString &hash)
     q.exec();
 }
 
-int Database::ensureTag(const QString &name)
+int Database::ensureTag(const QString &rawName)
 {
+    const QString name = sanitizeName(rawName);
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("INSERT OR IGNORE INTO tags(name) VALUES(?)"));
     q.addBindValue(name);
@@ -1407,7 +1540,7 @@ void Database::renameTag(int tagId, const QString &newName)
 {
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("UPDATE tags SET name = ? WHERE id = ?"));
-    q.addBindValue(newName);
+    q.addBindValue(sanitizeName(newName));
     q.addBindValue(tagId);
     q.exec();
 }
@@ -1870,7 +2003,7 @@ int Database::insertCategory(const QString &name, int colorSlot)
 {
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("INSERT INTO tag_categories(name, color_slot) VALUES(?, ?)"));
-    q.addBindValue(name);
+    q.addBindValue(sanitizeName(name));
     q.addBindValue(colorSlot);
     if (!q.exec())
         return -1; // UNIQUE (NOCASE) violation or other error
@@ -1921,7 +2054,7 @@ void Database::renameCategory(int categoryId, const QString &newName)
     // Reserved (system) categories are not renamable.
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ? AND system = 0"));
-    q.addBindValue(newName);
+    q.addBindValue(sanitizeName(newName));
     q.addBindValue(categoryId);
     q.exec();
 }
