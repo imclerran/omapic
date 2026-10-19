@@ -61,7 +61,7 @@ ApplicationWindow {
 
     // Central view mode: "ungrouped", "timeline", "folder", or "albums". Restored
     // from and persisted to gallerySettings (see below). The header switch sets it.
-    property string viewMode: "ungrouped"
+    property string viewMode: "timeline"
 
     // Display label for a view mode (the compact switcher's current-view button).
     function viewLabel(mode) {
@@ -1137,8 +1137,9 @@ ApplicationWindow {
         // false (original): sort by file name across all folders.
         property bool folderFirst: false
         // Central view mode: "ungrouped" (the flat grid), "timeline" (grouped by
-        // capture month), or "folder" (navigable library folders).
-        property string viewMode: "ungrouped"
+        // capture month), or "folder" (navigable library folders). Timeline is the
+        // first-launch default; a user's later choice is saved and restored.
+        property string viewMode: "timeline"
     }
 
     // Keep the gallery sort order in step with the saved setting (also applies it
