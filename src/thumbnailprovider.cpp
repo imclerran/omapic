@@ -28,6 +28,26 @@ namespace {
 constexpr int kDefaultBox = 320;
 constexpr int kMaxBox = 1024;
 
+// Generated thumbnail sizes (longest edge, physical px). The QML sourceSize is
+// multiplied by the window's devicePixelRatio before it reaches us, and on some
+// Wayland compositors that ratio is unstable for a second or two after launch —
+// here it stepped through ~2.4, 2.0, 1.33 and 1.0 as the window settled. Without
+// bucketing, every visible thumbnail is re-requested (and regenerated from
+// scratch, since the cache keys on size) at each transient scale, blanking the
+// whole grid while it catches up. Snapping the request up to this coarse ladder
+// collapses those transient sizes onto one cache entry; the top rung still
+// covers the largest cell on a HiDPI display.
+constexpr int kSizeLadder[] = {384, 768, kMaxBox};
+
+int snapToLadder(int px)
+{
+    for (int s : kSizeLadder) {
+        if (px <= s)
+            return s;
+    }
+    return kMaxBox;
+}
+
 // Render a representative frame of a video to `cachePath` using
 // ffmpegthumbnailer (runs on this pool worker thread, so blocking is fine).
 QImage makeVideoThumbnail(const QString &path, const QString &cachePath, int box)
@@ -155,15 +175,19 @@ ThumbnailProvider::ThumbnailProvider()
 }
 
 QQuickImageResponse *ThumbnailProvider::requestImageResponse(const QString &id,
-                                                             const QSize &requestedSize)
+                                                             const QSize & /*requestedSize*/)
 {
-    // The QML Image's sourceSize arrives here already multiplied by the window's
-    // device pixel ratio, so honouring it gives crisp thumbnails on HiDPI grids
-    // without any dpr math of our own. Fall back to a sane box when a caller sets
-    // no sourceSize, and cap it so an outlandish request can't bloat the cache.
-    const int longest = qMax(requestedSize.width(), requestedSize.height());
-    const int box = longest > 0 ? qMin(longest, kMaxBox) : kDefaultBox;
-    auto *response = new ThumbnailResponse(id, m_cacheDir, box);
+    // The target size is baked into the id as a "<box>/<url-encoded path>" prefix
+    // (see PhotoDelegate.qml) rather than taken from the request's sourceSize. The
+    // QML sourceSize is multiplied by the window's devicePixelRatio, which Wayland
+    // compositors thrash for a second or two after launch; keying the request off
+    // it reloads — and blanks — every thumbnail at each transient scale. The URL
+    // box doesn't move with the dpr, so the image loads once and stays put.
+    const int slash = id.indexOf(QLatin1Char('/'));
+    const int urlBox = slash > 0 ? id.left(slash).toInt() : 0;
+    const QString path = slash > 0 ? id.mid(slash + 1) : id;
+    const int box = snapToLadder(urlBox > 0 ? urlBox : kDefaultBox);
+    auto *response = new ThumbnailResponse(path, m_cacheDir, box);
     m_pool.start(response);
     return response;
 }

@@ -45,16 +45,19 @@ Item {
             id: thumb
             anchors.fill: parent
             anchors.margins: 4
-            source: "image://thumbs/" + encodeURIComponent(root.filePath)
+            // Bake the generation size (longest edge, px) into the URL instead of
+            // using sourceSize. sourceSize is multiplied by the window's device
+            // pixel ratio, which Wayland compositors thrash for a second or two
+            // after launch — and every change reloads (blanks) the image. A
+            // dpr-independent box (2x the logical cell, a crisp ceiling for HiDPI;
+            // the provider snaps it to a coarse ladder and caches by it) keeps the
+            // request key still, so the thumbnail loads once and stays. The URL
+            // moves only when the cell size itself does (the thumbnail-size slider).
+            source: "image://thumbs/" + Math.round((root.width > 0 ? root.width : 160) * 2)
+                    + "/" + encodeURIComponent(root.filePath)
             fillMode: root.crop ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
             cache: true
-            // Request at the cell's own size (Qt folds in the device pixel ratio)
-            // so thumbnails stay crisp on large / HiDPI grids. The provider caches
-            // each size separately and builds them lazily, so only the sizes
-            // actually shown are ever generated.
-            sourceSize.width: root.width > 0 ? root.width : 320
-            sourceSize.height: root.height > 0 ? root.height : 320
             clip: true
         }
 
