@@ -48,4 +48,33 @@ QString sidecarPath(const QString &photoPath);
 // can't be parsed.
 std::optional<ParsedTags> readSidecar(const QString &photoPath);
 
+// What omapic writes into a photo's sidecar. flat = plain keyword names;
+// categorized = {category, tag} hierarchical keywords (empty category = bare);
+// albums = album display names; favorite = in Favorites. contentHash is the bare
+// hex SHA-256 of the photo (the "sha256:" prefix is added on write).
+struct WriteTags {
+    QStringList flat;
+    QList<CategorizedTag> categorized;
+    QString contentHash;
+    QStringList albums;
+    bool favorite = false;
+
+    bool isEmpty() const { return flat.isEmpty() && categorized.isEmpty()
+                                  && albums.isEmpty() && !favorite; }
+};
+
+enum class WriteResult {
+    Written,   // the sidecar was created or updated
+    Removed,   // omapic's only content was cleared, so the file was deleted
+    Unchanged, // nothing to write and no omapic-created file to remove
+    Failed,    // an I/O or parse error; the existing file (if any) is untouched
+};
+
+// Write `tags` into the XMP sidecar for `photoPath`, replacing only omapic's own
+// keys and preserving everything else another app put in the packet. Uses the
+// existing sidecar (full-name or Adobe fallback) or creates "<photoPath>.xmp".
+// Writes atomically (temp file + rename). When `tags` is empty, omapic's keys are
+// removed and an otherwise-empty, omapic-created file is deleted.
+WriteResult writeSidecar(const QString &photoPath, const WriteTags &tags);
+
 } // namespace sidecar

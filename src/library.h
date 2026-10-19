@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QQmlEngine>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
@@ -60,6 +61,11 @@ class Library : public QObject {
     Q_PROPERTY(bool omarchyAvailable READ omarchyAvailable CONSTANT)
     Q_PROPERTY(bool aetherAvailable READ aetherAvailable CONSTANT)
     Q_PROPERTY(bool wallpaperAvailable READ wallpaperAvailable CONSTANT)
+    // When true, tag/album/favorite changes are written back to XMP sidecars
+    // automatically (on a short debounce). Bound from the gallery setting; off by
+    // default. On-demand export works regardless.
+    Q_PROPERTY(bool autoWriteSidecars READ autoWriteSidecars WRITE setAutoWriteSidecars
+                   NOTIFY autoWriteSidecarsChanged)
 
 public:
     enum RenameResult {
@@ -98,12 +104,18 @@ public:
     bool omarchyAvailable() const { return m_omarchyAvailable; }
     bool aetherAvailable() const { return m_aetherAvailable; }
     bool wallpaperAvailable() const { return m_wallpaperBackend != WallpaperBackend::None; }
+    bool autoWriteSidecars() const { return m_autoWriteSidecars; }
+    void setAutoWriteSidecars(bool on);
 
     Q_INVOKABLE void importDirectory(const QUrl &dir);
     Q_INVOKABLE void removeFolder(int folderId);
     Q_INVOKABLE void setFolderEnabled(int folderId, bool enabled);
     Q_INVOKABLE void removeOrphanPhotos();
     Q_INVOKABLE void rescan(); // reconcile the library with disk (adds, moves, deletions)
+    // Write XMP sidecars now: for the given photos, or for the whole library.
+    // Enqueues them and flushes on the worker; reports via sidecarsExported.
+    Q_INVOKABLE void exportSidecars(const QVariantList &photoIds);
+    Q_INVOKABLE void exportAllSidecars();
     // Tells the library whether the gallery filter is in "match all" mode, so the
     // sidebar can narrow its tags to those on the currently-matching photos.
     Q_INVOKABLE void setMatchAll(bool matchAll);
@@ -256,6 +268,9 @@ signals:
     void progressChanged();
     void statusChanged();
     void fatalErrorChanged();
+    void autoWriteSidecarsChanged();
+    // A sidecar export finished: counts of files written and failures, for a toast.
+    void sidecarsExported(int written, int failed);
 
     // Internal: hands a job to the worker thread via a queued connection.
     void requestMigration();
@@ -264,6 +279,7 @@ signals:
     void requestImplicationMigration();
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
+    void requestSidecarFlush();
 
 private:
     // How to set the desktop wallpaper, resolved once at startup. Omarchy's own
@@ -305,6 +321,10 @@ private:
     void onRescanFinished();
     void onImplicationsExpanded();
     void onTagJobFinished();
+    void onSidecarFlushFinished(int written, int failed);
+    // If auto-write is on, (re)start the debounce so a burst of edits coalesces
+    // into one flush. No-op when auto-write is off.
+    void scheduleSidecarFlush();
 
     mutable Database m_db;
     PhotoModel *m_photos;
@@ -328,4 +348,8 @@ private:
     bool m_omarchyAvailable = false;
     bool m_aetherAvailable = false;
     WallpaperBackend m_wallpaperBackend = WallpaperBackend::None;
+
+    bool m_autoWriteSidecars = false;
+    QTimer *m_sidecarDebounce = nullptr; // coalesces auto-write flushes after edits
+    int m_explicitFlushes = 0; // in-flight user-triggered exports (show busy + toast)
 };

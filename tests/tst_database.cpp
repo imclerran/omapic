@@ -50,6 +50,8 @@ private slots:
     void forgetContentTagDropsOrphanedArchive();
     void supersedeHashForwardsArchiveAndPrunesWhenUnreferenced();
     void orphanHashLifecycleAcrossRemovalAndReimport();
+    void sidecarDirtyQueueEnqueueDequeue();
+    void sidecarTagsForPhotoClassifies();
 
     // Folders / active set
     void orphanPhotosAreActive();
@@ -468,6 +470,63 @@ void TestDatabase::orphanHashLifecycleAcrossRemovalAndReimport()
     m_db->applyContentTags(p2, hash);
     QCOMPARE(orphanCount(hash), 0);
     QVERIFY(m_db->photoTagIds(p2).contains(tag));
+}
+
+void TestDatabase::sidecarDirtyQueueEnqueueDequeue()
+{
+    const int p1 = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    const int p2 = m_db->insertPhoto(QStringLiteral("/p/2.jpg"), QString());
+    const int tag = m_db->ensureTag(QStringLiteral("beach"));
+    QVERIFY(m_db->linkPhotoTag(p1, tag));
+    QVERIFY(m_db->linkPhotoTag(p2, tag));
+
+    QVERIFY(m_db->sidecarDirtyIds().isEmpty());
+
+    m_db->enqueueSidecarDirty({p1, p1}); // INSERT OR IGNORE coalesces the repeat
+    QCOMPARE(m_db->sidecarDirtyIds(), QList<int>{p1});
+
+    // Enqueue every photo carrying a tag, for the library-wide rename/delete paths.
+    m_db->enqueueSidecarDirtyForTag(tag);
+    QCOMPARE(m_db->sidecarDirtyIds(), (QList<int>{p1, p2}));
+
+    m_db->dequeueSidecarDirty(p1);
+    QCOMPARE(m_db->sidecarDirtyIds(), QList<int>{p2});
+
+    // Deleting a photo cascades its dirty row away.
+    m_db->deletePhoto(p2);
+    QVERIFY(m_db->sidecarDirtyIds().isEmpty());
+}
+
+void TestDatabase::sidecarTagsForPhotoClassifies()
+{
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/x.jpg"), QStringLiteral("HASHX"));
+
+    // A categorised tag, an uncategorised tag, an album, and Favorites.
+    const int placesCat = m_db->insertCategory(QStringLiteral("Places"), 0);
+    const int spain = m_db->ensureTag(QStringLiteral("Spain"));
+    m_db->setTagCategory(spain, placesCat);
+    const int loose = m_db->ensureTag(QStringLiteral("candid"));
+    const int album = m_db->createAlbum(QStringLiteral("Trip"));
+    for (int t : {spain, loose, album, m_db->favoritesTagId()})
+        QVERIFY(m_db->linkPhotoTag(photo, t));
+
+    QString hash;
+    QStringList flat, albums;
+    QList<QPair<QString, QString>> categorized;
+    bool favorite = false;
+    m_db->sidecarTagsForPhoto(photo, hash, flat, categorized, albums, favorite);
+
+    QCOMPARE(hash, QStringLiteral("HASHX"));
+    QVERIFY(favorite);
+    QCOMPARE(albums, QStringList{QStringLiteral("Trip")}); // album display name, prefix stripped
+    // Flat carries the user tags only (no album, no Favorites).
+    QVERIFY(flat.contains(QStringLiteral("Spain")));
+    QVERIFY(flat.contains(QStringLiteral("candid")));
+    QCOMPARE(flat.size(), 2);
+    QVERIFY(categorized.contains(
+        QPair<QString, QString>(QStringLiteral("Places"), QStringLiteral("Spain"))));
+    QVERIFY(categorized.contains(
+        QPair<QString, QString>(QString(), QStringLiteral("candid"))));
 }
 
 // --- Folders / active set ---------------------------------------------------

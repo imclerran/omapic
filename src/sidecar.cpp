@@ -7,7 +7,11 @@
 
 #include "sidecar.h"
 
+#include <QDateTime>
+#include <QFile>
 #include <QFileInfo>
+
+#include <cstdio> // std::rename for an atomic replace
 
 namespace sidecar {
 namespace {
@@ -142,6 +146,118 @@ std::optional<ParsedTags> readSidecar(const QString &photoPath)
         return p;
     } catch (...) {
         return std::nullopt;
+    }
+}
+
+namespace {
+
+// The XMP keys omapic owns. Everything else in a packet is another app's and is
+// preserved verbatim across a rewrite.
+const char *const kOmapicKeys[] = {
+    "Xmp.dc.subject",
+    "Xmp.lr.hierarchicalSubject",
+    "Xmp.omapic.contentHash",
+    "Xmp.omapic.albums",
+    "Xmp.omapic.favorite",
+    "Xmp.xmp.MetadataDate",
+};
+
+void eraseKey(Exiv2::XmpData &xmp, const char *key)
+{
+    for (;;) {
+        auto it = xmp.findKey(Exiv2::XmpKey(key));
+        if (it == xmp.end())
+            break;
+        xmp.erase(it);
+    }
+}
+
+void setBag(Exiv2::XmpData &xmp, const char *key, const QStringList &values)
+{
+    if (values.isEmpty())
+        return;
+    Exiv2::XmpArrayValue v(Exiv2::xmpBag);
+    for (const QString &s : values)
+        v.read(s.toStdString());
+    xmp.add(Exiv2::XmpKey(key), &v);
+}
+
+// Encode `xmp` and write it to `target` atomically (temp file + rename).
+bool writePacket(const QString &target, const Exiv2::XmpData &xmp)
+{
+    try {
+        std::string packet;
+        if (Exiv2::XmpParser::encode(packet, xmp) != 0)
+            return false;
+        const QString tmp = target + QStringLiteral(".tmp");
+        auto img = Exiv2::ImageFactory::create(Exiv2::ImageType::xmp, tmp.toStdString());
+        img->setXmpPacket(packet);
+        img->writeMetadata();
+        // std::rename replaces the destination atomically on POSIX.
+        if (std::rename(tmp.toStdString().c_str(), target.toStdString().c_str()) != 0) {
+            QFile::remove(tmp);
+            return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
+
+WriteResult writeSidecar(const QString &photoPath, const WriteTags &tags)
+{
+    ensureNamespace();
+
+    const QString existing = sidecarPath(photoPath);
+    const bool preexisting = !existing.isEmpty();
+    const QString target = preexisting ? existing : photoPath + QStringLiteral(".xmp");
+
+    try {
+        Exiv2::XmpData xmp;
+        if (preexisting) {
+            auto img = Exiv2::ImageFactory::open(existing.toStdString());
+            if (!img.get())
+                return WriteResult::Failed;
+            img->readMetadata();
+            xmp = img->xmpData(); // preserve every key; we replace only ours
+        }
+
+        for (const char *key : kOmapicKeys)
+            eraseKey(xmp, key);
+
+        if (tags.isEmpty()) {
+            // Nothing of ours to write. Remove our keys; delete the file only if
+            // it existed and held nothing but our (now-erased) keys.
+            if (xmp.empty()) {
+                if (!preexisting)
+                    return WriteResult::Unchanged; // never create an empty sidecar
+                return QFile::remove(target) ? WriteResult::Removed : WriteResult::Failed;
+            }
+            return writePacket(target, xmp) ? WriteResult::Written : WriteResult::Failed;
+        }
+
+        setBag(xmp, "Xmp.dc.subject", tags.flat);
+
+        QStringList hierarchical;
+        for (const CategorizedTag &ct : tags.categorized) {
+            hierarchical << (ct.first.isEmpty()
+                                 ? ct.second
+                                 : ct.first + QLatin1Char('|') + ct.second);
+        }
+        setBag(xmp, "Xmp.lr.hierarchicalSubject", hierarchical);
+        setBag(xmp, "Xmp.omapic.albums", tags.albums);
+
+        if (!tags.contentHash.isEmpty())
+            xmp["Xmp.omapic.contentHash"] = ("sha256:" + tags.contentHash).toStdString();
+        xmp["Xmp.omapic.favorite"] = tags.favorite ? "True" : "False";
+        xmp["Xmp.xmp.MetadataDate"] =
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+
+        return writePacket(target, xmp) ? WriteResult::Written : WriteResult::Failed;
+    } catch (...) {
+        return WriteResult::Failed;
     }
 }
 

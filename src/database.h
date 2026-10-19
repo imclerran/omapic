@@ -170,6 +170,24 @@ public:
     QVector<QPair<int, QString>> photosMissingHash();     // (id, path) of those photos
     void setPhotoHash(int photoId, const QString &hash);
     void setSidecarWrittenAt(int photoId, qint64 whenSecs); // last sidecar sync marker
+    qint64 sidecarWrittenAt(int photoId);                   // the stored marker, -1 if NULL
+    QString photoPath(int photoId);                         // stored path, empty if none
+
+    // --- Sidecar write queue (schema v11+) ---
+    // Photos whose tags changed and whose XMP sidecar is due for a rewrite. Fed
+    // by the user-facing tag/album/favorite mutations (not by import/rescan) and
+    // drained by the worker's flush. INSERT OR IGNORE coalesces repeats.
+    void enqueueSidecarDirty(const QList<int> &photoIds);
+    void enqueueSidecarDirtyForTag(int tagId); // every photo currently carrying the tag
+    QList<int> sidecarDirtyIds();
+    void dequeueSidecarDirty(int photoId);
+    // The tag content to write into a photo's sidecar, split the way the sidecar
+    // format wants it: flat keyword names, hierarchical {category, tag} pairs,
+    // album display names, and the favorite flag. `hash` is the photo's content
+    // hash. Albums and Favorites are kept out of `flat`/`categorized`.
+    void sidecarTagsForPhoto(int photoId, QString &hash, QStringList &flat,
+                             QList<QPair<QString, QString>> &categorized,
+                             QStringList &albums, bool &favorite);
     void backfillContentTags(); // seed the archive from current photo tags
 
     // Capture-time backfill (timeline view), same bite-sized worker pattern as
@@ -222,6 +240,7 @@ private:
     void migrate_7_to_8(); // photos.taken_at
     void migrate_8_to_9(); // _system:Albums category rename (non-additive)
     void migrate_9_to_10(); // photos.mtime/size/sidecar_written_at + orphaned_hashes (additive)
+    void migrate_10_to_11(); // sidecar_dirty queue table (additive)
     // True when migrate_8_to_9 would actually move rows (a legacy bare "Albums"
     // system category is present). Gates the pre-migration backup so a fresh
     // library isn't backed up pointlessly.

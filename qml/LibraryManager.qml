@@ -227,6 +227,15 @@ Dialog {
                 checked: root.gallerySettings ? root.gallerySettings.folderFirst : false
                 onToggled: if (root.gallerySettings) root.gallerySettings.folderFirst = checked
             }
+
+            Switch {
+                id: writeSidecarsCheck
+                text: qsTr("Write tags to XMP sidecars automatically")
+                checked: root.gallerySettings ? root.gallerySettings.writeSidecars : false
+                onToggled: if (root.gallerySettings) root.gallerySettings.writeSidecars = checked
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Keep a <photo>.xmp next to each file in sync so other apps can read its tags")
+            }
         }
 
         MenuSeparator { Layout.fillWidth: true }
@@ -245,6 +254,13 @@ Dialog {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Pick up new, moved, and deleted files on disk")
                 onClicked: { root.rememberScroll(); root.library.rescan() }
+            }
+            Button {
+                text: qsTr("Export tags")
+                enabled: list.count > 0
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Write every photo's tags to an XMP sidecar now")
+                onClicked: root.library.exportAllSidecars()
             }
             Item { Layout.fillWidth: true }
             Button {

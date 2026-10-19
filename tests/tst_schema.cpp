@@ -31,6 +31,7 @@ private slots:
     void upgradesFromReducedSchema();
     void upgradesLegacyUnversioned();
     void upgradesToV10SeedsOrphansAndAddsColumns();
+    void upgradesToV11AddsSidecarDirty();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -269,6 +270,32 @@ void TestSchema::upgradesToV10SeedsOrphansAndAddsColumns()
         QVERIFY(backupFiles().isEmpty()); // additive step → no backup
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v10"));
+}
+
+void TestSchema::upgradesToV11AddsSidecarDirty()
+{
+    // Build a current database, then rewind to v10: drop sidecar_dirty and the
+    // version so the v11 migration genuinely re-runs.
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v11_seed")));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v11_seed"));
+    execRaw(dbPath(), QStringLiteral(
+        "DROP TABLE IF EXISTS sidecar_dirty;"
+        "PRAGMA user_version = 10;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v11")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+        // The queue table exists and is usable.
+        const int p = db.insertPhoto(QStringLiteral("/pics/one.jpg"), QString());
+        db.enqueueSidecarDirty({p});
+        QCOMPARE(db.sidecarDirtyIds(), QList<int>{p});
+        QVERIFY(backupFiles().isEmpty()); // additive step → no backup
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v11"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)
