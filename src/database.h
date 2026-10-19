@@ -180,6 +180,7 @@ public:
     void enqueueSidecarDirty(const QList<int> &photoIds);
     void enqueueSidecarDirtyForTag(int tagId); // every photo currently carrying the tag
     QList<int> sidecarDirtyIds();
+    int sidecarDirtyCount(); // how many photos are queued (for the "catch up on enable" check)
     void dequeueSidecarDirty(int photoId);
     // The tag content to write into a photo's sidecar, split the way the sidecar
     // format wants it: flat keyword names, hierarchical {category, tag} pairs,
@@ -203,6 +204,15 @@ public:
     // every selected tag; otherwise any). Empty selection returns all active
     // paths. Lets the folder view show only folders holding the filtered photos.
     QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll);
+
+    // Ids of every photo in the active (shown) set — orphans plus photos under an
+    // enabled folder. Used to scope "export all" and the sidecar flush so a
+    // disabled folder is never written to.
+    QList<int> activePhotoIds();
+    bool isPhotoActive(int photoId);
+    // Ids of every photo in or under a folder (by path prefix). Used to queue a
+    // folder's sidecars for writing when it is re-enabled.
+    QList<int> photoIdsUnderFolder(int folderId);
 
 private:
     bool hasColumn(const QString &table, const QString &column);

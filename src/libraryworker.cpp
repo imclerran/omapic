@@ -416,6 +416,14 @@ void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)
     emit tagJobFinished();
 }
 
+void LibraryWorker::flushSidecarsForFolder(int folderId)
+{
+    // Queue the folder's whole photo set here on the worker — it can be large, so
+    // keeping it off the GUI thread avoids a stall — then flush as usual.
+    m_db.enqueueSidecarDirty(m_db.photoIdsUnderFolder(folderId));
+    flushSidecars();
+}
+
 void LibraryWorker::flushSidecars()
 {
     const QList<int> ids = m_db.sidecarDirtyIds();
@@ -428,6 +436,13 @@ void LibraryWorker::flushSidecars()
         const QString path = m_db.photoPath(id);
         if (path.isEmpty()) {
             m_db.dequeueSidecarDirty(id); // photo gone; drop the stale entry
+            ++done;
+            continue;
+        }
+
+        // Never write into a disabled folder. Leave the entry queued so it's
+        // written if the folder is re-enabled later.
+        if (!m_db.isPhotoActive(id)) {
             ++done;
             continue;
         }

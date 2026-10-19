@@ -52,6 +52,7 @@ private slots:
     void orphanHashLifecycleAcrossRemovalAndReimport();
     void sidecarDirtyQueueEnqueueDequeue();
     void sidecarTagsForPhotoClassifies();
+    void activePhotoIdsExcludeDisabledFolders();
 
     // Folders / active set
     void orphanPhotosAreActive();
@@ -481,9 +482,11 @@ void TestDatabase::sidecarDirtyQueueEnqueueDequeue()
     QVERIFY(m_db->linkPhotoTag(p2, tag));
 
     QVERIFY(m_db->sidecarDirtyIds().isEmpty());
+    QCOMPARE(m_db->sidecarDirtyCount(), 0);
 
     m_db->enqueueSidecarDirty({p1, p1}); // INSERT OR IGNORE coalesces the repeat
     QCOMPARE(m_db->sidecarDirtyIds(), QList<int>{p1});
+    QCOMPARE(m_db->sidecarDirtyCount(), 1);
 
     // Enqueue every photo carrying a tag, for the library-wide rename/delete paths.
     m_db->enqueueSidecarDirtyForTag(tag);
@@ -527,6 +530,38 @@ void TestDatabase::sidecarTagsForPhotoClassifies()
         QPair<QString, QString>(QStringLiteral("Places"), QStringLiteral("Spain"))));
     QVERIFY(categorized.contains(
         QPair<QString, QString>(QString(), QStringLiteral("candid"))));
+}
+
+void TestDatabase::activePhotoIdsExcludeDisabledFolders()
+{
+    // One enabled folder, one disabled, plus an orphan under no folder.
+    const int enabledFolder = m_db->insertFolder(QStringLiteral("/lib/on"));
+    const int disabledFolder = m_db->insertFolder(QStringLiteral("/lib/off"));
+    QVERIFY(enabledFolder > 0 && disabledFolder > 0);
+    m_db->setFolderEnabled(disabledFolder, false);
+
+    const int shown = m_db->insertPhoto(QStringLiteral("/lib/on/a.jpg"), QString());
+    const int hidden = m_db->insertPhoto(QStringLiteral("/lib/off/b.jpg"), QString());
+    const int orphan = m_db->insertPhoto(QStringLiteral("/elsewhere/c.jpg"), QString());
+
+    const QList<int> active = m_db->activePhotoIds();
+    QVERIFY(active.contains(shown));
+    QVERIFY(active.contains(orphan));
+    QVERIFY(!active.contains(hidden)); // a disabled folder's photo is not active
+
+    QVERIFY(m_db->isPhotoActive(shown));
+    QVERIFY(m_db->isPhotoActive(orphan));
+    QVERIFY(!m_db->isPhotoActive(hidden));
+
+    // photoIdsUnderFolder is path-based (independent of enabled state), so a
+    // re-enabled folder's photos can be queued for sidecar writing.
+    QCOMPARE(m_db->photoIdsUnderFolder(enabledFolder), QList<int>{shown});
+    QCOMPARE(m_db->photoIdsUnderFolder(disabledFolder), QList<int>{hidden});
+
+    // Re-enabling the folder brings its photo back into the active set.
+    m_db->setFolderEnabled(disabledFolder, true);
+    QVERIFY(m_db->isPhotoActive(hidden));
+    QVERIFY(m_db->activePhotoIds().contains(hidden));
 }
 
 // --- Folders / active set ---------------------------------------------------
