@@ -27,7 +27,7 @@ qt_add_qml_module(omapic
         qml/SlideshowView.qml
         qml/PhotoViewer.qml
         qml/Viewer.qml
-        qml/LibraryManager.qml
+        qml/SettingsDialog.qml
         qml/TagManager.qml
         qml/TimelineView.qml
         qml/FolderView.qml

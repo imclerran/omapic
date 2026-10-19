@@ -1211,20 +1211,23 @@ ApplicationWindow {
     // synchronous Loader instantiates immediately) and opens the dialog; the
     // built instance is kept for subsequent opens.
     Loader {
-        id: libraryManagerLoader
+        id: settingsLoader
         // Fill the window so the dialog's `anchors.centerIn: parent` still centers
         // on the window (the Loader is this dialog's parent). Empty while inactive.
         anchors.fill: parent
         active: false
-        sourceComponent: LibraryManager {
+        sourceComponent: SettingsDialog {
             library: library
             accent: win.accent
             gallerySettings: gallerySettings
+            appSettings: appSettings
         }
     }
-    function openLibraryManager() {
-        libraryManagerLoader.active = true
-        libraryManagerLoader.item.open()
+    // tab: 0 = Library, 1 = Slideshow.
+    function openSettings(tab) {
+        settingsLoader.active = true
+        settingsLoader.item.initialTab = tab
+        settingsLoader.item.open()
     }
 
     // Folder picker for the header's Import button (the Library dialog has its
@@ -1436,8 +1439,8 @@ ApplicationWindow {
                     id: manageMenu
                     y: parent.height
                     MenuItem {
-                        text: qsTr("Library…")
-                        onTriggered: win.openLibraryManager()
+                        text: qsTr("Settings…")
+                        onTriggered: win.openSettings(0)
                     }
                     MenuItem {
                         text: qsTr("Tags…")
@@ -1614,8 +1617,8 @@ ApplicationWindow {
             ToolButton {
                 text: qsTr("⚙")
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Slideshow settings")
-                onClicked: settingsDialog.open()
+                ToolTip.text: qsTr("Settings")
+                onClicked: win.openSettings(1) // Slideshow tab
             }
         }
     }
@@ -1995,132 +1998,6 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
                 horizontalAlignment: Text.AlignHCenter
                 color: palette.placeholderText
-            }
-        }
-    }
-
-    Dialog {
-        id: settingsDialog
-        title: qsTr("Slideshow settings")
-        anchors.centerIn: parent
-        modal: true
-        standardButtons: Dialog.Close
-
-        ColumnLayout {
-            spacing: 16
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-                Label {
-                    text: qsTr("Seconds per photo")
-                    Layout.fillWidth: true
-                }
-                SpinBox {
-                    id: intervalSpin
-                    // Values are in tenths of a second, so the interval is
-                    // adjustable down to 0.1 s (0.1 s … 120.0 s).
-                    from: 1
-                    to: 1200
-                    editable: true
-                    value: Math.round(appSettings.intervalMs / 100)
-                    onValueModified: appSettings.intervalMs = value * 100
-
-                    // Step by a whole second (10 tenths) at or above 1 s, and by a
-                    // tenth once below it. Keyed off which indicator is pressed so
-                    // the 1 s boundary is handled per direction: from 1.0 s, down
-                    // goes to 0.9 s but up goes to 2.0 s.
-                    stepSize: intervalSpin.down.pressed ? (value > 10 ? 10 : 1)
-                                                        : (value >= 10 ? 10 : 1)
-
-                    textFromValue: function (value, locale) {
-                        return Number(value / 10).toLocaleString(locale, 'f', 1)
-                    }
-                    valueFromText: function (text, locale) {
-                        return Math.round(Number.fromLocaleString(locale, text) * 10)
-                    }
-                    validator: DoubleValidator {
-                        bottom: intervalSpin.from / 10
-                        top: intervalSpin.to / 10
-                        decimals: 1
-                        notation: DoubleValidator.StandardNotation
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-                Label {
-                    text: qsTr("Shuffle order")
-                    Layout.fillWidth: true
-                }
-                Switch {
-                    checked: appSettings.shuffle
-                    onToggled: appSettings.shuffle = checked
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: qsTr("Shuffle folders")
-                    }
-                    Label {
-                        text: qsTr("Play enabled folders in random order, each folder's photos together")
-                        font.pixelSize: 12
-                        color: palette.placeholderText
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-                Switch {
-                    checked: appSettings.shuffleFolders
-                    onToggled: appSettings.shuffleFolders = checked
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-                Label {
-                    text: qsTr("Crossfade between photos")
-                    Layout.fillWidth: true
-                }
-                Switch {
-                    checked: appSettings.fade
-                    onToggled: appSettings.fade = checked
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-                Label {
-                    text: qsTr("Start from a random photo")
-                    Layout.fillWidth: true
-                }
-                Switch {
-                    checked: appSettings.randomStart
-                    onToggled: appSettings.randomStart = checked
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-                Label {
-                    text: qsTr("Loop videos")
-                    Layout.fillWidth: true
-                }
-                Switch {
-                    checked: appSettings.loop
-                    onToggled: appSettings.loop = checked
-                }
             }
         }
     }
