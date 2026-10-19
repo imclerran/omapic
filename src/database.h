@@ -259,6 +259,10 @@ private:
     void migrate_9_to_10(); // photos.mtime/size/sidecar_written_at + orphaned_hashes (additive)
     void migrate_10_to_11(); // sidecar_dirty queue table (additive)
     void migrate_11_to_12(); // seed sidecar_dirty for never-synced tagged photos (additive)
+    void migrate_12_to_13(); // replace '|' with '/' in tag/category names (non-additive)
+    // True when any tag or category name contains '|' (so the rename above would
+    // actually change rows). Gates the pre-migration backup.
+    bool namesContainPipe();
     // True when migrate_8_to_9 would actually move rows (a legacy bare "Albums"
     // system category is present). Gates the pre-migration backup so a fresh
     // library isn't backed up pointlessly.

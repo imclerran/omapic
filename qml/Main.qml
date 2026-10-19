@@ -2072,6 +2072,8 @@ ApplicationWindow {
                 id: albumNameField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Album name")
+                // '|' is the sidecar hierarchy separator; not allowed in names.
+                validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
                 onAccepted: newAlbumDialog.accept()
                 ClearButton { field: albumNameField }
             }
