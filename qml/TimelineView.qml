@@ -32,11 +32,17 @@ Item {
     // Fixed header height, so a month's pixel height is exactly computable (used
     // to scroll the keyboard cursor into view without relying on realized items).
     readonly property int headerH: 30
-    readonly property int sectionGap: 6 // Column spacing between header and grid
+    readonly property int sectionGap: 6  // gap between a header and its photos
+    readonly property int monthGapTop: 16 // gap above each month's header
+    // A header row carries the month gap, the label, and the gap to the photos.
+    readonly property int headerRowH: monthGapTop + headerH + sectionGap
 
-    // The current month groups ({key, label, firstRow, count}); also the ListView
-    // model. Kept as a property so the navigation math can read group bounds.
+    // The current month groups ({key, label, firstRow, count}); kept so the
+    // navigation math can read group bounds.
     property var groups: []
+    // Flat index of each group's header row within the ListView's row model, so
+    // scrollToRow can map a proxy row to the row that renders it.
+    property var groupRowStart: []
 
     // Routed back to the window so selection/slideshow/menus stay consistent with
     // the grid. `index` is the proxy row (library.filtered), matching the grid.
@@ -73,7 +79,53 @@ Item {
         // view sees, so re-fetch on every (re)show to avoid a stale star/badge.
         tv.dataRevision++
         tv.groups = tv.library.filtered.monthGroups()
-        list.model = tv.groups
+        rebuildRows()
+    }
+
+    // Flatten the month groups into a virtualizable list of rows: one header row
+    // per month, then ceil(count / columns) photo rows of up to `columns` tiles
+    // each. The ListView then realizes only on-screen rows (± cacheBuffer) — so a
+    // huge month no longer instantiates all its tiles at once. Recomputed when the
+    // groups change and when the column count changes (window resize).
+    function rebuildRows() {
+        const rows = []
+        const starts = []
+        for (let k = 0; k < tv.groups.length; ++k) {
+            starts.push(rows.length)
+            const g = tv.groups[k]
+            rows.push({ header: true, label: g.label })
+            const n = Math.ceil(g.count / tv.columns)
+            for (let r = 0; r < n; ++r) {
+                const start = g.firstRow + r * tv.columns
+                rows.push({ header: false, firstRow: start,
+                            tiles: Math.min(tv.columns, g.count - r * tv.columns) })
+            }
+        }
+        tv.groupRowStart = starts
+        list.model = rows
+    }
+
+    // Column count changes on resize; re-flow the rows to match. Replacing the row
+    // model resets the ListView to the top, so keep the photo at the top of the
+    // viewport roughly in place across the re-flow.
+    onColumnsChanged: {
+        if (!tv.visible)
+            return
+        let anchorProxy = -1
+        const topIdx = list.indexAt(2, list.contentY + 2)
+        if (topIdx >= 0 && list.model[topIdx] && !list.model[topIdx].header)
+            anchorProxy = list.model[topIdx].firstRow
+        rebuildRows()
+        if (anchorProxy >= 0) {
+            const ap = anchorProxy
+            Qt.callLater(function () {
+                const k = groupIndexOfRow(ap)
+                if (k >= 0 && k < tv.groupRowStart.length) {
+                    const lr = Math.floor((ap - tv.groups[k].firstRow) / tv.columns)
+                    list.positionViewAtIndex(tv.groupRowStart[k] + 1 + lr, ListView.Beginning)
+                }
+            })
+        }
     }
 
     onVisibleChanged: {
@@ -150,28 +202,16 @@ Item {
         return base
     }
 
-    function rowsIn(g) { return Math.ceil(g.count / tv.columns) }
-    function monthHeight(g) { return tv.headerH + tv.sectionGap + rowsIn(g) * tv.cellSize }
-
-    // Scroll so the cell at proxy row `row` is fully visible. Month heights are
-    // fixed-size, so the cell's content-Y is computed directly rather than from
-    // (possibly unrealized) delegate items.
+    // Scroll so the cell at proxy row `row` is visible. Maps the proxy row to the
+    // flat row that renders it and lets the ListView bring that row into view (the
+    // row is exactly one cell tall, so this makes the cell visible).
     function scrollToRow(row) {
         var k = groupIndexOfRow(row)
-        if (k < 0)
+        if (k < 0 || k >= tv.groupRowStart.length)
             return
-        var top = 0
-        for (var j = 0; j < k; ++j)
-            top += monthHeight(tv.groups[j]) + list.spacing
-        var li = row - tv.groups[k].firstRow
-        var rr = Math.floor(li / tv.columns)
-        var cellTop = top + tv.headerH + tv.sectionGap + rr * tv.cellSize
-        var cellBottom = cellTop + tv.cellSize
-        var maxY = Math.max(0, list.contentHeight - list.height)
-        if (cellTop < list.contentY)
-            list.contentY = Math.max(0, cellTop)
-        else if (cellBottom > list.contentY + list.height)
-            list.contentY = Math.min(maxY, cellBottom - list.height)
+        var localRow = Math.floor((row - tv.groups[k].firstRow) / tv.columns)
+        var flatIdx = tv.groupRowStart[k] + 1 + localRow // +1 past the header row
+        list.positionViewAtIndex(flatIdx, ListView.Contain)
     }
 
     function navigate(dir, extend) {
@@ -193,8 +233,13 @@ Item {
         anchors.fill: parent
         clip: true
         model: []
-        spacing: 16
-        cacheBuffer: 1600
+        spacing: 0 // month gaps are baked into the header rows (see rebuildRows)
+        // Recycle row delegates instead of destroying and rebuilding them, the
+        // same as the main grid (Main.qml). This is what keeps a resize cheap: a
+        // width change re-flows the rows (rebuildRows replaces the model), and
+        // without reuse every tile delegate would be torn down and recreated.
+        reuseItems: true
+        cacheBuffer: 1200
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar {}
 
@@ -216,34 +261,41 @@ Item {
         Keys.onTabPressed: (event) => { tv.tabForward(); event.accepted = true }
         Keys.onBacktabPressed: (event) => { tv.tabBackward(); event.accepted = true }
 
-        delegate: Column {
-            id: monthSection
+        // Each ListView row is either a month header or one grid row of up to
+        // `columns` tiles — so only on-screen rows are realized, not whole months.
+        delegate: Item {
+            id: rowItem
             required property var modelData
             width: list.width
-            spacing: tv.sectionGap
+            height: rowItem.modelData.header ? tv.headerRowH : tv.cellSize
 
-            // Month header, fixed height so section pixel heights are exact.
+            // Month header: monthGapTop above it, sectionGap below (to the photos).
             Label {
+                visible: rowItem.modelData.header
+                anchors.left: parent.left
+                anchors.leftMargin: 8
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: tv.sectionGap
                 height: tv.headerH
                 verticalAlignment: Text.AlignVCenter
-                text: monthSection.modelData.label
+                text: rowItem.modelData.header ? rowItem.modelData.label : ""
                 font.pixelSize: 15
                 font.bold: true
                 color: palette.text
-                leftPadding: 8
             }
 
-            Grid {
-                columns: tv.columns
+            // One wrapping-grid row of tiles.
+            Row {
+                visible: !rowItem.modelData.header
 
                 Repeater {
-                    model: monthSection.modelData.count
+                    model: rowItem.modelData.header ? 0 : rowItem.modelData.tiles
 
                     delegate: PhotoDelegate {
                         id: cell
                         required property int index
                         // Proxy row for this tile within library.filtered.
-                        readonly property int proxyRow: monthSection.modelData.firstRow + index
+                        readonly property int proxyRow: rowItem.modelData.firstRow + index
                         readonly property var photo: { tv.dataRevision; return tv.library.filtered.photoAt(proxyRow) }
                         // photoAt() returns an empty object for an out-of-range row
                         // (possible transiently while the model updates); id is set
