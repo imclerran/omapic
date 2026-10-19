@@ -29,6 +29,7 @@ public:
         MonthKeyRole,  // "yyyy-MM" of the capture time, the timeline section key
         IsDuplicateRole, // true for a non-representative duplicate (see Photo)
         FavoriteRole,  // true when the photo is in the hidden Favorites album
+        SearchFoldRole, // pre-folded name+tags blob for the gallery search filter
     };
 
     explicit PhotoModel(QObject *parent = nullptr);

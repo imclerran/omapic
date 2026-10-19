@@ -401,17 +401,12 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
             return false;
     }
 
-    // Text search: match the file name or any tag name. Folded on both sides so
-    // the match is accent- and case-insensitive ("cafe" finds "Café").
+    // Text search: match the file name or any tag name. The model pre-folds both
+    // into one blob (accent-/case-folded, so "cafe" finds "Café"), so this is a
+    // plain substring test — no per-keystroke folding across the whole model.
     if (!m_searchFolded.isEmpty()) {
-        const QString name = sourceModel()->data(idx, PhotoModel::FileNameRole).toString();
-        if (foldText(name).contains(m_searchFolded))
-            return true;
-        const QStringList tagNames = sourceModel()->data(idx, PhotoModel::TagsRole).toStringList();
-        for (const QString &tn : tagNames)
-            if (foldText(tn).contains(m_searchFolded))
-                return true;
-        return false;
+        const QString blob = sourceModel()->data(idx, PhotoModel::SearchFoldRole).toString();
+        return blob.contains(m_searchFolded);
     }
 
     return true;

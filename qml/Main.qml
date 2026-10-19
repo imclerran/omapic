@@ -1599,10 +1599,18 @@ ApplicationWindow {
                 id: gallerySearch
                 Layout.preferredWidth: 220
                 placeholderText: qsTr("Search name or tags…")
-                // Combines (AND) with the tag filter from the sidebar.
-                onTextChanged: {
-                    library.filtered.searchText = text
-                    win.scrollGalleryToTop()
+                // Combines (AND) with the tag filter from the sidebar. Debounced so
+                // a burst of keystrokes re-filters the (possibly huge) model once,
+                // after a short pause, rather than on every key — keeping typing
+                // responsive on a large library.
+                onTextChanged: searchDebounce.restart()
+                Timer {
+                    id: searchDebounce
+                    interval: 180
+                    onTriggered: {
+                        library.filtered.searchText = gallerySearch.text
+                        win.scrollGalleryToTop()
+                    }
                 }
                 Keys.onEscapePressed: text = ""
                 // Tab cycle: main search → add-a-tag (wrap); Shift+Tab → gallery.

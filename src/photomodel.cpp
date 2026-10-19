@@ -7,6 +7,24 @@
 #include <QDateTime>
 #include <QUrl>
 
+#include "textfold.h"
+
+namespace {
+// Fold the file name and every tag name into one blob so the gallery search can
+// substring-match it directly, instead of re-folding each field per keystroke.
+// Pieces are joined by '\n' (never in a search term) so a match can't straddle
+// the file-name/tag boundary.
+QString buildSearchFold(const Photo &p)
+{
+    QString blob = foldText(p.fileName);
+    for (const QString &tag : p.tagNames) {
+        blob += QLatin1Char('\n');
+        blob += foldText(tag);
+    }
+    return blob;
+}
+}
+
 PhotoModel::PhotoModel(QObject *parent)
     : QAbstractListModel(parent)
 {
@@ -57,6 +75,8 @@ QVariant PhotoModel::data(const QModelIndex &index, int role) const
         return p.isDuplicate;
     case FavoriteRole:
         return p.favorite;
+    case SearchFoldRole:
+        return p.searchFold;
     default:
         return {};
     }
@@ -84,8 +104,10 @@ void PhotoModel::setPhotos(QVector<Photo> photos)
     beginResetModel();
     m_photos = std::move(photos);
     m_idToRow.clear();
-    for (int i = 0; i < m_photos.size(); ++i)
+    for (int i = 0; i < m_photos.size(); ++i) {
         m_idToRow.insert(m_photos.at(i).id, i);
+        m_photos[i].searchFold = buildSearchFold(m_photos.at(i));
+    }
     endResetModel();
 }
 
@@ -94,6 +116,7 @@ void PhotoModel::appendPhoto(const Photo &photo)
     const int row = m_photos.size();
     beginInsertRows({}, row, row);
     m_photos.append(photo);
+    m_photos[row].searchFold = buildSearchFold(m_photos.at(row));
     m_idToRow.insert(photo.id, row);
     endInsertRows();
 }
@@ -120,6 +143,7 @@ void PhotoModel::setTagsForId(int photoId, const QSet<int> &ids, const QStringLi
     p.tagIds = ids;
     p.tagNames = names;
     p.favorite = favorite;
+    p.searchFold = buildSearchFold(p); // tag names changed; refresh the search blob
     const QModelIndex idx = index(row, 0);
-    emit dataChanged(idx, idx, {TagsRole, TagIdsRole, FavoriteRole});
+    emit dataChanged(idx, idx, {TagsRole, TagIdsRole, FavoriteRole, SearchFoldRole});
 }
