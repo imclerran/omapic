@@ -234,7 +234,12 @@ Item {
         clip: true
         model: []
         spacing: 0 // month gaps are baked into the header rows (see rebuildRows)
-        cacheBuffer: 1600
+        // Recycle row delegates instead of destroying and rebuilding them, the
+        // same as the main grid (Main.qml). This is what keeps a resize cheap: a
+        // width change re-flows the rows (rebuildRows replaces the model), and
+        // without reuse every tile delegate would be torn down and recreated.
+        reuseItems: true
+        cacheBuffer: 1200
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar {}
 
