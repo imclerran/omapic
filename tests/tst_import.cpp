@@ -19,6 +19,7 @@
 #include "libraryworker.h"
 #include "photo.h"
 #include "photometadata.h"
+#include "sidecar.h"
 
 // End-to-end coverage of the import/rescan orchestration in LibraryWorker. In
 // the app the worker runs on a background thread via queued signals, but its
@@ -36,11 +37,16 @@ private slots:
     void inPlaceEditKeepsTagsViaRekey();
     void externalSidecarChangeIsPickedUp();
     void embeddedKeywordsReadInOnePass();
+    void flushWritesTaggedPhotoSidecar();
+    void flushImportsNewerSidecarFirst();
+    void flushRemovesOmapicSidecarWhenUntagged();
 
 private:
     QString pics() const { return m_dir->filePath(QStringLiteral("pics")); }
     QString dbFile() const { return m_dir->filePath(QStringLiteral("library.db")); }
     static void writeFile(const QString &path, const QByteArray &bytes);
+    // Import `path`, returning its photo id (via a verify connection).
+    int importAndId(const QString &path);
     // Tag names on the photo at `path`, read through a fresh verify connection.
     QStringList tagsOf(const QString &path);
     // Names of the user categories in the library.
@@ -74,6 +80,22 @@ void TestImport::writeFile(const QString &path, const QByteArray &bytes)
     QVERIFY(f.open(QIODevice::WriteOnly));
     f.write(bytes);
     f.close();
+}
+
+int TestImport::importAndId(const QString &path)
+{
+    m_worker->importDirectory(pics());
+    int id = -1;
+    {
+        Database db;
+        if (db.open(dbFile(), QStringLiteral("idlookup"))) {
+            for (const Photo &p : db.loadPhotos())
+                if (p.path == path)
+                    id = p.id;
+        }
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("idlookup"));
+    return id;
 }
 
 QStringList TestImport::tagsOf(const QString &path)
@@ -219,6 +241,113 @@ void TestImport::embeddedKeywordsReadInOnePass()
     // And it flows through the worker's import into the library.
     m_worker->importDirectory(pics());
     QVERIFY(tagsOf(photo).contains(QStringLiteral("embeddedtag")));
+}
+
+void TestImport::flushWritesTaggedPhotoSidecar()
+{
+    const QString photo = pics() + QStringLiteral("/tagged.jpg");
+    writeFile(photo, "bytes");
+    const int id = importAndId(photo);
+    QVERIFY(id > 0);
+
+    // Tag it and queue it the way a Library user action would, then flush.
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("mut")));
+        const int tag = db.ensureTag(QStringLiteral("beach"));
+        db.linkTagToContent(id, tag);
+        db.rememberContentTag(db.photoHash(id), tag);
+        db.enqueueSidecarDirty({id});
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("mut"));
+
+    m_worker->flushSidecars();
+
+    QVERIFY(QFile::exists(photo + QStringLiteral(".xmp")));
+    const auto back = sidecar::readSidecar(photo);
+    QVERIFY(back.has_value());
+    QVERIFY(back->flat.contains(QStringLiteral("beach")));
+    QVERIFY(!back->contentHash.isEmpty()); // omapic stamps the content hash
+
+    // The queue is drained.
+    Database db;
+    QVERIFY(db.open(dbFile(), QStringLiteral("q")));
+    QVERIFY(db.sidecarDirtyIds().isEmpty());
+    QSqlDatabase::removeDatabase(QStringLiteral("q"));
+}
+
+void TestImport::flushImportsNewerSidecarFirst()
+{
+    const QString photo = pics() + QStringLiteral("/both.jpg");
+    writeFile(photo, "bytes");
+    const int id = importAndId(photo);
+    QVERIFY(id > 0);
+
+    // omapic has one tag queued; meanwhile another app wrote a sidecar with a
+    // different keyword. The flush must import theirs before rewriting, so both end
+    // up in the file (and the library) rather than ours clobbering theirs.
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("mut2")));
+        const int tag = db.ensureTag(QStringLiteral("ours"));
+        db.linkTagToContent(id, tag);
+        db.rememberContentTag(db.photoHash(id), tag);
+        db.enqueueSidecarDirty({id});
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("mut2"));
+
+    writeFile(photo + QStringLiteral(".xmp"),
+        "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>\n"
+        " <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n"
+        "  <rdf:Description rdf:about='' xmlns:dc='http://purl.org/dc/elements/1.1/'>\n"
+        "   <dc:subject><rdf:Bag><rdf:li>theirs</rdf:li></rdf:Bag></dc:subject>\n"
+        "  </rdf:Description>\n"
+        " </rdf:RDF>\n"
+        "</x:xmpmeta>\n"
+        "<?xpacket end='w'?>\n");
+
+    m_worker->flushSidecars();
+
+    const auto back = sidecar::readSidecar(photo);
+    QVERIFY(back.has_value());
+    QVERIFY2(back->flat.contains(QStringLiteral("ours")), qPrintable(back->flat.join(',')));
+    QVERIFY2(back->flat.contains(QStringLiteral("theirs")), qPrintable(back->flat.join(',')));
+    QVERIFY(tagsOf(photo).contains(QStringLiteral("theirs"))); // imported into the library too
+}
+
+void TestImport::flushRemovesOmapicSidecarWhenUntagged()
+{
+    const QString photo = pics() + QStringLiteral("/gone.jpg");
+    writeFile(photo, "bytes");
+    const int id = importAndId(photo);
+    QVERIFY(id > 0);
+    const QString side = photo + QStringLiteral(".xmp");
+
+    int tag = -1;
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("mut3")));
+        tag = db.ensureTag(QStringLiteral("temp"));
+        db.linkTagToContent(id, tag);
+        db.rememberContentTag(db.photoHash(id), tag);
+        db.enqueueSidecarDirty({id});
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("mut3"));
+    m_worker->flushSidecars();
+    QVERIFY(QFile::exists(side)); // omapic created it
+
+    // Remove the only tag and flush again: the omapic-only sidecar is deleted.
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("mut4")));
+        db.unlinkTagFromContent(id, tag);
+        db.forgetContentTag(db.photoHash(id), tag);
+        db.enqueueSidecarDirty({id});
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("mut4"));
+    m_worker->flushSidecars();
+    QVERIFY(!QFile::exists(side));
 }
 
 QTEST_GUILESS_MAIN(TestImport)

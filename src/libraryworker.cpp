@@ -4,6 +4,7 @@
 
 #include "libraryworker.h"
 
+#include <QDateTime>
 #include <QFileInfo>
 #include <QHash>
 #include <QSet>
@@ -413,4 +414,58 @@ void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)
     m_db.commitTransaction();
 
     emit tagJobFinished();
+}
+
+void LibraryWorker::flushSidecars()
+{
+    const QList<int> ids = m_db.sidecarDirtyIds();
+    const int total = ids.size();
+    emit progress(tr("Exporting tags…"), 0, total);
+    const int step = qMax(1, total / 100);
+
+    int done = 0, written = 0, failed = 0;
+    for (int id : ids) {
+        const QString path = m_db.photoPath(id);
+        if (path.isEmpty()) {
+            m_db.dequeueSidecarDirty(id); // photo gone; drop the stale entry
+            ++done;
+            continue;
+        }
+
+        // If another app changed the sidecar since we last synced it, import those
+        // keywords first so the rewrite below doesn't drop them.
+        const QString side = sidecar::sidecarPath(path);
+        if (!side.isEmpty()) {
+            const qint64 sideMtime = QFileInfo(side).lastModified().toSecsSinceEpoch();
+            const qint64 lastSync = m_db.sidecarWrittenAt(id);
+            if (sideMtime > (lastSync < 0 ? 0 : lastSync))
+                applyImportedTags(id, path, m_db.photoHash(id), ImportMetadata{});
+        }
+
+        sidecar::WriteTags tags;
+        m_db.sidecarTagsForPhoto(id, tags.contentHash, tags.flat, tags.categorized,
+                                 tags.albums, tags.favorite);
+        const sidecar::WriteResult res = sidecar::writeSidecar(path, tags);
+
+        if (res == sidecar::WriteResult::Failed) {
+            ++failed; // leave the dirty row so a later flush retries
+        } else {
+            if (res == sidecar::WriteResult::Written || res == sidecar::WriteResult::Removed)
+                ++written;
+            // Record the sync marker from the file we just wrote (or now, if the
+            // empty case removed it), so a later rescan won't re-import our own write.
+            const QString after = sidecar::sidecarPath(path);
+            const qint64 mtime = after.isEmpty()
+                                     ? QDateTime::currentSecsSinceEpoch()
+                                     : QFileInfo(after).lastModified().toSecsSinceEpoch();
+            m_db.setSidecarWrittenAt(id, mtime);
+            m_db.dequeueSidecarDirty(id);
+        }
+
+        ++done;
+        if (done % step == 0 || done == total)
+            emit progress(tr("Exporting tags…"), done, total);
+    }
+
+    emit sidecarFlushFinished(written, failed);
 }

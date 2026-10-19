@@ -24,6 +24,9 @@ private slots:
     void readsDigikamAndMicrosoftFields();
     void readsAdobeBaseNameFallback();
     void absentSidecarReturnsNullopt();
+    void writeRoundTrips();
+    void writePreservesForeignKeys();
+    void writeEmptyRemovesOmapicCreatedFileButKeepsOthers();
 
 private:
     static void writeRawXmp(const QString &path, const QByteArray &xml);
@@ -166,6 +169,114 @@ void TestSidecar::absentSidecarReturnsNullopt()
     const QString photo = dir.path() + QStringLiteral("/lonely.jpg");
     QVERIFY(sidecar::sidecarPath(photo).isEmpty());
     QVERIFY(!sidecar::readSidecar(photo).has_value());
+}
+
+void TestSidecar::writeRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString photo = dir.path() + QStringLiteral("/one.jpg");
+
+    sidecar::WriteTags tags;
+    tags.flat = {QStringLiteral("beach"), QStringLiteral("sunset")};
+    tags.categorized = {{QStringLiteral("Places"), QStringLiteral("Spain")},
+                        {QString(), QStringLiteral("beach")}};
+    tags.albums = {QStringLiteral("Summer 2024")};
+    tags.favorite = true;
+    tags.contentHash = QStringLiteral("abc123");
+
+    QCOMPARE(sidecar::writeSidecar(photo, tags), sidecar::WriteResult::Written);
+    QVERIFY(QFile::exists(photo + QStringLiteral(".xmp")));
+
+    const auto back = sidecar::readSidecar(photo);
+    QVERIFY(back.has_value());
+    QVERIFY(back->flat.contains(QStringLiteral("beach")));
+    QVERIFY(back->flat.contains(QStringLiteral("sunset")));
+    QVERIFY(back->categorized.contains(
+        sidecar::CategorizedTag(QStringLiteral("Places"), QStringLiteral("Spain"))));
+    QVERIFY(back->albums.contains(QStringLiteral("Summer 2024"))); // custom-ns bag survives
+    QVERIFY(back->favorite);
+    QCOMPARE(back->contentHash, QStringLiteral("sha256:abc123")); // prefix added on write
+}
+
+void TestSidecar::writePreservesForeignKeys()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString photo = dir.path() + QStringLiteral("/edited.jpg");
+    const QString side = photo + QStringLiteral(".xmp");
+
+    // A sidecar another app owns, carrying its own edit history we must not drop.
+    writeRawXmp(side,
+        "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>\n"
+        " <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n"
+        "  <rdf:Description rdf:about=''\n"
+        "    xmlns:darktable='http://darktable.sf.net/'\n"
+        "    xmlns:dc='http://purl.org/dc/elements/1.1/'>\n"
+        "   <darktable:history_end>7</darktable:history_end>\n"
+        "   <dc:subject><rdf:Bag><rdf:li>old</rdf:li></rdf:Bag></dc:subject>\n"
+        "  </rdf:Description>\n"
+        " </rdf:RDF>\n"
+        "</x:xmpmeta>\n"
+        "<?xpacket end='w'?>\n");
+
+    sidecar::WriteTags tags;
+    tags.flat = {QStringLiteral("new")};
+    QCOMPARE(sidecar::writeSidecar(photo, tags), sidecar::WriteResult::Written);
+
+    // Our keyword replaced the old one; darktable's key is untouched.
+    auto img = Exiv2::ImageFactory::open(side.toStdString());
+    img->readMetadata();
+    const Exiv2::XmpData &xmp = img->xmpData();
+    QVERIFY(xmp.findKey(Exiv2::XmpKey("Xmp.darktable.history_end")) != xmp.end());
+    const auto back = sidecar::readSidecar(photo);
+    QVERIFY(back.has_value());
+    QCOMPARE(back->flat, QStringList{QStringLiteral("new")}); // replaced, not merged with "old"
+}
+
+void TestSidecar::writeEmptyRemovesOmapicCreatedFileButKeepsOthers()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    // (a) An omapic-created sidecar with only our keys → cleared → deleted.
+    const QString mine = dir.path() + QStringLiteral("/mine.jpg");
+    sidecar::WriteTags tags;
+    tags.flat = {QStringLiteral("temp")};
+    QCOMPARE(sidecar::writeSidecar(mine, tags), sidecar::WriteResult::Written);
+    QVERIFY(QFile::exists(mine + QStringLiteral(".xmp")));
+    QCOMPARE(sidecar::writeSidecar(mine, sidecar::WriteTags{}), sidecar::WriteResult::Removed);
+    QVERIFY(!QFile::exists(mine + QStringLiteral(".xmp")));
+
+    // (b) A sidecar with another app's key → our keys removed, file kept.
+    const QString shared = dir.path() + QStringLiteral("/shared.jpg");
+    const QString side = shared + QStringLiteral(".xmp");
+    writeRawXmp(side,
+        "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>\n"
+        " <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n"
+        "  <rdf:Description rdf:about=''\n"
+        "    xmlns:darktable='http://darktable.sf.net/'\n"
+        "    xmlns:dc='http://purl.org/dc/elements/1.1/'>\n"
+        "   <darktable:history_end>3</darktable:history_end>\n"
+        "   <dc:subject><rdf:Bag><rdf:li>willgo</rdf:li></rdf:Bag></dc:subject>\n"
+        "  </rdf:Description>\n"
+        " </rdf:RDF>\n"
+        "</x:xmpmeta>\n"
+        "<?xpacket end='w'?>\n");
+    QCOMPARE(sidecar::writeSidecar(shared, sidecar::WriteTags{}), sidecar::WriteResult::Written);
+    QVERIFY(QFile::exists(side)); // kept: it still has darktable's key
+    auto img = Exiv2::ImageFactory::open(side.toStdString());
+    img->readMetadata();
+    const Exiv2::XmpData &xmp = img->xmpData();
+    QVERIFY(xmp.findKey(Exiv2::XmpKey("Xmp.darktable.history_end")) != xmp.end());
+    QVERIFY(xmp.findKey(Exiv2::XmpKey("Xmp.dc.subject")) == xmp.end()); // our key gone
+
+    // (c) No tags and no existing file → nothing created.
+    const QString none = dir.path() + QStringLiteral("/none.jpg");
+    QCOMPARE(sidecar::writeSidecar(none, sidecar::WriteTags{}), sidecar::WriteResult::Unchanged);
+    QVERIFY(!QFile::exists(none + QStringLiteral(".xmp")));
 }
 
 QTEST_GUILESS_MAIN(TestSidecar)

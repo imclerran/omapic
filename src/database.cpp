@@ -18,7 +18,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 10;
+constexpr int kSchemaVersion = 11;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -120,6 +120,7 @@ bool Database::runMigrations(int fromVersion)
         {8, &Database::migrate_7_to_8, nullptr},
         {9, &Database::migrate_8_to_9, &Database::legacyAlbumsNeedRename},
         {10, &Database::migrate_9_to_10, nullptr},
+        {11, &Database::migrate_10_to_11, nullptr},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -338,6 +339,17 @@ void Database::migrate_9_to_10()
     seed.exec();
 }
 
+void Database::migrate_10_to_11()
+{
+    // The sidecar write queue: photos whose tags changed and whose XMP sidecar is
+    // due for a rewrite. Drained by the worker's flush. ON DELETE CASCADE drops a
+    // photo's pending entry when the row goes away.
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS sidecar_dirty ("
+        "  photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE)"));
+}
+
 bool Database::legacyAlbumsNeedRename()
 {
     if (!hasColumn(QStringLiteral("tag_categories"), QStringLiteral("system")))
@@ -500,6 +512,107 @@ void Database::setSidecarWrittenAt(int photoId, qint64 whenSecs)
     u.addBindValue(whenSecs > 0 ? QVariant(whenSecs) : QVariant());
     u.addBindValue(photoId);
     u.exec();
+}
+
+qint64 Database::sidecarWrittenAt(int photoId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT sidecar_written_at FROM photos WHERE id = ?"));
+    q.addBindValue(photoId);
+    q.exec();
+    if (q.next() && !q.value(0).isNull())
+        return q.value(0).toLongLong();
+    return -1;
+}
+
+QString Database::photoPath(int photoId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT path FROM photos WHERE id = ?"));
+    q.addBindValue(photoId);
+    q.exec();
+    if (q.next())
+        return q.value(0).toString();
+    return {};
+}
+
+void Database::enqueueSidecarDirty(const QList<int> &photoIds)
+{
+    if (photoIds.isEmpty())
+        return;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO sidecar_dirty(photo_id) VALUES(?)"));
+    for (int id : photoIds) {
+        if (id < 0)
+            continue;
+        q.addBindValue(id);
+        q.exec();
+    }
+}
+
+void Database::enqueueSidecarDirtyForTag(int tagId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO sidecar_dirty(photo_id) "
+        "SELECT photo_id FROM photo_tags WHERE tag_id = ?"));
+    q.addBindValue(tagId);
+    q.exec();
+}
+
+QList<int> Database::sidecarDirtyIds()
+{
+    QList<int> ids;
+    QSqlQuery q(QStringLiteral("SELECT photo_id FROM sidecar_dirty ORDER BY photo_id"), m_db);
+    while (q.next())
+        ids.append(q.value(0).toInt());
+    return ids;
+}
+
+void Database::dequeueSidecarDirty(int photoId)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM sidecar_dirty WHERE photo_id = ?"));
+    q.addBindValue(photoId);
+    q.exec();
+}
+
+void Database::sidecarTagsForPhoto(int photoId, QString &hash, QStringList &flat,
+                                   QList<QPair<QString, QString>> &categorized,
+                                   QStringList &albums, bool &favorite)
+{
+    hash = photoHash(photoId);
+    flat.clear();
+    categorized.clear();
+    albums.clear();
+    favorite = false;
+
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT t.id, t.name, t.category_id, c.name "
+        "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id "
+        "LEFT JOIN tag_categories c ON c.id = t.category_id "
+        "WHERE pt.photo_id = ? ORDER BY t.name"));
+    q.addBindValue(photoId);
+    q.exec();
+    while (q.next()) {
+        const int tagId = q.value(0).toInt();
+        const QString name = q.value(1).toString();
+        const int categoryId = q.value(2).isNull() ? -1 : q.value(2).toInt();
+        const QString categoryName = q.value(3).toString();
+
+        if (tagId == m_favoritesTagId) {
+            favorite = true;
+        } else if (categoryId >= 0 && categoryId == m_albumCategoryId) {
+            albums << albumDisplayName(name); // strip the "_album:" prefix
+        } else {
+            flat << name;
+            if (categoryId >= 0)
+                categorized.append({categoryName, name});
+            else
+                categorized.append({QString(), name});
+        }
+    }
 }
 
 int Database::photosMissingTakenAtCount()

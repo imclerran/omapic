@@ -140,7 +140,15 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::rescanFinished, this, &Library::onRescanFinished);
     connect(m_worker, &LibraryWorker::implicationsExpanded, this, &Library::onImplicationsExpanded);
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
+    connect(this, &Library::requestSidecarFlush, m_worker, &LibraryWorker::flushSidecars);
+    connect(m_worker, &LibraryWorker::sidecarFlushFinished, this, &Library::onSidecarFlushFinished);
     m_workerThread.start();
+
+    // Debounced auto-write: a burst of tag edits coalesces into one flush.
+    m_sidecarDebounce = new QTimer(this);
+    m_sidecarDebounce->setSingleShot(true);
+    m_sidecarDebounce->setInterval(1500);
+    connect(m_sidecarDebounce, &QTimer::timeout, this, [this] { emit requestSidecarFlush(); });
 
     // Kick off the one-time hash + capture-time backfill. Only show the progress
     // UI when there is actually a backlog to chew through.
@@ -264,6 +272,7 @@ void Library::onRescanFinished()
     refreshTags();
     endBusy(/*modal=*/false); // rescan reports in the status bar
     emit foldersChanged();
+    scheduleSidecarFlush(); // flush anything queued before the rescan, if auto-write is on
 }
 
 void Library::onImplicationsExpanded()
@@ -282,6 +291,67 @@ void Library::onTagJobFinished()
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags(); // tagsChanged refreshes the detail panel in one pass
     endBusy(/*modal=*/false); // bulk tagging reports in the status bar
+    scheduleSidecarFlush(); // the bulk tag change is committed; write sidecars if auto-write is on
+}
+
+void Library::setAutoWriteSidecars(bool on)
+{
+    if (m_autoWriteSidecars == on)
+        return;
+    m_autoWriteSidecars = on;
+    emit autoWriteSidecarsChanged();
+}
+
+void Library::scheduleSidecarFlush()
+{
+    // Only the opt-in auto-write path debounces; explicit export flushes directly.
+    if (m_autoWriteSidecars && m_sidecarDebounce)
+        m_sidecarDebounce->start();
+}
+
+void Library::exportSidecars(const QVariantList &photoIds)
+{
+    QList<int> ids;
+    ids.reserve(photoIds.size());
+    for (const QVariant &v : photoIds) {
+        const int pid = v.toInt();
+        if (pid >= 0)
+            ids.append(pid);
+    }
+    if (ids.isEmpty())
+        return;
+    m_db.enqueueSidecarDirty(ids);
+    ++m_explicitFlushes; // user-triggered: show progress and report the result
+    beginBusy(tr("Exporting tags…"), /*modal=*/false);
+    emit requestSidecarFlush();
+}
+
+void Library::exportAllSidecars()
+{
+    QList<int> ids;
+    for (const PhotoRef &r : m_db.allPhotoRefs())
+        ids.append(r.id);
+    if (ids.isEmpty())
+        return;
+    m_db.enqueueSidecarDirty(ids);
+    ++m_explicitFlushes;
+    beginBusy(tr("Exporting tags…"), /*modal=*/false);
+    emit requestSidecarFlush();
+}
+
+void Library::onSidecarFlushFinished(int written, int failed)
+{
+    // The import-first guard in the flush can add tags from an externally-changed
+    // sidecar, so reload the models to reflect anything new.
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    // Only a user-triggered export shows the busy bar and reports a result; the
+    // debounced auto-write path runs silently.
+    if (m_explicitFlushes > 0) {
+        --m_explicitFlushes;
+        endBusy(/*modal=*/false);
+        emit sidecarsExported(written, failed);
+    }
 }
 
 QVariantList Library::tagImplications() const
@@ -810,9 +880,11 @@ void Library::addTag(int photoId, const QString &name)
     m_db.linkTagToContent(photoId, tagId); // every copy of this content, not just the visible one
     m_db.rememberContentTag(hash, tagId);
     m_db.applyImplications(hash, tagId);   // and any tags this one implies
+    m_db.enqueueSidecarDirty({photoId});
     applyTags(photoId);
     refreshTags();
     emit photoChanged(photoId);
+    scheduleSidecarFlush();
 }
 
 void Library::removeTag(int photoId, int tagId)
@@ -821,9 +893,11 @@ void Library::removeTag(int photoId, int tagId)
         return;
     m_db.unlinkTagFromContent(photoId, tagId); // every copy of this content
     m_db.forgetContentTag(m_db.photoHash(photoId), tagId);
+    m_db.enqueueSidecarDirty({photoId});
     applyTags(photoId);
     refreshTags();
     emit photoChanged(photoId);
+    scheduleSidecarFlush();
 }
 
 void Library::addTagToPhotos(const QVariantList &photoIds, const QString &name)
@@ -841,6 +915,8 @@ void Library::addTagToPhotos(const QVariantList &photoIds, const QString &name)
     }
     if (ids.isEmpty())
         return;
+
+    m_db.enqueueSidecarDirty(ids); // queue the sidecar rewrite regardless of path
 
     // Large sets: do the writes on the worker thread with a progress bar so the
     // UI stays responsive. onTagJobFinished reloads the models once.
@@ -863,6 +939,7 @@ void Library::addTagToPhotos(const QVariantList &photoIds, const QString &name)
     }
     m_db.commitTransaction();
     refreshTags();
+    scheduleSidecarFlush();
 }
 
 void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
@@ -880,6 +957,8 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
     if (ids.isEmpty())
         return;
 
+    m_db.enqueueSidecarDirty(ids);
+
     if (ids.size() > kBulkTagThreshold) {
         beginBusy(tr("Removing tag…"), /*modal=*/false);
         emit requestRemoveTagFromPhotos(ids, tagId);
@@ -894,6 +973,7 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
     }
     m_db.commitTransaction();
     refreshTags();
+    scheduleSidecarFlush();
 }
 
 QVariantList Library::albums() const
@@ -1367,9 +1447,11 @@ void Library::deleteTag(int tagId)
 {
     if (tagId < 0)
         return;
+    m_db.enqueueSidecarDirtyForTag(tagId); // before the delete drops the links
     m_db.deleteTag(tagId); // removes the tag and all its photo links (cascade)
     m_photos->setPhotos(m_db.loadPhotos()); // refresh in-memory tag data
     refreshTags();
+    scheduleSidecarFlush();
 }
 
 int Library::renameTag(int tagId, const QString &newName)
@@ -1388,8 +1470,10 @@ int Library::renameTag(int tagId, const QString &newName)
         return RenameConflict;
 
     m_db.renameTag(tagId, trimmed);
+    m_db.enqueueSidecarDirtyForTag(tagId); // the keyword text changes for its carriers
     m_photos->setPhotos(m_db.loadPhotos()); // refresh in-memory tag names
     refreshTags();
+    scheduleSidecarFlush();
     return RenameOk;
 }
 

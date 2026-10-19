@@ -1140,6 +1140,9 @@ ApplicationWindow {
         // capture month), or "folder" (navigable library folders). Timeline is the
         // first-launch default; a user's later choice is saved and restored.
         property string viewMode: "timeline"
+        // When true, tag/album/favorite changes are written back to XMP sidecars
+        // automatically. Off by default; on-demand export is always available.
+        property bool writeSidecars: false
     }
 
     // Keep the gallery sort order in step with the saved setting (also applies it
@@ -1148,6 +1151,25 @@ ApplicationWindow {
         target: library.filtered
         property: "folderFirst"
         value: gallerySettings.folderFirst
+    }
+
+    // Mirror the auto-write setting into the library so edits trigger a sidecar
+    // flush (debounced) when it's on.
+    Binding {
+        target: library
+        property: "autoWriteSidecars"
+        value: gallerySettings.writeSidecars
+    }
+
+    // Report the result of an on-demand "Export tags" (the debounced auto-write
+    // path runs silently and emits nothing).
+    Connections {
+        target: library
+        function onSidecarsExported(written, failed) {
+            win.toast(failed > 0
+                      ? qsTr("Exported %1, %2 failed").arg(written).arg(failed)
+                      : qsTr("Exported tags to %n sidecar(s)", "", written))
+        }
     }
 
     // Restore the saved view mode at startup, then persist any later change.
@@ -2365,6 +2387,10 @@ ApplicationWindow {
                     win.toast(qsTr("Couldn't open the file manager"))
             }
         }
+        MenuItem {
+            text: qsTr("Write tags to sidecar")
+            onTriggered: library.exportSidecars([win.menuPhotoId])
+        }
 
         MenuSeparator {}
 
@@ -2387,6 +2413,11 @@ ApplicationWindow {
         MenuSeparator {}
         AddToAlbumMenu {}
         MenuSeparator {}
+
+        MenuItem {
+            text: qsTr("Write tags to sidecars")
+            onTriggered: library.exportSidecars(win.selectedIds)
+        }
 
         MenuItem {
             text: qsTr("Remove from library…")

@@ -29,6 +29,7 @@ public slots:
     void expandImplications();                // apply tag implications across the whole library
     void addTagToPhotos(const QList<int> &photoIds, const QString &name);
     void removeTagFromPhotos(const QList<int> &photoIds, int tagId);
+    void flushSidecars();                     // write queued photos' XMP sidecars
 
 signals:
     void progress(const QString &phase, int done, int total); // total <= 0 means indeterminate
@@ -37,6 +38,7 @@ signals:
     void rescanFinished();
     void implicationsExpanded();
     void tagJobFinished();
+    void sidecarFlushFinished(int written, int failed);
 
 private:
     // Apply a photo's sidecar + embedded tags to its row (and archive them
