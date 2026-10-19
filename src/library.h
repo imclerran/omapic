@@ -352,4 +352,5 @@ private:
     bool m_autoWriteSidecars = false;
     QTimer *m_sidecarDebounce = nullptr; // coalesces auto-write flushes after edits
     int m_explicitFlushes = 0; // in-flight user-triggered exports (show busy + toast)
+    int m_quietBarFlushes = 0; // in-flight catch-up flushes (show busy, no toast)
 };

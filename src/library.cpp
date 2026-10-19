@@ -302,10 +302,16 @@ void Library::setAutoWriteSidecars(bool on)
     emit autoWriteSidecarsChanged();
     // Turning it on catches up: the dirty queue is fed on every edit regardless of
     // this setting, so it already holds everything changed (and unsynced) while it
-    // was off. Flush that backlog now, silently (debounced). At startup this is a
-    // no-op unless a previous session left a genuine backlog.
-    if (on)
-        scheduleSidecarFlush();
+    // was off. Flush that backlog now, with the progress bar — it can be large —
+    // but only when something is actually queued, so enabling with nothing pending
+    // (and the startup restore of a saved "on") stays quiet. Routine per-edit auto
+    // writes still flush silently via scheduleSidecarFlush(). This shows the
+    // progress bar but, unlike the on-demand export, reports no toast.
+    if (on && m_db.sidecarDirtyCount() > 0) {
+        ++m_quietBarFlushes;
+        beginBusy(tr("Exporting tags…"), /*modal=*/false);
+        emit requestSidecarFlush();
+    }
 }
 
 void Library::scheduleSidecarFlush()
@@ -351,12 +357,16 @@ void Library::onSidecarFlushFinished(int written, int failed)
     // sidecar, so reload the models to reflect anything new.
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
-    // Only a user-triggered export shows the busy bar and reports a result; the
-    // debounced auto-write path runs silently.
+    // An on-demand export shows the busy bar and reports a toast; the enable
+    // catch-up shows the bar but stays quiet; the debounced per-edit auto-write
+    // path shows nothing at all.
     if (m_explicitFlushes > 0) {
         --m_explicitFlushes;
         endBusy(/*modal=*/false);
         emit sidecarsExported(written, failed);
+    } else if (m_quietBarFlushes > 0) {
+        --m_quietBarFlushes;
+        endBusy(/*modal=*/false);
     }
 }
 

@@ -180,6 +180,7 @@ public:
     void enqueueSidecarDirty(const QList<int> &photoIds);
     void enqueueSidecarDirtyForTag(int tagId); // every photo currently carrying the tag
     QList<int> sidecarDirtyIds();
+    int sidecarDirtyCount(); // how many photos are queued (for the "catch up on enable" check)
     void dequeueSidecarDirty(int photoId);
     // The tag content to write into a photo's sidecar, split the way the sidecar
     // format wants it: flat keyword names, hierarchical {category, tag} pairs,

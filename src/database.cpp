@@ -569,6 +569,12 @@ QList<int> Database::sidecarDirtyIds()
     return ids;
 }
 
+int Database::sidecarDirtyCount()
+{
+    QSqlQuery q(QStringLiteral("SELECT COUNT(*) FROM sidecar_dirty"), m_db);
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
 void Database::dequeueSidecarDirty(int photoId)
 {
     QSqlQuery q(m_db);

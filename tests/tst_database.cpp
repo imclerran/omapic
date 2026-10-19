@@ -482,9 +482,11 @@ void TestDatabase::sidecarDirtyQueueEnqueueDequeue()
     QVERIFY(m_db->linkPhotoTag(p2, tag));
 
     QVERIFY(m_db->sidecarDirtyIds().isEmpty());
+    QCOMPARE(m_db->sidecarDirtyCount(), 0);
 
     m_db->enqueueSidecarDirty({p1, p1}); // INSERT OR IGNORE coalesces the repeat
     QCOMPARE(m_db->sidecarDirtyIds(), QList<int>{p1});
+    QCOMPARE(m_db->sidecarDirtyCount(), 1);
 
     // Enqueue every photo carrying a tag, for the library-wide rename/delete paths.
     m_db->enqueueSidecarDirtyForTag(tag);
