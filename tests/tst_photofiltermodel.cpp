@@ -54,6 +54,9 @@ private slots:
     void combinedTagAndSearchFilters();
     void accessorsHandleOutOfRange();
 
+    // setPhotos no-op guard (keeps launch reloads from blinking the thumbnails)
+    void setPhotosSkipsResetWhenUnchanged();
+
 private:
     static Photo makePhoto(int id, const QString &path, const QString &name,
                            const QSet<int> &tagIds = {}, const QStringList &tagNames = {});
@@ -443,6 +446,28 @@ void TestPhotoFilterModel::accessorsHandleOutOfRange()
     QVERIFY(m_proxy->sourceAt(999).isEmpty());
     QVERIFY(m_proxy->photoAt(-1).isEmpty());
     QVERIFY(m_proxy->photoAt(999).isEmpty());
+}
+
+void TestPhotoFilterModel::setPhotosSkipsResetWhenUnchanged()
+{
+    const int dog = 1;
+    QVector<Photo> photos{
+        makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"), {dog}),
+        makePhoto(11, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg")),
+    };
+    m_source->setPhotos(photos);
+
+    QSignalSpy resets(m_source, &QAbstractItemModel::modelReset);
+
+    // Re-setting an identical set must not reset the model — that reset is what
+    // tears down every delegate and blinks the thumbnails on a no-op launch reload.
+    m_source->setPhotos(photos);
+    QCOMPARE(resets.count(), 0);
+
+    // A real change (a favorite flips) still resets.
+    photos[1].favorite = true;
+    m_source->setPhotos(photos);
+    QCOMPARE(resets.count(), 1);
 }
 
 // Custom entry point instead of QTEST_GUILESS_MAIN: PhotoFilterModel sorts with a

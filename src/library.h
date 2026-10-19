@@ -333,9 +333,9 @@ private:
     void updateBusyState(); // recompute m_busy/m_busyModal from the counts, notify on change
 
     void onWorkerProgress(const QString &phase, int done, int total);
-    void onMigrationFinished();
+    void onMigrationFinished(bool changed);
     void onImportFinished(const QString &root);
-    void onRescanFinished();
+    void onRescanFinished(bool changed);
     void onImplicationsExpanded();
     void onTagJobFinished();
     void onSidecarFlushFinished(int written, int failed);

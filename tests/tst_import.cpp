@@ -44,6 +44,8 @@ private slots:
     void flushRemovesOmapicSidecarWhenUntagged();
     void flushSkipsDisabledFolderUntilReenabled();
     void rescanPrunesOldRemovedTags();
+    void rescanReportsWhetherAnythingChanged();
+    void migrationReportsWhetherAnythingChanged();
 
 private:
     QString pics() const { return m_dir->filePath(QStringLiteral("pics")); }
@@ -442,6 +444,61 @@ void TestImport::rescanPrunesOldRemovedTags()
     QVERIFY(db.open(dbFile(), QStringLiteral("ret3")));
     QCOMPARE(db.rememberedRemovedCount(), 0);
     QSqlDatabase::removeDatabase(QStringLiteral("ret3"));
+}
+
+void TestImport::rescanReportsWhetherAnythingChanged()
+{
+    const QString photo = pics() + QStringLiteral("/stable.jpg");
+    writeFile(photo, "bytes");
+    m_worker->importDirectory(pics());
+
+    QSignalSpy spy(m_worker, &LibraryWorker::rescanFinished);
+
+    // Nothing on disk moved since the import: the rescan reports no change, so the
+    // GUI can skip the model reload that would otherwise blink every thumbnail.
+    m_worker->rescan(/*retentionDays=*/0);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+
+    // A new file appears → a row is added → changed.
+    writeFile(pics() + QStringLiteral("/fresh.jpg"), "more-bytes");
+    m_worker->rescan(/*retentionDays=*/0);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.takeFirst().at(0).toBool(), true);
+
+    // A file disappears → a row is dropped → changed.
+    QVERIFY(QFile::remove(photo));
+    m_worker->rescan(/*retentionDays=*/0);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.takeFirst().at(0).toBool(), true);
+}
+
+void TestImport::migrationReportsWhetherAnythingChanged()
+{
+    const QString photo = pics() + QStringLiteral("/m.jpg");
+    writeFile(photo, "bytes");
+    m_worker->importDirectory(pics()); // import already computes hash + taken_at
+
+    QSignalSpy spy(m_worker, &LibraryWorker::migrationFinished);
+
+    // Nothing to backfill: the migration is a no-op and reports no change, so the
+    // launch reload that would blink the thumbnails is skipped.
+    m_worker->runMigration();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.takeFirst().at(0).toBool(), false);
+
+    // A row with no content hash gives the hash backfill real work → changed.
+    const QString photo2 = pics() + QStringLiteral("/n.jpg");
+    writeFile(photo2, "other-bytes");
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("mig")));
+        QVERIFY(db.insertPhoto(photo2, QString()) > 0); // empty hash
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("mig"));
+    m_worker->runMigration();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.takeFirst().at(0).toBool(), true);
 }
 
 QTEST_GUILESS_MAIN(TestImport)

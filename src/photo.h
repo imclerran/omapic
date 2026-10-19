@@ -45,6 +45,20 @@ struct Photo {
     // PhotoModel for the gallery search so filtering doesn't re-fold every row on
     // every keystroke. Not populated by the database layer.
     QString searchFold;
+
+    // Every field the gallery/model reads, so PhotoModel::setPhotos can detect a
+    // reload that wouldn't change anything on screen and skip the model reset.
+    // searchFold is intentionally excluded: it's derived from fileName + tagNames
+    // (already compared) and isn't populated on the incoming database rows, so
+    // comparing it would always differ and defeat the guard.
+    bool operator==(const Photo &o) const
+    {
+        return id == o.id && path == o.path && fileName == o.fileName
+            && isVideo == o.isVideo && takenAt == o.takenAt
+            && isDuplicate == o.isDuplicate && favorite == o.favorite
+            && tagIds == o.tagIds && tagNames == o.tagNames;
+    }
+    bool operator!=(const Photo &o) const { return !(*this == o); }
 };
 
 struct TagInfo {

@@ -242,13 +242,17 @@ void Library::onWorkerProgress(const QString &phase, int done, int total)
     }
 }
 
-void Library::onMigrationFinished()
+void Library::onMigrationFinished(bool changed)
 {
     // The backfill wrote hashes (affecting duplicate collapse) and capture times
     // (driving the timeline) on the worker's connection; reload so the in-memory
-    // views reflect them without needing a restart.
-    m_photos->setPhotos(m_db.loadPhotos());
-    refreshTags();
+    // views reflect them. On a steady-state launch there is no backlog, so it
+    // changed nothing — skip the reload, whose model reset would blink the
+    // thumbnails that just painted.
+    if (changed) {
+        m_photos->setPhotos(m_db.loadPhotos());
+        refreshTags();
+    }
     endBusy(/*modal=*/true);
 }
 
@@ -270,11 +274,17 @@ void Library::rescan()
     emit requestRescan(m_tagRetentionDays); // runs on the worker thread
 }
 
-void Library::onRescanFinished()
+void Library::onRescanFinished(bool changed)
 {
-    // Rows were added/relocated/removed on the worker's connection; reload.
-    m_photos->setPhotos(m_db.loadPhotos());
-    refreshTags();
+    // Reload the in-memory models only when the rescan actually moved something
+    // displayable (added/relocated/removed a row, re-keyed tags, imported an
+    // external sidecar). A steady-state launch rescan changes nothing, and the
+    // reload's model reset would tear down and recreate every delegate — blinking
+    // all the thumbnails for no reason.
+    if (changed) {
+        m_photos->setPhotos(m_db.loadPhotos());
+        refreshTags();
+    }
     endBusy(/*modal=*/false); // rescan reports in the status bar
     emit foldersChanged(); // also refreshes the remembered-removed stat (see ctor)
     scheduleSidecarFlush(); // flush anything queued before the rescan, if auto-write is on

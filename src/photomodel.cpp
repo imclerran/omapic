@@ -101,6 +101,11 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
 
 void PhotoModel::setPhotos(QVector<Photo> photos)
 {
+    // Reloads after a worker job (launch migration/rescan, sidecar flush, …) often
+    // re-fetch an identical set. A reset would still tear down and recreate every
+    // delegate — blanking all the thumbnails — so skip it when nothing changed.
+    if (photos == m_photos)
+        return;
     beginResetModel();
     m_photos = std::move(photos);
     m_idToRow.clear();
