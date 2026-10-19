@@ -1694,10 +1694,12 @@ ApplicationWindow {
                     filePath: model.filePath
                     isVideo: model.isVideo === true
                     tagCount: model.tags.length
+                    favorite: model.favorite === true
                     selected: win.selectedIds.indexOf(model.id) !== -1
                     onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
                     onDoubleClicked: win.openViewer(model.id)
                     onRightClicked: win.openPhotoMenu(index, model.id, model.fileName, model.isVideo === true)
+                    onFavoriteToggled: library.toggleFavorite(model.id)
                 }
             }
 
