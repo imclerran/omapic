@@ -18,7 +18,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 9;
+constexpr int kSchemaVersion = 10;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -119,6 +119,7 @@ bool Database::runMigrations(int fromVersion)
         {7, &Database::migrate_6_to_7, nullptr},
         {8, &Database::migrate_7_to_8, nullptr},
         {9, &Database::migrate_8_to_9, &Database::legacyAlbumsNeedRename},
+        {10, &Database::migrate_9_to_10, nullptr},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -310,6 +311,33 @@ void Database::migrate_8_to_9()
     }
 }
 
+void Database::migrate_9_to_10()
+{
+    // Additive groundwork for tag export/import: per-photo file stats (so rescan
+    // can detect an in-place edit) and the orphaned-hash table (so a later
+    // retention policy can prune archive rows with no live photo).
+    QSqlQuery q(m_db);
+    if (!hasColumn(QStringLiteral("photos"), QStringLiteral("mtime")))
+        q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN mtime INTEGER"));
+    if (!hasColumn(QStringLiteral("photos"), QStringLiteral("size")))
+        q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN size INTEGER"));
+    if (!hasColumn(QStringLiteral("photos"), QStringLiteral("sidecar_written_at")))
+        q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN sidecar_written_at INTEGER"));
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS orphaned_hashes ("
+        "  hash TEXT PRIMARY KEY,"
+        "  orphaned_at INTEGER NOT NULL)"));
+    // Seed from hashes already archived but belonging to no live photo. The clock
+    // starts now (conservative); idempotent via the primary key.
+    QSqlQuery seed(m_db);
+    seed.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO orphaned_hashes(hash, orphaned_at) "
+        "SELECT DISTINCT hash, ? FROM content_tags "
+        "WHERE hash NOT IN (SELECT hash FROM photos WHERE hash IS NOT NULL)"));
+    seed.addBindValue(QDateTime::currentSecsSinceEpoch());
+    seed.exec();
+}
+
 bool Database::legacyAlbumsNeedRename()
 {
     if (!hasColumn(QStringLiteral("tag_categories"), QStringLiteral("system")))
@@ -461,6 +489,15 @@ void Database::setPhotoHash(int photoId, const QString &hash)
     QSqlQuery u(m_db);
     u.prepare(QStringLiteral("UPDATE photos SET hash = ? WHERE id = ?"));
     u.addBindValue(hash);
+    u.addBindValue(photoId);
+    u.exec();
+}
+
+void Database::setSidecarWrittenAt(int photoId, qint64 whenSecs)
+{
+    QSqlQuery u(m_db);
+    u.prepare(QStringLiteral("UPDATE photos SET sidecar_written_at = ? WHERE id = ?"));
+    u.addBindValue(whenSecs > 0 ? QVariant(whenSecs) : QVariant());
     u.addBindValue(photoId);
     u.exec();
 }
@@ -848,6 +885,21 @@ void Database::deletePhotosUnderPath(const QString &folderPath)
     // Prefix match on the path so nested subfolders go too; photo_tags rows
     // cascade away via the foreign key.
     const QString prefix = folderPath + QStringLiteral("/");
+
+    // Capture the affected content hashes first so we can mark any that become
+    // orphaned (archive kept) after the rows go.
+    QStringList hashes;
+    QSqlQuery sel(m_db);
+    sel.prepare(QStringLiteral(
+        "SELECT DISTINCT hash FROM photos "
+        "WHERE hash IS NOT NULL AND (path = ? OR substr(path, 1, ?) = ?)"));
+    sel.addBindValue(folderPath);
+    sel.addBindValue(prefix.size());
+    sel.addBindValue(prefix);
+    sel.exec();
+    while (sel.next())
+        hashes.append(sel.value(0).toString());
+
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "DELETE FROM photos WHERE path = ? OR substr(path, 1, ?) = ?"));
@@ -855,6 +907,9 @@ void Database::deletePhotosUnderPath(const QString &folderPath)
     q.addBindValue(prefix.size());
     q.addBindValue(prefix);
     q.exec();
+
+    for (const QString &h : hashes)
+        recordOrphanIfUnreferenced(h);
 }
 
 QStringList Database::allTagNames()
@@ -875,15 +930,19 @@ QStringList Database::allTagNames()
     return out;
 }
 
-int Database::insertPhoto(const QString &path, const QString &hash, qint64 takenAt)
+int Database::insertPhoto(const QString &path, const QString &hash, qint64 takenAt,
+                          qint64 mtime, qint64 size)
 {
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO photos(path, added_at, hash, taken_at) VALUES(?, ?, ?, ?)"));
+        "INSERT OR IGNORE INTO photos(path, added_at, hash, taken_at, mtime, size) "
+        "VALUES(?, ?, ?, ?, ?, ?)"));
     q.addBindValue(path);
     q.addBindValue(QDateTime::currentSecsSinceEpoch());
     q.addBindValue(hash.isEmpty() ? QVariant() : QVariant(hash));
     q.addBindValue(takenAt > 0 ? QVariant(takenAt) : QVariant());
+    q.addBindValue(mtime > 0 ? QVariant(mtime) : QVariant());
+    q.addBindValue(size > 0 ? QVariant(size) : QVariant());
     q.exec();
 
     // Fill in the hash if the row predated hashing (e.g. legacy import).
@@ -896,6 +955,10 @@ int Database::insertPhoto(const QString &path, const QString &hash, qint64 taken
         u.exec();
     }
 
+    // This content now has a live photo again, so it's no longer orphaned.
+    if (!hash.isEmpty())
+        clearOrphanedHash(hash);
+
     QSqlQuery sel(m_db);
     sel.prepare(QStringLiteral("SELECT id FROM photos WHERE path = ?"));
     sel.addBindValue(path);
@@ -905,32 +968,55 @@ int Database::insertPhoto(const QString &path, const QString &hash, qint64 taken
     return -1;
 }
 
-void Database::relocatePhoto(int photoId, const QString &newPath)
+void Database::relocatePhoto(int photoId, const QString &newPath, qint64 mtime, qint64 size)
 {
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("UPDATE photos SET path = ? WHERE id = ?"));
+    q.prepare(QStringLiteral(
+        "UPDATE photos SET path = ?, mtime = ?, size = ? WHERE id = ?"));
     q.addBindValue(newPath);
+    q.addBindValue(mtime > 0 ? QVariant(mtime) : QVariant());
+    q.addBindValue(size > 0 ? QVariant(size) : QVariant());
+    q.addBindValue(photoId);
+    q.exec();
+
+    const QString hash = photoHash(photoId);
+    if (!hash.isEmpty())
+        clearOrphanedHash(hash);
+}
+
+void Database::setPhotoFileStats(int photoId, qint64 mtime, qint64 size)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE photos SET mtime = ?, size = ? WHERE id = ?"));
+    q.addBindValue(mtime > 0 ? QVariant(mtime) : QVariant());
+    q.addBindValue(size > 0 ? QVariant(size) : QVariant());
     q.addBindValue(photoId);
     q.exec();
 }
 
 void Database::deletePhoto(int photoId)
 {
+    const QString hash = photoHash(photoId);
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM photos WHERE id = ?")); // photo_tags cascade
     q.addBindValue(photoId);
     q.exec();
+    recordOrphanIfUnreferenced(hash); // keep the archive, mark it orphaned if now unused
 }
 
 QVector<PhotoRef> Database::allPhotoRefs()
 {
     QVector<PhotoRef> refs;
-    QSqlQuery q(QStringLiteral("SELECT id, path, hash FROM photos"), m_db);
+    QSqlQuery q(QStringLiteral(
+        "SELECT id, path, hash, mtime, size, sidecar_written_at FROM photos"), m_db);
     while (q.next()) {
         PhotoRef r;
         r.id = q.value(0).toInt();
         r.path = q.value(1).toString();
         r.hash = q.value(2).toString();
+        r.mtime = q.value(3).isNull() ? -1 : q.value(3).toLongLong();
+        r.size = q.value(4).isNull() ? -1 : q.value(4).toLongLong();
+        r.sidecarWrittenAt = q.value(5).isNull() ? -1 : q.value(5).toLongLong();
         refs.append(r);
     }
     return refs;
@@ -951,11 +1037,24 @@ int Database::orphanPhotoCount()
 void Database::deleteOrphanPhotos()
 {
     // content_tags is keyed by hash, not photo id, so the archive survives this.
+    const QString orphanPred = QStringLiteral(
+        "NOT EXISTS (SELECT 1 FROM folders f WHERE photos.path = f.path"
+        "  OR substr(photos.path, 1, length(f.path) + 1) = f.path || '/')");
+
+    // Capture the hashes first so any left with no live photo are marked orphaned.
+    QStringList hashes;
+    QSqlQuery sel(
+        QStringLiteral("SELECT DISTINCT hash FROM photos WHERE hash IS NOT NULL AND ")
+            + orphanPred,
+        m_db);
+    while (sel.next())
+        hashes.append(sel.value(0).toString());
+
     QSqlQuery q(m_db);
-    q.exec(QStringLiteral(
-        "DELETE FROM photos WHERE NOT EXISTS ("
-        "  SELECT 1 FROM folders f WHERE photos.path = f.path"
-        "    OR substr(photos.path, 1, length(f.path) + 1) = f.path || '/')"));
+    q.exec(QStringLiteral("DELETE FROM photos WHERE ") + orphanPred);
+
+    for (const QString &h : hashes)
+        recordOrphanIfUnreferenced(h);
 }
 
 QString Database::hashFile(const QString &path)
@@ -1020,6 +1119,62 @@ void Database::forgetContentTag(const QString &hash, int tagId)
     q.addBindValue(tagId);
     q.addBindValue(hash);
     q.addBindValue(tagId);
+    q.exec();
+}
+
+void Database::supersedeHash(const QString &oldHash, const QString &newHash)
+{
+    if (oldHash.isEmpty() || newHash.isEmpty() || oldHash == newHash)
+        return;
+
+    // Carry the archived tags forward to the new content hash.
+    QSqlQuery fwd(m_db);
+    fwd.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO content_tags(hash, tag_id) "
+        "SELECT ?, tag_id FROM content_tags WHERE hash = ?"));
+    fwd.addBindValue(newHash);
+    fwd.addBindValue(oldHash);
+    fwd.exec();
+
+    // Drop the old archive only if nothing live still carries that content (an
+    // edited duplicate leaves its untouched twin referencing the old hash).
+    QSqlQuery stillUsed(m_db);
+    stillUsed.prepare(QStringLiteral("SELECT 1 FROM photos WHERE hash = ? LIMIT 1"));
+    stillUsed.addBindValue(oldHash);
+    stillUsed.exec();
+    if (!stillUsed.next()) {
+        QSqlQuery del(m_db);
+        del.prepare(QStringLiteral("DELETE FROM content_tags WHERE hash = ?"));
+        del.addBindValue(oldHash);
+        del.exec();
+        clearOrphanedHash(oldHash); // superseded, not retained — never a retention candidate
+    }
+}
+
+void Database::recordOrphanIfUnreferenced(const QString &hash)
+{
+    if (hash.isEmpty())
+        return;
+    // A hash is orphaned only while it still has archive rows but no live photo.
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO orphaned_hashes(hash, orphaned_at) "
+        "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM photos WHERE hash = ?) "
+        "AND EXISTS (SELECT 1 FROM content_tags WHERE hash = ?)"));
+    q.addBindValue(hash);
+    q.addBindValue(QDateTime::currentSecsSinceEpoch());
+    q.addBindValue(hash);
+    q.addBindValue(hash);
+    q.exec();
+}
+
+void Database::clearOrphanedHash(const QString &hash)
+{
+    if (hash.isEmpty())
+        return;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM orphaned_hashes WHERE hash = ?"));
+    q.addBindValue(hash);
     q.exec();
 }
 
@@ -1534,6 +1689,21 @@ int Database::insertCategory(const QString &name, int colorSlot)
     if (!q.exec())
         return -1; // UNIQUE (NOCASE) violation or other error
     return q.lastInsertId().toInt();
+}
+
+int Database::ensureCategory(const QString &name)
+{
+    const int existing = categoryIdByName(name);
+    if (existing >= 0)
+        return existing;
+    // No palette size is available here (that's a UI concept), and color slots
+    // wrap modulo the active theme's palette at display time — so a sequential
+    // slot (the current user-category count) just spreads imported categories out.
+    int slot = 0;
+    QSqlQuery c(QStringLiteral("SELECT COUNT(*) FROM tag_categories WHERE system = 0"), m_db);
+    if (c.next())
+        slot = c.value(0).toInt();
+    return insertCategory(name, slot);
 }
 
 int Database::categoryIdByName(const QString &name)

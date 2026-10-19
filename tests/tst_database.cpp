@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QSet>
 #include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QString>
 #include <QTemporaryFile>
 
@@ -47,6 +48,8 @@ private slots:
     void linkTagToContentTagsEveryCopy();
     void contentTagsSurviveReimport();
     void forgetContentTagDropsOrphanedArchive();
+    void supersedeHashForwardsArchiveAndPrunesWhenUnreferenced();
+    void orphanHashLifecycleAcrossRemovalAndReimport();
 
     // Folders / active set
     void orphanPhotosAreActive();
@@ -400,6 +403,71 @@ void TestDatabase::forgetContentTagDropsOrphanedArchive()
     const int p2 = m_db->insertPhoto(QStringLiteral("/b/1.jpg"), hash);
     m_db->applyContentTags(p2, hash);
     QVERIFY(!m_db->photoTagIds(p2).contains(tag)); // archive no longer carries it
+}
+
+void TestDatabase::supersedeHashForwardsArchiveAndPrunesWhenUnreferenced()
+{
+    const QString oldHash = QStringLiteral("HASH_OLD");
+    const QString newHash = QStringLiteral("HASH_NEW");
+    const int tag = m_db->ensureTag(QStringLiteral("kept"));
+
+    // An edited file: its old content had an archived tag, now gone from disk.
+    m_db->rememberContentTag(oldHash, tag);
+    m_db->supersedeHash(oldHash, newHash);
+
+    // The tag carried forward to the new hash...
+    const int pNew = m_db->insertPhoto(QStringLiteral("/n/1.jpg"), newHash);
+    m_db->applyContentTags(pNew, newHash);
+    QVERIFY(m_db->photoTagIds(pNew).contains(tag));
+    // ...and the old archive is gone (nothing referenced it).
+    const int pOld = m_db->insertPhoto(QStringLiteral("/o/1.jpg"), oldHash);
+    m_db->applyContentTags(pOld, oldHash);
+    QVERIFY(!m_db->photoTagIds(pOld).contains(tag));
+    m_db->deletePhoto(pOld);
+    m_db->deletePhoto(pNew);
+
+    // Duplicate-twin case: a still-present copy keeps the old archive alive.
+    const QString twinHash = QStringLiteral("HASH_TWIN");
+    const QString twinNew = QStringLiteral("HASH_TWIN_EDIT");
+    const int tag2 = m_db->ensureTag(QStringLiteral("twinTag"));
+    const int twinA = m_db->insertPhoto(QStringLiteral("/t/a.jpg"), twinHash);
+    m_db->insertPhoto(QStringLiteral("/t/b.jpg"), twinHash); // untouched twin
+    m_db->rememberContentTag(twinHash, tag2);
+    m_db->supersedeHash(twinHash, twinNew); // one copy edited
+
+    const int probe = m_db->insertPhoto(QStringLiteral("/t/probe.jpg"), twinHash);
+    m_db->applyContentTags(probe, twinHash);
+    QVERIFY2(m_db->photoTagIds(probe).contains(tag2),
+             "the untouched twin must keep the old content archive");
+    Q_UNUSED(twinA);
+}
+
+void TestDatabase::orphanHashLifecycleAcrossRemovalAndReimport()
+{
+    const auto orphanCount = [this](const QString &hash) {
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        q.prepare(QStringLiteral("SELECT COUNT(*) FROM orphaned_hashes WHERE hash = ?"));
+        q.addBindValue(hash);
+        q.exec();
+        return q.next() ? q.value(0).toInt() : -1;
+    };
+
+    const QString hash = QStringLiteral("HASH_ORPHAN");
+    const int tag = m_db->ensureTag(QStringLiteral("remembered"));
+    const int p = m_db->insertPhoto(QStringLiteral("/x/1.jpg"), hash);
+    m_db->linkTagToContent(p, tag);
+    m_db->rememberContentTag(hash, tag);
+    QCOMPARE(orphanCount(hash), 0); // a live photo references it — not orphaned
+
+    // Removing the last live photo leaves the archive but marks it orphaned.
+    m_db->deletePhoto(p);
+    QCOMPARE(orphanCount(hash), 1);
+
+    // Re-importing a file with that content clears the orphan and reattaches tags.
+    const int p2 = m_db->insertPhoto(QStringLiteral("/x/moved.jpg"), hash);
+    m_db->applyContentTags(p2, hash);
+    QCOMPARE(orphanCount(hash), 0);
+    QVERIFY(m_db->photoTagIds(p2).contains(tag));
 }
 
 // --- Folders / active set ---------------------------------------------------

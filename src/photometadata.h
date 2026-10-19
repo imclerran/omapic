@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <QList>
+#include <QPair>
 #include <QString>
+#include <QStringList>
 
 // Basic, display-ready metadata for the details pane: image dimensions, file
 // size, and a few EXIF fields. Every field is a formatted string, left empty
@@ -26,3 +29,15 @@ PhotoMetadata readPhotoMetadata(const QString &path, bool isVideo);
 // Videos and EXIF-less images fall back to mtime. Returns 0 only when the file
 // can't be stat'd at all. Reads straight from disk; call it off the UI thread.
 qint64 capturedAtEpoch(const QString &path, bool isVideo);
+
+// Metadata read in a single exiv2 pass on import: the capture time plus the
+// file's embedded keyword tags (XMP dc:subject / lr:hierarchicalSubject and
+// IPTC Keywords). Sharing one open with the date read keeps import cheap.
+// `categorized` entries are {category, tag}; `flat` are uncategorised keywords.
+struct ImportMetadata {
+    qint64 takenAt = 0;
+    QStringList flat;
+    QList<QPair<QString, QString>> categorized;
+};
+
+ImportMetadata readImportMetadata(const QString &path, bool isVideo);

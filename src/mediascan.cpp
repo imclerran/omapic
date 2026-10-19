@@ -4,6 +4,7 @@
 
 #include "mediascan.h"
 
+#include <QDateTime>
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QHash>
@@ -39,7 +40,7 @@ bool isMediaFile(const QString &path)
     return globs().contains(dotGlob);
 }
 
-void collect(const QString &root, QSet<QString> &out)
+void collect(const QString &root, QHash<QString, FileEntry> &out)
 {
     if (root.isEmpty())
         return;
@@ -64,16 +65,17 @@ void collect(const QString &root, QSet<QString> &out)
     QDirIterator it(root, globs(), QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString file = it.next();
-        if (!isExcluded(QFileInfo(file).path()))
-            out.insert(file);
+        const QFileInfo fi = it.fileInfo(); // reuses the stat the iterator already did
+        if (!isExcluded(fi.path()))
+            out.insert(file, FileEntry{fi.lastModified().toSecsSinceEpoch(), fi.size()});
     }
 }
 
 QStringList collectSorted(const QString &root)
 {
-    QSet<QString> set;
-    collect(root, set);
-    QStringList list(set.begin(), set.end());
+    QHash<QString, FileEntry> entries;
+    collect(root, entries);
+    QStringList list(entries.keyBegin(), entries.keyEnd());
     std::sort(list.begin(), list.end(), [](const QString &a, const QString &b) {
         return a.compare(b, Qt::CaseInsensitive) < 0;
     });

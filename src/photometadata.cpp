@@ -15,6 +15,7 @@
 #include <QSize>
 
 #include "photometadata.h"
+#include "sidecar.h" // sidecar::splitHierarchical, shared with the sidecar reader
 
 namespace {
 
@@ -83,6 +84,78 @@ qint64 capturedAtEpoch(const QString &path, bool isVideo)
     if (fi.exists())
         return fi.lastModified().toSecsSinceEpoch();
     return 0;
+}
+
+ImportMetadata readImportMetadata(const QString &path, bool isVideo)
+{
+    ImportMetadata m;
+
+    // Videos skip exiv2 entirely (as capturedAtEpoch does); images read the
+    // capture date and embedded keyword tags from one open.
+    if (!isVideo) {
+        try {
+            Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(path.toStdString());
+            if (image.get()) {
+                image->readMetadata();
+
+                const Exiv2::ExifData &exif = image->exifData();
+                if (!exif.empty()) {
+                    const auto getStr = [&exif](const char *key) -> QString {
+                        const auto it = exif.findKey(Exiv2::ExifKey(key));
+                        if (it != exif.end())
+                            return QString::fromStdString(it->toString()).trimmed();
+                        return {};
+                    };
+                    QString taken = getStr("Exif.Photo.DateTimeOriginal");
+                    if (taken.isEmpty())
+                        taken = getStr("Exif.Image.DateTime");
+                    if (!taken.isEmpty()) {
+                        const QDateTime dt = QDateTime::fromString(
+                            taken, QStringLiteral("yyyy:MM:dd HH:mm:ss"));
+                        if (dt.isValid())
+                            m.takenAt = dt.toSecsSinceEpoch();
+                    }
+                }
+
+                // Embedded XMP keywords: flat (dc:subject) + hierarchical.
+                const Exiv2::XmpData &xmp = image->xmpData();
+                for (const auto &v : xmp) {
+                    if (v.key() == "Xmp.dc.subject") {
+                        for (long i = 0; i < v.count(); ++i) {
+                            const QString s = QString::fromStdString(v.toString(i)).trimmed();
+                            if (!s.isEmpty())
+                                m.flat << s;
+                        }
+                    } else if (v.key() == "Xmp.lr.hierarchicalSubject") {
+                        for (long i = 0; i < v.count(); ++i) {
+                            const QString s = QString::fromStdString(v.toString(i)).trimmed();
+                            if (!s.isEmpty())
+                                m.categorized.append(sidecar::splitHierarchical(s));
+                        }
+                    }
+                }
+
+                // Embedded IPTC keywords (repeatable, flat).
+                const Exiv2::IptcData &iptc = image->iptcData();
+                for (const auto &v : iptc) {
+                    if (v.key() == "Iptc.Application2.Keywords") {
+                        const QString s = QString::fromStdString(v.toString()).trimmed();
+                        if (!s.isEmpty())
+                            m.flat << s;
+                    }
+                }
+            }
+        } catch (...) {
+            // Unreadable/metadata-less file: fall through to the mtime date.
+        }
+    }
+
+    if (m.takenAt == 0) {
+        const QFileInfo fi(path);
+        if (fi.exists())
+            m.takenAt = fi.lastModified().toSecsSinceEpoch();
+    }
+    return m;
 }
 
 PhotoMetadata readPhotoMetadata(const QString &path, bool isVideo)

@@ -30,8 +30,11 @@ private slots:
     void refusesNewerSchema();
     void upgradesFromReducedSchema();
     void upgradesLegacyUnversioned();
+    void upgradesToV10SeedsOrphansAndAddsColumns();
 
 private:
+    // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
+    int orphanRowCount(const QString &path, const QString &hash);
     // Run one statement on a fresh connection to `path`, failing the test on error.
     void execRaw(const QString &path, const QString &sql);
     // Read PRAGMA user_version from `path` via its own short-lived connection.
@@ -97,6 +100,26 @@ int TestSchema::readUserVersion(const QString &path)
 QStringList TestSchema::backupFiles() const
 {
     return QDir(m_dir->path()).entryList({QStringLiteral("library.db.bak-v*")}, QDir::Files);
+}
+
+int TestSchema::orphanRowCount(const QString &path, const QString &hash)
+{
+    int n = -1;
+    const QString conn = QStringLiteral("orphan_%1").arg(++m_seq);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        db.setDatabaseName(path);
+        if (db.open()) {
+            QSqlQuery q(db);
+            q.prepare(QStringLiteral("SELECT COUNT(*) FROM orphaned_hashes WHERE hash = ?"));
+            q.addBindValue(hash);
+            if (q.exec() && q.next())
+                n = q.value(0).toInt();
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(conn);
+    return n;
 }
 
 void TestSchema::refusesNewerSchema()
@@ -202,6 +225,50 @@ void TestSchema::upgradesLegacyUnversioned()
         QVERIFY(!backupFiles().isEmpty());
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_upgrade"));
+}
+
+void TestSchema::upgradesToV10SeedsOrphansAndAddsColumns()
+{
+    const QString orphanHash = QStringLiteral("ORPHAN_HASH");
+    const QString liveHash = QStringLiteral("LIVE_HASH");
+
+    // Build a current database, seed a live photo+archive and an archive for a
+    // hash with no photo, then rewind to v9 to force the v10 migration to run.
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v10_seed")));
+        const int p = db.insertPhoto(QStringLiteral("/pics/one.jpg"), liveHash);
+        const int tag = db.ensureTag(QStringLiteral("beach"));
+        QVERIFY(db.linkPhotoTag(p, tag));
+        db.rememberContentTag(liveHash, tag);   // archived, still has a live photo
+        db.rememberContentTag(orphanHash, tag); // archived, no photo → orphan
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v10_seed"));
+
+    // Rewind: drop the v10 state (so the migration genuinely re-runs) and the
+    // version. SQLite can't drop columns on this version, but clearing the table
+    // and the version is enough to re-trigger the additive step and the seed.
+    execRaw(dbPath(), QStringLiteral(
+        "DELETE FROM orphaned_hashes;"
+        "PRAGMA user_version = 9;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v10")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+
+        // The orphaned hash (archive, no photo) is seeded; the live one is not.
+        QCOMPARE(orphanRowCount(dbPath(), orphanHash), 1);
+        QCOMPARE(orphanRowCount(dbPath(), liveHash), 0);
+
+        // The new per-photo stat columns exist and are readable.
+        const QVector<PhotoRef> refs = db.allPhotoRefs();
+        QCOMPARE(refs.size(), 1);
+        QCOMPARE(refs.first().hash, liveHash);
+
+        QVERIFY(backupFiles().isEmpty()); // additive step → no backup
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v10"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)
