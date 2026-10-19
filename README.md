@@ -29,6 +29,17 @@ cmake --build build
 ./build/omapic
 ```
 
+## Library compatibility
+
+Your library lives in a small SQLite database at
+`~/.local/share/omapic/library.db`. When you upgrade Omapic, an older library is
+migrated in place on the next launch — no action needed. A library written by a
+*newer* Omapic than the one you're running is refused rather than risk damaging
+it; update Omapic (or restore a backup) to open it again. Before a non-trivial
+(non-additive) upgrade, Omapic writes a backup beside the library at
+`~/.local/share/omapic/library.db.bak-v<N>` (the two most recent are kept), so
+there's always a pre-upgrade copy to fall back on.
+
 ## Tests
 
 The logic layer (the SQLite store, text folding, media scanning, and the gallery

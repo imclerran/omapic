@@ -6,6 +6,7 @@
 
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -13,6 +14,12 @@
 #include <QVariant>
 
 namespace {
+// The schema version this build writes, stored in PRAGMA user_version. Bump this
+// and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
+// with a higher version than this is refused by open() (it was written by a newer
+// Omapic). See runMigrations.
+constexpr int kSchemaVersion = 9;
+
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
 // unique). The prefix is internal — the UI always shows the display name.
@@ -43,12 +50,102 @@ bool Database::open(const QString &path, const QString &connectionName)
     if (!m_db.open())
         return false;
 
+    // Scoped so the statement is finalized before migrations run — VACUUM INTO
+    // (the pre-migration backup) refuses to run with a statement still active.
+    {
+        QSqlQuery q(m_db);
+        q.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+        // WAL lets the worker thread's connection write hashes while the UI thread
+        // reads, without either blocking on the other's lock.
+        q.exec(QStringLiteral("PRAGMA journal_mode = WAL"));
+        q.exec(QStringLiteral("PRAGMA busy_timeout = 5000"));
+    }
+
+    // Schema versioning (PRAGMA user_version). Refuse a library written by a newer
+    // Omapic rather than risk corrupting it with an older schema; otherwise bring
+    // an older or brand-new (version 0) library up to the current schema.
+    const int version = userVersion();
+    if (version > kSchemaVersion) {
+        m_schemaTooNew = true;
+        m_db.close(); // do not leave a too-new library partially open
+        return false;
+    }
+    if (version < kSchemaVersion && !runMigrations(version))
+        return false;
+
+    // Resolve/cache the reserved Albums category + Favorites album. These ids are
+    // per-instance (in-memory), so this runs on every open regardless of version.
+    ensureAlbumsCategory();
+    ensureFavoritesAlbum();
+
+    // Hashing existing photos and seeding content_tags is slow on a large
+    // library, so it is driven from a worker thread (see LibraryWorker), not here.
+    return true;
+}
+
+int Database::currentSchemaVersion()
+{
+    return kSchemaVersion;
+}
+
+int Database::userVersion()
+{
     QSqlQuery q(m_db);
-    q.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
-    // WAL lets the worker thread's connection write hashes while the UI thread
-    // reads, without either blocking on the other's lock.
-    q.exec(QStringLiteral("PRAGMA journal_mode = WAL"));
-    q.exec(QStringLiteral("PRAGMA busy_timeout = 5000"));
+    q.exec(QStringLiteral("PRAGMA user_version"));
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+void Database::setUserVersion(int version)
+{
+    // PRAGMA takes no bind parameters, so the (integer) version is interpolated.
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral("PRAGMA user_version = %1").arg(version));
+}
+
+bool Database::runMigrations(int fromVersion)
+{
+    struct Step {
+        int target;
+        void (Database::*apply)();
+        bool (Database::*needsBackup)(); // nullptr for a purely additive step
+    };
+    static const Step steps[] = {
+        {1, &Database::migrate_0_to_1, nullptr},
+        {2, &Database::migrate_1_to_2, nullptr},
+        {3, &Database::migrate_2_to_3, nullptr},
+        {4, &Database::migrate_3_to_4, nullptr},
+        {5, &Database::migrate_4_to_5, nullptr},
+        {6, &Database::migrate_5_to_6, nullptr},
+        {7, &Database::migrate_6_to_7, nullptr},
+        {8, &Database::migrate_7_to_8, nullptr},
+        {9, &Database::migrate_8_to_9, &Database::legacyAlbumsNeedRename},
+    };
+    for (const Step &s : steps) {
+        if (s.target <= fromVersion)
+            continue;
+        // Back up before a non-additive step that will actually move rows (VACUUM
+        // INTO can't run inside a transaction, so it happens before BEGIN).
+        if (s.needsBackup && (this->*s.needsBackup)())
+            backupDatabase(s.target - 1);
+        if (!m_db.transaction())
+            return false;
+        (this->*s.apply)();
+        setUserVersion(s.target); // inside the step's transaction, so it resumes cleanly
+        if (!m_db.commit()) {
+            m_db.rollback();
+            return false;
+        }
+    }
+    return true;
+}
+
+// The migration steps below mirror the historical, additive schema ladder; each
+// keeps its hasColumn / IF NOT EXISTS guard so re-running it (including running
+// the whole chain on an already-current pre-versioning library) is harmless.
+
+void Database::migrate_0_to_1()
+{
+    QSqlQuery q(m_db);
     q.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS photos ("
         "  id INTEGER PRIMARY KEY,"
@@ -72,12 +169,22 @@ bool Database::open(const QString &path, const QString &connectionName)
         "  id INTEGER PRIMARY KEY,"
         "  path TEXT UNIQUE NOT NULL,"
         "  added_at INTEGER)"));
-    if (!hasColumn(QStringLiteral("folders"), QStringLiteral("enabled")))
-        q.exec(QStringLiteral("ALTER TABLE folders ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"));
+}
 
+void Database::migrate_1_to_2()
+{
+    if (!hasColumn(QStringLiteral("folders"), QStringLiteral("enabled"))) {
+        QSqlQuery q(m_db);
+        q.exec(QStringLiteral("ALTER TABLE folders ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"));
+    }
+}
+
+void Database::migrate_2_to_3()
+{
     // Content-addressed tags. A photo stores the SHA-256 of its file; content_tags
     // archives tags against that hash so they outlive any particular photo row,
-    // path, or inode. Seed the archive from whatever tags already exist.
+    // path, or inode.
+    QSqlQuery q(m_db);
     if (!hasColumn(QStringLiteral("photos"), QStringLiteral("hash")))
         q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN hash TEXT"));
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(hash)"));
@@ -86,13 +193,15 @@ bool Database::open(const QString &path, const QString &connectionName)
         "  hash TEXT NOT NULL,"
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
         "  PRIMARY KEY (hash, tag_id))"));
+}
 
+void Database::migrate_3_to_4()
+{
     // Tag implications: a photo carrying the antecedent tag also gets the
     // consequent tag. Materialized — applying the antecedent writes the
-    // consequent into photo_tags/content_tags too (see applyImplications and the
-    // worker's expandImplications migration), so the rest of the app needs no
-    // implication-aware queries. CHECK blocks a tag implying itself; cycles are
-    // blocked in the UI.
+    // consequent into photo_tags/content_tags too. CHECK blocks a tag implying
+    // itself; cycles are blocked in the UI.
+    QSqlQuery q(m_db);
     q.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS tag_implications ("
         "  antecedent_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
@@ -103,11 +212,13 @@ bool Database::open(const QString &path, const QString &connectionName)
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tag_implications_consequent "
         "ON tag_implications(consequent_id)"));
+}
 
+void Database::migrate_4_to_5()
+{
     // Tag categories: a tag may belong to one category, which carries a palette
-    // slot (an index into the theme-derived category palette, not a fixed color,
-    // so chips keep following the active theme). Deleting a category leaves its
-    // tags in place, uncategorized.
+    // slot. Deleting a category leaves its tags in place, uncategorized.
+    QSqlQuery q(m_db);
     q.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS tag_categories ("
         "  id INTEGER PRIMARY KEY,"
@@ -118,20 +229,26 @@ bool Database::open(const QString &path, const QString &connectionName)
             "ALTER TABLE tags ADD COLUMN category_id INTEGER "
             "REFERENCES tag_categories(id) ON DELETE SET NULL"));
     }
+}
 
-    // Albums reuse the tag system: a reserved "Albums" category (system = 1,
-    // stored namespaced as "_system:Albums") whose tags are albums, hidden from
-    // every normal tag list. The Favorites album is the one tag also marked
-    // system = 1, so it sorts first and is permanent.
+void Database::migrate_5_to_6()
+{
+    // Albums reuse the tag system: a reserved "Albums" category (system = 1) whose
+    // tags are albums, hidden from every normal tag list. The Favorites album is
+    // the one tag also marked system = 1, so it sorts first and is permanent.
+    QSqlQuery q(m_db);
     if (!hasColumn(QStringLiteral("tag_categories"), QStringLiteral("system")))
         q.exec(QStringLiteral("ALTER TABLE tag_categories ADD COLUMN system INTEGER NOT NULL DEFAULT 0"));
     if (!hasColumn(QStringLiteral("tags"), QStringLiteral("system")))
         q.exec(QStringLiteral("ALTER TABLE tags ADD COLUMN system INTEGER NOT NULL DEFAULT 0"));
+}
 
-    // Smart albums: a saved tag query (a set of tags + AND/OR mode) that
-    // auto-populates in the Albums view. Unlike a regular album they have no
-    // stored membership, so they live in their own tables rather than the tag
-    // system. Deleting a tag cascades it out of every smart album.
+void Database::migrate_6_to_7()
+{
+    // Smart albums: a saved tag query (a set of tags + AND/OR mode). Unlike a
+    // regular album they have no stored membership, so they live in their own
+    // tables rather than the tag system.
+    QSqlQuery q(m_db);
     q.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS smart_albums ("
         "  id INTEGER PRIMARY KEY,"
@@ -142,63 +259,100 @@ bool Database::open(const QString &path, const QString &connectionName)
         "  smart_album_id INTEGER NOT NULL REFERENCES smart_albums(id) ON DELETE CASCADE,"
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,"
         "  PRIMARY KEY (smart_album_id, tag_id))"));
+}
 
-    // Capture time in Unix seconds for the timeline view (EXIF date taken, or the
-    // file mtime when there's no EXIF date). NULL until backfilled: the one-time
-    // worker migration fills it for pre-existing rows (see LibraryWorker).
+void Database::migrate_7_to_8()
+{
+    // Capture time in Unix seconds for the timeline view. NULL until backfilled by
+    // the worker migration for pre-existing rows (see LibraryWorker).
+    QSqlQuery q(m_db);
     if (!hasColumn(QStringLiteral("photos"), QStringLiteral("taken_at")))
         q.exec(QStringLiteral("ALTER TABLE photos ADD COLUMN taken_at INTEGER"));
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at)"));
-
-    // Resolve (creating if needed) the reserved Albums category + Favorites album.
-    ensureAlbumsCategory();
-    ensureFavoritesAlbum();
-
-    // Hashing existing photos and seeding content_tags is slow on a large
-    // library, so it is driven from a worker thread (see LibraryWorker), not here.
-    return true;
 }
 
-void Database::ensureAlbumsCategory()
+void Database::migrate_8_to_9()
 {
+    // Non-additive: the reserved Albums category used to be stored under the bare
+    // name "Albums". Move a row created that way (system = 1) to the namespaced
+    // "_system:Albums". A user's own "Albums" category (system = 0) is left alone.
     const QString storedName = systemStoredName(QStringLiteral("Albums")); // "_system:Albums"
-
-    // One-time migration: the category used to be stored under the bare name
-    // "Albums". Move a row created that way (system = 1) to the namespaced name.
-    // A user's own "Albums" category (system = 0) is left alone — the system one
-    // is created fresh beside it below.
     QSqlQuery legacy(m_db);
     legacy.prepare(QStringLiteral(
         "SELECT id FROM tag_categories WHERE name = ? AND system = 1"));
     legacy.addBindValue(QStringLiteral("Albums"));
     legacy.exec();
-    if (legacy.next()) {
-        const int legacyId = legacy.value(0).toInt();
-        QSqlQuery cur(m_db);
-        cur.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
-        cur.addBindValue(storedName);
-        cur.exec();
-        if (cur.next()) {
-            // Both exist (an older build re-created the bare one): fold the
-            // legacy row's albums into the namespaced one and drop it.
-            QSqlQuery mv(m_db);
-            mv.prepare(QStringLiteral("UPDATE tags SET category_id = ? WHERE category_id = ?"));
-            mv.addBindValue(cur.value(0).toInt());
-            mv.addBindValue(legacyId);
-            mv.exec();
-            QSqlQuery del(m_db);
-            del.prepare(QStringLiteral("DELETE FROM tag_categories WHERE id = ?"));
-            del.addBindValue(legacyId);
-            del.exec();
-        } else {
-            QSqlQuery ren(m_db);
-            ren.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ?"));
-            ren.addBindValue(storedName);
-            ren.addBindValue(legacyId);
-            ren.exec();
-        }
+    if (!legacy.next())
+        return;
+    const int legacyId = legacy.value(0).toInt();
+    QSqlQuery cur(m_db);
+    cur.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
+    cur.addBindValue(storedName);
+    cur.exec();
+    if (cur.next()) {
+        // Both exist (an older build re-created the bare one): fold the legacy
+        // row's albums into the namespaced one and drop it.
+        QSqlQuery mv(m_db);
+        mv.prepare(QStringLiteral("UPDATE tags SET category_id = ? WHERE category_id = ?"));
+        mv.addBindValue(cur.value(0).toInt());
+        mv.addBindValue(legacyId);
+        mv.exec();
+        QSqlQuery del(m_db);
+        del.prepare(QStringLiteral("DELETE FROM tag_categories WHERE id = ?"));
+        del.addBindValue(legacyId);
+        del.exec();
+    } else {
+        QSqlQuery ren(m_db);
+        ren.prepare(QStringLiteral("UPDATE tag_categories SET name = ? WHERE id = ?"));
+        ren.addBindValue(storedName);
+        ren.addBindValue(legacyId);
+        ren.exec();
     }
+}
 
+bool Database::legacyAlbumsNeedRename()
+{
+    if (!hasColumn(QStringLiteral("tag_categories"), QStringLiteral("system")))
+        return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT 1 FROM tag_categories WHERE name = ? AND system = 1 LIMIT 1"));
+    q.addBindValue(QStringLiteral("Albums"));
+    q.exec();
+    return q.next();
+}
+
+void Database::backupDatabase(int fromVersion)
+{
+    const QString path = m_db.databaseName();
+    if (path.isEmpty() || path == QStringLiteral(":memory:"))
+        return; // nothing to copy for an in-memory database
+    const QString target = QStringLiteral("%1.bak-v%2").arg(path).arg(fromVersion);
+    QFile::remove(target); // VACUUM INTO refuses to overwrite an existing file
+    QString escaped = target;
+    escaped.replace(QLatin1Char('\''), QStringLiteral("''"));
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral("VACUUM INTO '%1'").arg(escaped));
+    pruneBackups(path);
+}
+
+void Database::pruneBackups(const QString &dbPath)
+{
+    const QFileInfo fi(dbPath);
+    QDir dir(fi.absolutePath());
+    // QDir::Time sorts newest first; keep the two most recent, delete the rest.
+    const QStringList backups = dir.entryList(
+        {fi.fileName() + QStringLiteral(".bak-v*")}, QDir::Files, QDir::Time);
+    for (int i = 2; i < backups.size(); ++i)
+        QFile::remove(dir.absoluteFilePath(backups.at(i)));
+}
+
+void Database::ensureAlbumsCategory()
+{
+    // Resolve/create + cache the reserved Albums category. The one-time rename of
+    // the old bare "Albums" name lives in migrate_8_to_9; this only ensures the
+    // namespaced row exists and caches its id, so it is safe to run every open.
+    const QString storedName = systemStoredName(QStringLiteral("Albums")); // "_system:Albums"
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO tag_categories(name, color_slot, system) VALUES(?, 0, 1)"));

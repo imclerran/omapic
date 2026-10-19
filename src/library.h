@@ -50,6 +50,9 @@ class Library : public QObject {
     Q_PROPERTY(bool busyModal READ busyModal NOTIFY busyChanged)
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusChanged)
+    // Non-empty when the library could not be opened (e.g. it was written by a
+    // newer Omapic). The UI shows it as a blocking message and loads nothing else.
+    Q_PROPERTY(QString fatalError READ fatalError NOTIFY fatalErrorChanged)
 
 public:
     enum RenameResult {
@@ -84,6 +87,7 @@ public:
     bool busyModal() const { return m_busyModal; }
     double progress() const { return m_progress; }
     QString statusText() const { return m_statusText; }
+    QString fatalError() const { return m_fatalError; }
 
     Q_INVOKABLE void importDirectory(const QUrl &dir);
     Q_INVOKABLE void removeFolder(int folderId);
@@ -235,6 +239,7 @@ signals:
     void busyChanged();
     void progressChanged();
     void statusChanged();
+    void fatalErrorChanged();
 
     // Internal: hands a job to the worker thread via a queued connection.
     void requestMigration();
@@ -289,4 +294,5 @@ private:
     bool m_busyModal = false;
     double m_progress = -1.0;
     QString m_statusText;
+    QString m_fatalError; // non-empty = the library could not be opened; UI blocks
 };

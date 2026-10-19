@@ -86,7 +86,15 @@ Library::Library(QObject *parent)
                         + QStringLiteral("/omapic");
     QDir().mkpath(dir);
     const QString dbPath = dir + QStringLiteral("/library.db");
-    m_db.open(dbPath);
+    if (!m_db.open(dbPath)) {
+        // Surface a blocking error to the UI and load nothing else — in
+        // particular, never start the worker against a library we refused to open.
+        m_fatalError = m_db.schemaTooNew()
+            ? tr("This library was created by a newer version of Omapic. "
+                 "Update Omapic or restore a backup.")
+            : tr("The library database could not be opened.");
+        return;
+    }
 
     m_filtered->setSourceModel(m_photos);
     m_filtered->setDynamicSortFilter(true);
