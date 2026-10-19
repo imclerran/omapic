@@ -9,8 +9,8 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 
 // The app's single settings dialog, tabbed so new sections can be added without
-// spawning more dialogs. "Library" manages folders and gallery/sidecar options;
-// "Slideshow" holds the slideshow playback options.
+// spawning more dialogs. "General" holds gallery and tag preferences, "Library"
+// manages the folder set, and "Slideshow" holds playback options.
 Dialog {
     id: root
 
@@ -19,8 +19,12 @@ Dialog {
     // The two Settings objects (owned by Main), so toggles persist.
     property var gallerySettings
     property var appSettings
-    // Which tab to show when opened (0 = Library, 1 = Slideshow).
+    // Which tab to show when opened (0 = General, 1 = Library, 2 = Slideshow).
     property int initialTab: 0
+
+    // Display names for the thumbnail-size slider steps (matches Main's thumbSizes).
+    readonly property var thumbNames: [qsTr("Extra small"), qsTr("Small"),
+                                       qsTr("Medium"), qsTr("Large"), qsTr("Extra large")]
 
     title: qsTr("Settings")
     modal: true
@@ -36,9 +40,6 @@ Dialog {
     property string pendingPath: ""
 
     // Keep the folder list from jumping to the top when it refreshes.
-    // library.folders returns a fresh QVariantList on every foldersChanged, so the
-    // ListView's model is reassigned and its scroll resets. Remember the scroll
-    // just before a mutation and restore it when the refresh lands.
     property real savedScrollY: 0
     property bool restoreScroll: false
     function rememberScroll() {
@@ -109,6 +110,23 @@ Dialog {
         }
     }
 
+    Dialog {
+        id: forgetConfirm
+        title: qsTr("Forget remembered tags?")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(460, root.width - 40)
+        standardButtons: Dialog.Yes | Dialog.No
+
+        onAccepted: root.library.forgetRemovedTags()
+
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: qsTr("Forget the tags remembered for %n removed file(s)?\n\nThis can't be undone unless those files are added again with byte-identical content.", "", root.library.rememberedRemovedCount)
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
@@ -116,6 +134,7 @@ Dialog {
         TabBar {
             id: tabs
             Layout.fillWidth: true
+            TabButton { text: qsTr("General") }
             TabButton { text: qsTr("Library") }
             TabButton { text: qsTr("Slideshow") }
         }
@@ -125,6 +144,136 @@ Dialog {
             Layout.fillHeight: true
             currentIndex: tabs.currentIndex
 
+            // ---- General tab ----
+            ColumnLayout {
+                spacing: 10
+
+                Label {
+                    text: qsTr("Gallery")
+                    font.bold: true
+                }
+
+                Switch {
+                    text: qsTr("Sort by folder in flat view")
+                    checked: root.gallerySettings ? root.gallerySettings.folderFirst : false
+                    onToggled: if (root.gallerySettings) root.gallerySettings.folderFirst = checked
+                }
+
+                Switch {
+                    text: qsTr("Crop thumbnails to square")
+                    checked: root.gallerySettings ? root.gallerySettings.cropThumbs : true
+                    onToggled: if (root.gallerySettings) root.gallerySettings.cropThumbs = checked
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Off: fit the whole image, letterboxed to its aspect ratio")
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+                    Label {
+                        text: qsTr("Thumbnail size")
+                        Layout.fillWidth: true
+                    }
+                    Label {
+                        text: root.gallerySettings
+                              ? root.thumbNames[Math.max(0, Math.min(root.thumbNames.length - 1,
+                                                                     root.gallerySettings.thumbIndex))]
+                              : ""
+                        color: palette.placeholderText
+                        font.pixelSize: 12
+                    }
+                    Slider {
+                        Layout.preferredWidth: 160
+                        from: 0
+                        to: root.thumbNames.length - 1
+                        stepSize: 1
+                        snapMode: Slider.SnapAlways
+                        value: root.gallerySettings ? root.gallerySettings.thumbIndex : 2
+                        onMoved: if (root.gallerySettings) root.gallerySettings.thumbIndex = Math.round(value)
+                    }
+                }
+
+                Label {
+                    text: qsTr("Tags")
+                    font.bold: true
+                    Layout.topMargin: 8
+                }
+
+                Switch {
+                    text: qsTr("Write tags to XMP sidecars automatically")
+                    checked: root.gallerySettings ? root.gallerySettings.writeSidecars : false
+                    onToggled: if (root.gallerySettings) root.gallerySettings.writeSidecars = checked
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Keep a <photo>.xmp next to each file in sync so other apps can read its tags")
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Button {
+                        text: qsTr("Export tags now")
+                        enabled: root.library.folders.length > 0
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Write every photo's tags to an XMP sidecar now")
+                        onClicked: root.library.exportAllSidecars()
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+                    Layout.topMargin: 4
+                    Label {
+                        text: qsTr("Remember tags for removed files")
+                        Layout.fillWidth: true
+                    }
+                    ComboBox {
+                        id: retentionCombo
+                        textRole: "label"
+                        // Each entry's `days`: 0 = forever.
+                        model: [
+                            { label: qsTr("Forever"), days: 0 },
+                            { label: qsTr("1 year"), days: 365 },
+                            { label: qsTr("6 months"), days: 182 },
+                            { label: qsTr("30 days"), days: 30 }
+                        ]
+                        function indexForDays(d) {
+                            for (let i = 0; i < model.length; ++i)
+                                if (model[i].days === d)
+                                    return i
+                            return 0
+                        }
+                        Component.onCompleted: currentIndex =
+                            indexForDays(root.gallerySettings ? root.gallerySettings.tagRetentionDays : 0)
+                        onActivated: if (root.gallerySettings)
+                            root.gallerySettings.tagRetentionDays = model[currentIndex].days
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 12
+                        color: palette.placeholderText
+                        text: root.library.rememberedRemovedCount > 0
+                              ? qsTr("Tags remembered for %n removed file(s). Recovery needs byte-identical files.", "", root.library.rememberedRemovedCount)
+                              : qsTr("No removed files have remembered tags.")
+                    }
+                    Button {
+                        text: qsTr("Forget now…")
+                        enabled: root.library.rememberedRemovedCount > 0
+                        onClicked: forgetConfirm.open()
+                    }
+                }
+
+                // Keep everything top-aligned.
+                Item { Layout.fillHeight: true }
+            }
+
             // ---- Library tab ----
             ColumnLayout {
                 spacing: 12
@@ -132,7 +281,7 @@ Dialog {
                 Frame {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 220
+                    Layout.minimumHeight: 240
                     padding: 0
 
                     ListView {
@@ -230,28 +379,6 @@ Dialog {
                     }
                 }
 
-                // Gallery / sidecar options.
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Switch {
-                        id: folderFirstCheck
-                        text: qsTr("Sort by folder in flat view")
-                        checked: root.gallerySettings ? root.gallerySettings.folderFirst : false
-                        onToggled: if (root.gallerySettings) root.gallerySettings.folderFirst = checked
-                    }
-
-                    Switch {
-                        id: writeSidecarsCheck
-                        text: qsTr("Write tags to XMP sidecars automatically")
-                        checked: root.gallerySettings ? root.gallerySettings.writeSidecars : false
-                        onToggled: if (root.gallerySettings) root.gallerySettings.writeSidecars = checked
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Keep a <photo>.xmp next to each file in sync so other apps can read its tags")
-                    }
-                }
-
                 MenuSeparator { Layout.fillWidth: true }
 
                 RowLayout {
@@ -268,13 +395,6 @@ Dialog {
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Pick up new, moved, and deleted files on disk")
                         onClicked: { root.rememberScroll(); root.library.rescan() }
-                    }
-                    Button {
-                        text: qsTr("Export tags")
-                        enabled: folderList.count > 0
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Write every photo's tags to an XMP sidecar now")
-                        onClicked: root.library.exportAllSidecars()
                     }
                     Item { Layout.fillWidth: true }
                 }
@@ -394,7 +514,7 @@ Dialog {
                     }
                 }
 
-                // Push the options to the top; the tab is shorter than the Library one.
+                // Push the options to the top; the tab is shorter than the others.
                 Item { Layout.fillHeight: true }
             }
         }

@@ -119,7 +119,7 @@ void LibraryWorker::importDirectory(const QString &root)
     emit importFinished(root);
 }
 
-void LibraryWorker::rescan()
+void LibraryWorker::rescan(int retentionDays)
 {
     emit progress(tr("Scanning folders…"), 0, 0); // indeterminate during the walk
 
@@ -255,6 +255,14 @@ void LibraryWorker::rescan()
     for (int id : missingIds) {
         if (!relocated.contains(id))
             m_db.deletePhoto(id);
+    }
+
+    // Retention: forget archived tags of files removed longer ago than the policy
+    // (0 = keep forever, the default).
+    if (retentionDays > 0) {
+        const qint64 cutoff = QDateTime::currentSecsSinceEpoch()
+                              - qint64(retentionDays) * 24 * 60 * 60;
+        m_db.pruneOrphanedTags(cutoff);
     }
 
     emit rescanFinished();

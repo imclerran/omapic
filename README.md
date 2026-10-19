@@ -41,6 +41,17 @@ it; update Omapic (or restore a backup) to open it again. Before a non-trivial
 `~/.local/share/omapic/library.db.bak-v<N>` (the two most recent are kept), so
 there's always a pre-upgrade copy to fall back on.
 
+## Tag retention
+
+When a file leaves your library — a folder removed, a photo deleted, or a file
+that vanished from disk — its tags are kept, keyed by the file's content, so they
+return if the same file is ever added back. By default they're remembered
+forever. If you'd rather not accumulate tags for files you'll never see again,
+**Settings ▸ Library ▸ Remember tags for removed files** can age them out after a
+year, six months, or 30 days (pruned on the next rescan), and **Forget now…**
+clears them all immediately. Recovery only works when the re-added file is
+byte-identical, so most re-downloads from services that re-encode won't match.
+
 ## Tests
 
 The logic layer (the SQLite store, text folding, media scanning, and the gallery

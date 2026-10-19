@@ -25,7 +25,9 @@ public slots:
     void initialize();                        // open the worker's DB connection (in its thread)
     void runMigration();                      // hash un-hashed photos, then seed the tag archive
     void importDirectory(const QString &root); // walk, hash, insert, reattach archived tags
-    void rescan();                            // reconcile the DB with disk: add/relocate/remove
+    // Reconcile the DB with disk (add/relocate/remove), then forget archived tags
+    // of files removed more than `retentionDays` ago (0 = keep forever).
+    void rescan(int retentionDays);
     void expandImplications();                // apply tag implications across the whole library
     void addTagToPhotos(const QList<int> &photoIds, const QString &name);
     void removeTagFromPhotos(const QList<int> &photoIds, int tagId);

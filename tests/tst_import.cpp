@@ -8,10 +8,12 @@
 
 #include <QtTest>
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QImage>
 #include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStringList>
 #include <QTemporaryDir>
 
@@ -42,6 +44,7 @@ private slots:
     void flushRemovesOmapicSidecarWhenUntagged();
     void flushSkipsDisabledFolderUntilReenabled();
     void reenableWritesNeverQueuedFolderTags();
+    void rescanPrunesOldRemovedTags();
 
 private:
     QString pics() const { return m_dir->filePath(QStringLiteral("pics")); }
@@ -183,7 +186,7 @@ void TestImport::inPlaceEditKeepsTagsViaRekey()
 
     // Edit the file in place: new bytes → new content hash and a different size.
     writeFile(photo, "edited-bytes-that-are-longer-than-before");
-    m_worker->rescan();
+    m_worker->rescan(/*retentionDays=*/0);
 
     // The tag survived the edit: the archive was rekeyed from the old hash to
     // the new one, and the still-present row picked it back up.
@@ -210,7 +213,7 @@ void TestImport::externalSidecarChangeIsPickedUp()
         "</x:xmpmeta>\n"
         "<?xpacket end='w'?>\n");
 
-    m_worker->rescan();
+    m_worker->rescan(/*retentionDays=*/0);
     QVERIFY2(tagsOf(photo).contains(QStringLiteral("addedlater")),
              "a sidecar written after import must be picked up on rescan");
 }
@@ -435,6 +438,48 @@ void TestImport::reenableWritesNeverQueuedFolderTags()
 
     QVERIFY2(QFile::exists(side), "re-enabling must write never-queued folder tags");
     QVERIFY(sidecar::readSidecar(photo)->flat.contains(QStringLiteral("legacytag")));
+}
+
+void TestImport::rescanPrunesOldRemovedTags()
+{
+    const QString photo = pics() + QStringLiteral("/temp.jpg");
+    writeFile(photo, "bytes");
+    const int id = importAndId(photo);
+    QVERIFY(id > 0);
+
+    QString hash;
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("ret")));
+        const int tag = db.ensureTag(QStringLiteral("doomed"));
+        db.linkTagToContent(id, tag);
+        hash = db.photoHash(id);
+        db.rememberContentTag(hash, tag);
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("ret"));
+
+    // The file disappears from disk; a rescan drops the row and orphans its hash.
+    QVERIFY(QFile::remove(photo));
+    m_worker->rescan(/*retentionDays=*/0); // forever: nothing pruned yet
+    {
+        Database db;
+        QVERIFY(db.open(dbFile(), QStringLiteral("ret2")));
+        QCOMPARE(db.rememberedRemovedCount(), 1);
+        // Backdate the orphan to 100 days ago.
+        QSqlQuery u(QSqlDatabase::database(QStringLiteral("ret2")));
+        u.prepare(QStringLiteral("UPDATE orphaned_hashes SET orphaned_at = ? WHERE hash = ?"));
+        u.addBindValue(QDateTime::currentSecsSinceEpoch() - qint64(100) * 24 * 60 * 60);
+        u.addBindValue(hash);
+        QVERIFY(u.exec());
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("ret2"));
+
+    // A rescan under a 30-day policy forgets it.
+    m_worker->rescan(/*retentionDays=*/30);
+    Database db;
+    QVERIFY(db.open(dbFile(), QStringLiteral("ret3")));
+    QCOMPARE(db.rememberedRemovedCount(), 0);
+    QSqlDatabase::removeDatabase(QStringLiteral("ret3"));
 }
 
 QTEST_GUILESS_MAIN(TestImport)
