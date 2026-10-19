@@ -79,7 +79,11 @@ void LibraryWorker::runMigration()
         }
     }
 
-    emit migrationFinished();
+    // Only the hash and capture-time backfills touch what the gallery shows
+    // (duplicate collapse and timeline grouping). backfillContentTags only seeds
+    // the hash-keyed archive, which no visible row reads, so a steady-state launch
+    // where both backlogs are empty changed nothing and needs no model reload.
+    emit migrationFinished(total > 0 || takenTotal > 0);
 }
 
 void LibraryWorker::importDirectory(const QString &root)
@@ -174,6 +178,14 @@ void LibraryWorker::rescan(int retentionDays)
     const int step = qMax(1, total / 100);
     int done = 0;
 
+    // Track whether anything the gallery shows actually moved. A steady-state
+    // launch (nothing added/moved/removed, no edits or external sidecars) makes
+    // no displayable change, so the caller can skip the model reload that would
+    // otherwise reset every delegate and blink the thumbnails. Pure bookkeeping —
+    // recording file stats on pre-v10 rows, or pruning archived tags of
+    // long-gone files — doesn't count.
+    bool changed = false;
+
     QSet<int> relocated;
     for (const QString &p : newPaths) {
         const mediascan::FileEntry fe = onDisk.value(p);
@@ -197,6 +209,7 @@ void LibraryWorker::rescan(int retentionDays)
                     m_db.relocatePhoto(candidate, p, fe.mtime, fe.size);
                     relocated.insert(candidate);
                     didRelocate = true;
+                    changed = true; // a row's path moved
                 }
             }
         }
@@ -209,6 +222,7 @@ void LibraryWorker::rescan(int retentionDays)
                 const qint64 sidecarMtime = applyImportedTags(id, p, hash, meta);
                 if (sidecarMtime > 0)
                     m_db.setSidecarWrittenAt(id, sidecarMtime);
+                changed = true; // a new row appeared
             }
         }
 
@@ -233,6 +247,7 @@ void LibraryWorker::rescan(int retentionDays)
                 m_db.supersedeHash(r.hash, newHash); // carry archived tags forward
                 m_db.setPhotoHash(r.id, newHash);
                 m_db.applyContentTags(r.id, newHash);
+                changed = true; // in-place edit may have re-keyed this photo's tags
             }
             m_db.setPhotoFileStats(r.id, fe.mtime, fe.size);
         }
@@ -246,6 +261,7 @@ void LibraryWorker::rescan(int retentionDays)
                 const QString hash = m_db.photoHash(r.id);
                 applyImportedTags(r.id, r.path, hash, ImportMetadata{});
                 m_db.setSidecarWrittenAt(r.id, sideMtime);
+                changed = true; // an external sidecar's keywords were imported
             }
         }
     }
@@ -253,8 +269,10 @@ void LibraryWorker::rescan(int retentionDays)
     // Whatever stayed missing (not a move) is gone: drop the row. Tags remain in
     // the content archive, so they return if the file ever reappears.
     for (int id : missingIds) {
-        if (!relocated.contains(id))
+        if (!relocated.contains(id)) {
             m_db.deletePhoto(id);
+            changed = true; // a row was dropped
+        }
     }
 
     // Retention: forget archived tags of files removed longer ago than the policy
@@ -265,7 +283,7 @@ void LibraryWorker::rescan(int retentionDays)
         m_db.pruneOrphanedTags(cutoff);
     }
 
-    emit rescanFinished();
+    emit rescanFinished(changed);
 }
 
 qint64 LibraryWorker::applyImportedTags(int photoId, const QString &path,

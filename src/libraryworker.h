@@ -35,9 +35,9 @@ public slots:
 
 signals:
     void progress(const QString &phase, int done, int total); // total <= 0 means indeterminate
-    void migrationFinished();
+    void migrationFinished(bool changed); // changed == false when the backfill was a no-op
     void importFinished(const QString &root);
-    void rescanFinished();
+    void rescanFinished(bool changed); // changed == false when nothing displayable moved
     void implicationsExpanded();
     void tagJobFinished();
     void sidecarFlushFinished(int written, int failed);
