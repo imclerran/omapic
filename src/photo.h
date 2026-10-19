@@ -41,6 +41,10 @@ struct Photo {
     // (non-system) names, so album membership never shows as a chip or tag badge.
     QSet<int> tagIds;
     QStringList tagNames;
+    // Accent-/case-folded concatenation of the file name and tag names, built by
+    // PhotoModel for the gallery search so filtering doesn't re-fold every row on
+    // every keystroke. Not populated by the database layer.
+    QString searchFold;
 };
 
 struct TagInfo {
