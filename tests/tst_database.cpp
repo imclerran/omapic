@@ -598,11 +598,6 @@ void TestDatabase::activePhotoIdsExcludeDisabledFolders()
     QVERIFY(m_db->isPhotoActive(orphan));
     QVERIFY(!m_db->isPhotoActive(hidden));
 
-    // photoIdsUnderFolder is path-based (independent of enabled state), so a
-    // re-enabled folder's photos can be queued for sidecar writing.
-    QCOMPARE(m_db->photoIdsUnderFolder(enabledFolder), QList<int>{shown});
-    QCOMPARE(m_db->photoIdsUnderFolder(disabledFolder), QList<int>{hidden});
-
     // Re-enabling the folder brings its photo back into the active set.
     m_db->setFolderEnabled(disabledFolder, true);
     QVERIFY(m_db->isPhotoActive(hidden));

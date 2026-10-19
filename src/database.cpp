@@ -18,7 +18,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 11;
+constexpr int kSchemaVersion = 12;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -121,6 +121,7 @@ bool Database::runMigrations(int fromVersion)
         {9, &Database::migrate_8_to_9, &Database::legacyAlbumsNeedRename},
         {10, &Database::migrate_9_to_10, nullptr},
         {11, &Database::migrate_10_to_11, nullptr},
+        {12, &Database::migrate_11_to_12, nullptr},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -348,6 +349,21 @@ void Database::migrate_10_to_11()
     q.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS sidecar_dirty ("
         "  photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE)"));
+}
+
+void Database::migrate_11_to_12()
+{
+    // One-time seed of the sidecar write queue: mark every tagged photo that has
+    // never been synced to a sidecar (sidecar_written_at IS NULL) as dirty, so a
+    // library tagged before sidecar-writing existed gets written once. After this,
+    // the queue is the complete record of what needs writing — fed on every tag
+    // change — so nothing re-queues a whole folder just because it was re-enabled.
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral(
+        "INSERT OR IGNORE INTO sidecar_dirty(photo_id) "
+        "SELECT DISTINCT pt.photo_id FROM photo_tags pt "
+        "JOIN photos p ON p.id = pt.photo_id "
+        "WHERE p.sidecar_written_at IS NULL"));
 }
 
 bool Database::legacyAlbumsNeedRename()
@@ -740,20 +756,6 @@ bool Database::isPhotoActive(int photoId)
     q.addBindValue(photoId);
     q.exec();
     return q.next();
-}
-
-QList<int> Database::photoIdsUnderFolder(int folderId)
-{
-    QList<int> ids;
-    QSqlQuery q(m_db);
-    q.prepare(QStringLiteral(
-        "SELECT p.id FROM photos p, folders f WHERE f.id = ? "
-        "AND (p.path = f.path OR substr(p.path, 1, length(f.path) + 1) = f.path || '/')"));
-    q.addBindValue(folderId);
-    q.exec();
-    while (q.next())
-        ids.append(q.value(0).toInt());
-    return ids;
 }
 
 void Database::backfillContentTags()

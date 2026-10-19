@@ -32,6 +32,7 @@ private slots:
     void upgradesLegacyUnversioned();
     void upgradesToV10SeedsOrphansAndAddsColumns();
     void upgradesToV11AddsSidecarDirty();
+    void seedsSidecarDirtyForNeverSyncedTaggedPhotos();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -296,6 +297,38 @@ void TestSchema::upgradesToV11AddsSidecarDirty()
         QVERIFY(backupFiles().isEmpty()); // additive step → no backup
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v11"));
+}
+
+void TestSchema::seedsSidecarDirtyForNeverSyncedTaggedPhotos()
+{
+    int taggedUnsynced = -1, taggedSynced = -1, untagged = -1;
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_seed12")));
+        taggedUnsynced = db.insertPhoto(QStringLiteral("/p/a.jpg"), QString());
+        taggedSynced = db.insertPhoto(QStringLiteral("/p/b.jpg"), QString());
+        untagged = db.insertPhoto(QStringLiteral("/p/c.jpg"), QString());
+        const int tag = db.ensureTag(QStringLiteral("x"));
+        db.linkPhotoTag(taggedUnsynced, tag);
+        db.linkPhotoTag(taggedSynced, tag);
+        db.setSidecarWrittenAt(taggedSynced, 123); // already written once
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_seed12"));
+
+    // Rewind: clear the queue and the version so the v12 seed genuinely re-runs.
+    execRaw(dbPath(), QStringLiteral("DELETE FROM sidecar_dirty; PRAGMA user_version = 11;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v12")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+        const QList<int> dirty = db.sidecarDirtyIds();
+        QVERIFY(dirty.contains(taggedUnsynced)); // tagged, never synced → seeded
+        QVERIFY(!dirty.contains(taggedSynced));  // tagged but already written → skipped
+        QVERIFY(!dirty.contains(untagged));      // nothing to write → skipped
+        QVERIFY(backupFiles().isEmpty());        // additive step → no backup
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v12"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)

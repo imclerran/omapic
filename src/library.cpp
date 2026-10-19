@@ -146,7 +146,6 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::implicationsExpanded, this, &Library::onImplicationsExpanded);
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     connect(this, &Library::requestSidecarFlush, m_worker, &LibraryWorker::flushSidecars);
-    connect(this, &Library::requestFolderSidecarFlush, m_worker, &LibraryWorker::flushSidecarsForFolder);
     connect(m_worker, &LibraryWorker::sidecarFlushFinished, this, &Library::onSidecarFlushFinished);
     m_workerThread.start();
 
@@ -654,17 +653,14 @@ void Library::setFolderEnabled(int folderId, bool enabled)
     m_photos->setPhotos(m_db.loadPhotos()); // active set changed
     refreshTags();
     emit foldersChanged();
-    // Re-enabling a folder makes its photos active again. Write their sidecars —
-    // the folder's whole set, not just already-queued photos, since ones tagged
-    // before sidecar-writing existed were never queued. The queue + flush run on
-    // the worker (a big folder would stall the UI thread otherwise); show the
-    // progress bar meanwhile, with no toast. Gated on auto-write; the on-demand
-    // "Export tags" covers the off case.
-    if (enabled && m_autoWriteSidecars) {
-        ++m_quietBarFlushes;
-        beginBusy(tr("Exporting tags…"), /*modal=*/false);
-        emit requestFolderSidecarFlush(folderId);
-    }
+    // Re-enabling a folder makes its photos active again. Its sidecar writes that
+    // were skipped (left queued) while it was disabled can now be written — so
+    // just flush the dirty queue. We don't re-queue the whole folder: the queue is
+    // the source of truth for what actually needs writing (seeded once at the v12
+    // migration, kept current on every tag change), so nothing is written when
+    // nothing changed.
+    if (enabled)
+        catchUpSidecarsIfPending();
 }
 
 int Library::orphanPhotoCount() const

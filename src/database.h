@@ -220,9 +220,6 @@ public:
     // disabled folder is never written to.
     QList<int> activePhotoIds();
     bool isPhotoActive(int photoId);
-    // Ids of every photo in or under a folder (by path prefix). Used to queue a
-    // folder's sidecars for writing when it is re-enabled.
-    QList<int> photoIdsUnderFolder(int folderId);
 
 private:
     bool hasColumn(const QString &table, const QString &column);
@@ -261,6 +258,7 @@ private:
     void migrate_8_to_9(); // _system:Albums category rename (non-additive)
     void migrate_9_to_10(); // photos.mtime/size/sidecar_written_at + orphaned_hashes (additive)
     void migrate_10_to_11(); // sidecar_dirty queue table (additive)
+    void migrate_11_to_12(); // seed sidecar_dirty for never-synced tagged photos (additive)
     // True when migrate_8_to_9 would actually move rows (a legacy bare "Albums"
     // system category is present). Gates the pre-migration backup so a fresh
     // library isn't backed up pointlessly.
