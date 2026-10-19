@@ -16,6 +16,14 @@ ApplicationWindow {
     height: 820
     visible: true
     title: qsTr("Omapic")
+    // Match the gallery's background so a resize (or any un-painted frame) exposes
+    // the theme colour rather than Qt's default window grey. Read it from the
+    // application palette (SystemPalette), not the window's own `palette`: the
+    // gtk3 platform theme stamps a light palette on the window at creation (see
+    // main.cpp), so `palette.base` here is that light grey, while the gallery and
+    // delegates — which resolve against the app palette — are correctly dark.
+    color: appPalette.base
+    SystemPalette { id: appPalette }
 
     readonly property color accent: omarchyTheme.accent
 
