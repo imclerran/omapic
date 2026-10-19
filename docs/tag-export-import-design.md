@@ -21,10 +21,12 @@ starting.
 1. Export tags so other apps (darktable, digiKam, Lightroom, XnView, Immich, …)
    can read them.
 2. Import tags written by those apps.
-3. Move a whole library's tagging, including categories, colors, implications,
-   albums and smart albums, to a second omapic library.
-4. Make tags survive a file being edited (metadata or pixels) by another tool.
-5. Keep search and filter untouched by all of the above.
+3. Make tags survive a file being edited (metadata or pixels) by another tool.
+4. Keep search and filter untouched by all of the above.
+
+Out of scope for now: moving a whole library's tagging, including category
+colors, implications and smart albums, to a second omapic library. See
+"Deferred" at the end.
 
 ## Codebase facts the design rests on
 
@@ -145,9 +147,10 @@ retention policy something to work with.
   `/` becomes the tag name.
 - **Why no second tag list in the omapic namespace:** it would be two sources
   of truth in one file. The only loss in the standard fields is a `|` in a tag
-  name, handled by forbidding the character (section 7).
+  name, handled by forbidding the character (section 6).
 - Category colors, implications and smart albums are library-level and do not
-  go in sidecars. They go in the manifest (section 5).
+  go in sidecars. A second library importing from sidecars alone gets tags and
+  categories with default colors; carrying the rest is the deferred manifest.
 
 ### 3. Sidecar and embedded metadata read
 
@@ -206,38 +209,7 @@ new per-known-path check in `rescan`.
 - A write failure (read-only mount, permission) leaves the dirty row in place
   and is reported once per flush, not per photo.
 
-### 5. Library manifest (omapic ↔ omapic)
-
-A single JSON file, exported for the whole library, importable into another
-library. Keyed by content hash, so it works for every format and writes no
-files next to photos.
-
-```json
-{
-  "omapic_manifest": 1,
-  "exported_at": "2026-10-19T12:00:00Z",
-  "categories": [ { "name": "People", "color_slot": 3 } ],
-  "tags": [ { "name": "Alice", "category": "People" } ],
-  "implications": [ { "if": "beach", "then": "vacation" } ],
-  "albums": [ "Summer 2026" ],
-  "smart_albums": [ { "name": "Trips", "match_all": true, "tags": ["vacation"] } ],
-  "content": [
-    { "hash": "sha256:…", "tags": ["Alice", "beach"], "albums": ["Summer 2026"], "favorite": true }
-  ]
-}
-```
-
-- `content` is derived from `content_tags` (live and orphaned hashes alike),
-  so it is also the backup a user can take before aggressive pruning.
-- **Import is additive.** Categories and tags merge by name (NOCASE). On a
-  category color conflict the local color wins. Implications and smart albums
-  merge by name. `content` rows go into `content_tags`; then
-  `applyContentTags` reattaches them to any live photo with a matching hash.
-  Photos imported later pick them up through the normal path.
-- System names: albums are exported by display name and re-created under the
-  system Albums category on import. Favorites is a flag, not an album name.
-
-### 6. Retention
+### 5. Retention
 
 - Setting: "Remember tags for removed files": forever (default) / 1 year /
   6 months / 30 days. Forever is the current promise in the README and must
@@ -247,14 +219,13 @@ files next to photos.
   WHERE orphaned_at < ?)` then the same for `orphaned_hashes`. Superseded
   hashes were already pruned by the rekey and are unaffected by this setting.
 - Maintenance action "Forget tags for files removed before …" available under
-  any policy, with a count preview before committing. Offer to write the
-  manifest first.
+  any policy, with a count preview before committing.
 - Library stats line: "tags remembered for N removed files".
 - Help text should say the byte-identical caveat plainly: a re-download only
   recovers tags if the bytes are identical; most social platforms re-encode.
 - Forgetting never deletes tag definitions, categories, or implications.
 
-### 7. Tag name validation
+### 6. Tag name validation
 
 - Reject `|` in tag and category names in the editor (Lightroom imposes the
   same rule).
@@ -271,7 +242,7 @@ files next to photos.
 | `sidecar_dirty` table | yes |
 | `\|` → `/` rename in tag and category names | **no**, triggers backup |
 
-If section 7 ships separately, the rename can be its own later bump and the
+If section 6 ships separately, the rename can be its own later bump and the
 first bump stays fully additive.
 
 ## Phasing
@@ -284,8 +255,7 @@ Each phase is independently shippable and testable.
    sidecar-changed import on known files; hash link supersession.
 3. **Write path (sections 2, 4).** Dirty queue, flush, on-demand export action,
    then the automatic setting.
-4. **Manifest (section 5).** Export and import actions.
-5. **Retention UI (section 6)** and **name validation (section 7).**
+4. **Retention UI (section 5)** and **name validation (section 6).**
 
 ## Tests
 
@@ -302,10 +272,6 @@ Existing suites live under `tests/` (Qt Test, CTest). Add:
   `darktable:history` key and assert it survives); empty-tag case removes
   omapic keys and deletes only omapic-created files; hash link marks the
   recorded hash superseded; `photo.xmp` fallback is read.
-- New `tst_manifest`: export from one in-memory DB, import into a fresh one,
-  assert categories, colors, implications, albums, smart albums and
-  `content_tags` match; import into a DB with conflicting names merges rather
-  than duplicates.
 
 ## Verify empirically before relying on it
 
@@ -327,3 +293,14 @@ Existing suites live under `tests/` (Qt Test, CTest). Add:
   walk) plus one stat for the sidecar. Full read only when mtime/size changed.
 - Per-import cost added for a new file: one sidecar stat and parse; embedded
   keyword read rides the exiv2 open that already happens.
+
+## Deferred
+
+**Library manifest (omapic ↔ omapic).** Explicitly out of scope for this work.
+The sketch, so nobody re-derives it: a single JSON file dumping categories with
+color slots, tags with categories, implications, albums, smart albums, and
+`content_tags` keyed by hash (live and orphaned). Import would be additive,
+merging by NOCASE name, with `applyContentTags` reattaching rows to any live
+photo with a matching hash. It needs no file writes next to photos and works
+for every format. Nothing in the sections above should be shaped to
+accommodate it; when it comes back it builds on `content_tags` as-is.
