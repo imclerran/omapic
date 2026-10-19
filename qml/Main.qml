@@ -1627,7 +1627,7 @@ ApplicationWindow {
                 text: qsTr("⚙")
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Settings")
-                onClicked: win.openSettings(1) // Slideshow tab
+                onClicked: win.openSettings(2) // Slideshow tab
             }
         }
     }
