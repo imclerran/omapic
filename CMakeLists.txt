@@ -4,7 +4,7 @@ project(omapic VERSION 0.4.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Quick QuickControls2 Sql Gui Multimedia Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Quick QuickControls2 Sql Gui Multimedia Concurrent DBus)
 find_package(exiv2 REQUIRED) # EXIF/metadata for the details pane
 
 qt_standard_project_setup(REQUIRES 6.5)
@@ -52,7 +52,7 @@ qt_add_qml_module(omapic
 
 target_include_directories(omapic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia Qt6::Concurrent Exiv2::exiv2lib)
+target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia Qt6::Concurrent Qt6::DBus Exiv2::exiv2lib)
 
 # Unit tests for the logic layer. On by default; configure with
 # -DOMAPIC_BUILD_TESTS=OFF to skip them (e.g. in the packaging build). Run with

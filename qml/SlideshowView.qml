@@ -42,11 +42,19 @@ Window {
 
     signal toggleShuffleRequested()
     signal toggleLoopRequested()
-    // Theme actions on the current photo. Handled in Main.qml (which owns the
-    // Library and reports the result via flashMessage). `source` is a file:// URL.
+    // Theme/wallpaper actions on the current photo. Handled in Main.qml (which
+    // owns the Library and reports the result via flashMessage). `source` is a
+    // file:// URL.
     signal addWallpaperRequested(url source)
     signal editInAetherRequested(url source)
     signal setAetherThemeRequested(url source)
+    signal setAsWallpaperRequested(url source)
+
+    // Which desktop integrations are available; set from Main.qml's Library so the
+    // context menu shows only the actions that can work (see photoMenu there).
+    property bool omarchyAvailable: false
+    property bool aetherAvailable: false
+    property bool wallpaperAvailable: false
 
     // The paused controls hint auto-hides after a few seconds, and reappears on
     // activity (mouse move or navigation) so it isn't gone for the whole pause.
@@ -394,28 +402,41 @@ Window {
             onTriggered: { root.muted = !root.muted; root.pokeHint() }
         }
 
-        // Theme actions apply to still images only.
-        MenuSeparator { visible: !root.currentIsVideo; height: visible ? implicitHeight : 0 }
-        MenuItem {
+        // Theme/wallpaper actions apply to still images only, and only when the
+        // matching integration is present (mirrors the grid's photo menu).
+        MenuSeparator {
             visible: !root.currentIsVideo
+                     && (root.omarchyAvailable || root.aetherAvailable || root.wallpaperAvailable)
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            visible: !root.currentIsVideo && root.omarchyAvailable
             height: visible ? implicitHeight : 0
             text: qsTr("Add to theme wallpapers")
             enabled: root.currentSource !== ""
             onTriggered: root.addWallpaperRequested(root.currentSource)
         }
         MenuItem {
-            visible: !root.currentIsVideo
+            visible: !root.currentIsVideo && root.aetherAvailable
             height: visible ? implicitHeight : 0
             text: qsTr("Edit theme in Aether")
             enabled: root.currentSource !== ""
             onTriggered: root.editInAetherRequested(root.currentSource)
         }
         MenuItem {
-            visible: !root.currentIsVideo
+            visible: !root.currentIsVideo && root.aetherAvailable
             height: visible ? implicitHeight : 0
             text: qsTr("Set as Aether theme")
             enabled: root.currentSource !== ""
             onTriggered: root.setAetherThemeRequested(root.currentSource)
+        }
+        MenuItem {
+            // Generic wallpaper setter for non-Aether desktops.
+            visible: !root.currentIsVideo && !root.aetherAvailable && root.wallpaperAvailable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Set as wallpaper")
+            enabled: root.currentSource !== ""
+            onTriggered: root.setAsWallpaperRequested(root.currentSource)
         }
     }
 

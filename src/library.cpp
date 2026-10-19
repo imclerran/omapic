@@ -4,6 +4,10 @@
 
 #include "library.h"
 
+#include <QDBusConnection>
+#include <QDBusInterface>
+#include <QDBusMessage>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -95,6 +99,11 @@ Library::Library(QObject *parent)
             : tr("The library database could not be opened.");
         return;
     }
+
+    // Resolve desktop-integration capabilities once; the menus bind to these.
+    m_omarchyAvailable = detectOmarchy();
+    m_aetherAvailable = detectAether();
+    m_wallpaperBackend = detectWallpaperBackend(m_omarchyAvailable);
 
     m_filtered->setSourceModel(m_photos);
     m_filtered->setDynamicSortFilter(true);
@@ -599,6 +608,45 @@ int Library::deleteFromDisk(const QVariantList &photoIds)
     return failed;
 }
 
+bool Library::detectOmarchy()
+{
+    // Same state dir OmarchyTheme/currentOmarchyTheme() read from; its presence
+    // marks an Omarchy session.
+    return QFileInfo::exists(QDir::homePath()
+                             + QStringLiteral("/.local/state/omarchy/current"));
+}
+
+bool Library::detectAether()
+{
+    return !QStandardPaths::findExecutable(QStringLiteral("aether")).isEmpty();
+}
+
+Library::WallpaperBackend Library::detectWallpaperBackend(bool omarchyAvailable)
+{
+    // Omarchy's own setter is the right integration where present — it keeps the
+    // current/background symlink and notifies the shell, exactly as Omarchy does.
+    if (omarchyAvailable
+        && !QStandardPaths::findExecutable(QStringLiteral("omarchy-theme-bg-set")).isEmpty())
+        return WallpaperBackend::Omarchy;
+
+    // The freedesktop wallpaper portal (GNOME, KDE, some wlroots backends). A
+    // readable `version` property means a backend is actually wired up.
+    QDBusInterface portal(QStringLiteral("org.freedesktop.portal.Desktop"),
+                          QStringLiteral("/org/freedesktop/portal/desktop"),
+                          QStringLiteral("org.freedesktop.portal.Wallpaper"),
+                          QDBusConnection::sessionBus());
+    if (portal.isValid() && portal.property("version").isValid())
+        return WallpaperBackend::Portal;
+
+    // Bare Wayland compositors.
+    if (!QStandardPaths::findExecutable(QStringLiteral("swww")).isEmpty())
+        return WallpaperBackend::Swww;
+    if (!QStandardPaths::findExecutable(QStringLiteral("swaybg")).isEmpty())
+        return WallpaperBackend::Swaybg;
+
+    return WallpaperBackend::None;
+}
+
 bool Library::addToThemeWallpapers(int photoId)
 {
     const Photo p = m_photos->photoById(photoId);
@@ -636,6 +684,10 @@ bool Library::editThemeInAetherUrl(const QUrl &source)
 
 bool Library::editThemeInAetherPath(const QString &path)
 {
+    // The wrapper script below starts a detached shell, so it reports success
+    // even when `aether` is missing. Fail honestly up front when it isn't here.
+    if (!m_aetherAvailable)
+        return false;
     // Load the photo into Aether's GUI editor so a new theme can be tweaked
     // before applying — deliberately not `--generate`, which would apply a theme
     // immediately (that's setAetherTheme). `aether extract` talks to a running
@@ -674,6 +726,47 @@ bool Library::setAetherThemePath(const QString &path)
                                    {QStringLiteral("--generate"), path});
 }
 
+bool Library::setAsWallpaper(int photoId)
+{
+    const Photo p = m_photos->photoById(photoId);
+    return p.id < 0 ? false : setPathAsWallpaper(p.path);
+}
+
+bool Library::setAsWallpaperUrl(const QUrl &source)
+{
+    const QString path = source.toLocalFile();
+    return path.isEmpty() ? false : setPathAsWallpaper(path);
+}
+
+bool Library::setPathAsWallpaper(const QString &path)
+{
+    // Dispatch to the backend resolved at startup (see detectWallpaperBackend).
+    switch (m_wallpaperBackend) {
+    case WallpaperBackend::Omarchy:
+        return QProcess::startDetached(QStringLiteral("omarchy-theme-bg-set"), {path});
+    case WallpaperBackend::Portal: {
+        // org.freedesktop.portal.Wallpaper.SetWallpaperURI(parent, uri, options).
+        const QString uri = QUrl::fromLocalFile(path).toString(QUrl::FullyEncoded);
+        QDBusInterface portal(QStringLiteral("org.freedesktop.portal.Desktop"),
+                              QStringLiteral("/org/freedesktop/portal/desktop"),
+                              QStringLiteral("org.freedesktop.portal.Wallpaper"),
+                              QDBusConnection::sessionBus());
+        const QDBusMessage reply = portal.call(QStringLiteral("SetWallpaperURI"),
+                                               QString(), uri, QVariantMap());
+        return reply.type() != QDBusMessage::ErrorMessage;
+    }
+    case WallpaperBackend::Swww:
+        return QProcess::startDetached(QStringLiteral("swww"),
+                                       {QStringLiteral("img"), path});
+    case WallpaperBackend::Swaybg:
+        return QProcess::startDetached(QStringLiteral("swaybg"),
+                                       {QStringLiteral("-i"), path});
+    case WallpaperBackend::None:
+        break;
+    }
+    return false;
+}
+
 bool Library::showInFileManager(int photoId)
 {
     const Photo p = m_photos->photoById(photoId);
@@ -682,22 +775,27 @@ bool Library::showInFileManager(int photoId)
 
 bool Library::showPathInFileManager(const QString &path)
 {
-    // Open the containing folder with the file highlighted, via the freedesktop
-    // FileManager1 D-Bus interface rather than spawning a specific file manager.
-    // Omarchy's default (Nautilus) implements it, as does any compliant manager,
-    // and it selects the item — which spawning `nautilus <path>` doesn't reliably
-    // do across versions. The URL is fully percent-encoded so spaces and other
-    // special characters in the name survive as a single D-Bus argument.
+    // Prefer the freedesktop FileManager1 D-Bus interface: it opens the
+    // containing folder with the file itself selected, which spawning a specific
+    // manager doesn't reliably do. Nautilus (Omarchy's default), Dolphin, Thunar,
+    // Nemo, Caja and PCManFM-Qt all implement it. The URL is fully percent-encoded
+    // so spaces and other special characters survive as a single D-Bus argument.
     const QString uri = QUrl::fromLocalFile(path).toString(QUrl::FullyEncoded);
-    return QProcess::startDetached(
-        QStringLiteral("dbus-send"),
-        {QStringLiteral("--session"),
-         QStringLiteral("--dest=org.freedesktop.FileManager1"),
-         QStringLiteral("--type=method_call"),
-         QStringLiteral("/org/freedesktop/FileManager1"),
-         QStringLiteral("org.freedesktop.FileManager1.ShowItems"),
-         QStringLiteral("array:string:") + uri,
-         QStringLiteral("string:")});
+    QDBusInterface fm(QStringLiteral("org.freedesktop.FileManager1"),
+                      QStringLiteral("/org/freedesktop/FileManager1"),
+                      QStringLiteral("org.freedesktop.FileManager1"),
+                      QDBusConnection::sessionBus());
+    fm.setTimeout(2000); // don't hang the UI thread if nothing answers
+    const QDBusMessage reply = fm.call(QStringLiteral("ShowItems"),
+                                       QStringList{uri}, QString());
+    if (reply.type() != QDBusMessage::ErrorMessage)
+        return true;
+
+    // No FileManager1 provider (bare WM, TUI manager) or the call failed: fall
+    // back to opening the containing folder with the desktop's default handler.
+    // The file won't be selected, but something opens.
+    const QString dir = QFileInfo(path).absolutePath();
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 void Library::addTag(int photoId, const QString &name)

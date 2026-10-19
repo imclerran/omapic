@@ -53,6 +53,13 @@ class Library : public QObject {
     // Non-empty when the library could not be opened (e.g. it was written by a
     // newer Omapic). The UI shows it as a blocking message and loads nothing else.
     Q_PROPERTY(QString fatalError READ fatalError NOTIFY fatalErrorChanged)
+    // Which desktop integrations are available, resolved once at startup. The
+    // context menus use these to show only the actions that can actually work:
+    // the theme-wallpaper and Aether items on Omarchy/Aether, a generic "Set as
+    // wallpaper" elsewhere. All constant for the process lifetime.
+    Q_PROPERTY(bool omarchyAvailable READ omarchyAvailable CONSTANT)
+    Q_PROPERTY(bool aetherAvailable READ aetherAvailable CONSTANT)
+    Q_PROPERTY(bool wallpaperAvailable READ wallpaperAvailable CONSTANT)
 
 public:
     enum RenameResult {
@@ -88,6 +95,9 @@ public:
     double progress() const { return m_progress; }
     QString statusText() const { return m_statusText; }
     QString fatalError() const { return m_fatalError; }
+    bool omarchyAvailable() const { return m_omarchyAvailable; }
+    bool aetherAvailable() const { return m_aetherAvailable; }
+    bool wallpaperAvailable() const { return m_wallpaperBackend != WallpaperBackend::None; }
 
     Q_INVOKABLE void importDirectory(const QUrl &dir);
     Q_INVOKABLE void removeFolder(int folderId);
@@ -218,16 +228,22 @@ public:
     // Generate a desktop theme from the photo and apply it immediately via Aether.
     // Returns false if the process couldn't be launched.
     Q_INVOKABLE bool setAetherTheme(int photoId);
+    // Set the photo as the desktop wallpaper via whichever backend is available
+    // (Omarchy's own setter, the freedesktop wallpaper portal, or swww/swaybg) —
+    // the non-Omarchy/Aether counterpart to the theme actions above. Returns
+    // false if no backend is available or the set failed.
+    Q_INVOKABLE bool setAsWallpaper(int photoId);
     // Open the photo's containing folder in the file manager (Omarchy's default
-    // is Nautilus) with the file itself selected. Returns false if the helper
-    // couldn't start.
+    // is Nautilus) with the file itself selected, falling back to just opening
+    // the folder. Returns false only if nothing could be opened.
     Q_INVOKABLE bool showInFileManager(int photoId);
 
-    // Same three actions addressed by file URL instead of photo id, for the
-    // slideshow (which tracks sources, not ids). `source` is a file:// URL.
+    // Same actions addressed by file URL instead of photo id, for the slideshow
+    // (which tracks sources, not ids). `source` is a file:// URL.
     Q_INVOKABLE bool addToThemeWallpapersUrl(const QUrl &source);
     Q_INVOKABLE bool editThemeInAetherUrl(const QUrl &source);
     Q_INVOKABLE bool setAetherThemeUrl(const QUrl &source);
+    Q_INVOKABLE bool setAsWallpaperUrl(const QUrl &source);
 
 signals:
     void photoChanged(int photoId);
@@ -250,11 +266,23 @@ signals:
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
 
 private:
+    // How to set the desktop wallpaper, resolved once at startup. Omarchy's own
+    // setter is preferred where present (it keeps Omarchy's symlink + shell IPC);
+    // otherwise the freedesktop portal (GNOME/KDE), otherwise a bare-Wayland
+    // daemon (swww/swaybg). None means no "Set as wallpaper" action is offered.
+    enum class WallpaperBackend { None, Omarchy, Portal, Swww, Swaybg };
+
     // Path-based cores shared by the id- and url-addressed theme actions above.
     bool addPathToThemeWallpapers(const QString &path);
     bool editThemeInAetherPath(const QString &path);
     bool setAetherThemePath(const QString &path);
+    bool setPathAsWallpaper(const QString &path);
     bool showPathInFileManager(const QString &path);
+
+    // One-time capability probes, called from the constructor.
+    static bool detectOmarchy();
+    static bool detectAether();
+    static WallpaperBackend detectWallpaperBackend(bool omarchyAvailable);
 
     void applyTags(int photoId);
     void refreshTags();
@@ -295,4 +323,9 @@ private:
     double m_progress = -1.0;
     QString m_statusText;
     QString m_fatalError; // non-empty = the library could not be opened; UI blocks
+
+    // Desktop-integration capabilities, probed once in the constructor.
+    bool m_omarchyAvailable = false;
+    bool m_aetherAvailable = false;
+    WallpaperBackend m_wallpaperBackend = WallpaperBackend::None;
 };
