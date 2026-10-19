@@ -210,6 +210,9 @@ public:
     // disabled folder is never written to.
     QList<int> activePhotoIds();
     bool isPhotoActive(int photoId);
+    // Ids of every photo in or under a folder (by path prefix). Used to queue a
+    // folder's sidecars for writing when it is re-enabled.
+    QList<int> photoIdsUnderFolder(int folderId);
 
 private:
     bool hasColumn(const QString &table, const QString &column);

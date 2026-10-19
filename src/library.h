@@ -280,6 +280,7 @@ signals:
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
+    void requestFolderSidecarFlush(int folderId);
 
 private:
     // How to set the desktop wallpaper, resolved once at startup. Omarchy's own
@@ -325,6 +326,11 @@ private:
     // If auto-write is on, (re)start the debounce so a burst of edits coalesces
     // into one flush. No-op when auto-write is off.
     void scheduleSidecarFlush();
+    // If auto-write is on and photos are queued, flush now with the progress bar
+    // (but no toast). For user actions that can release a large backlog at once:
+    // enabling auto-write, or re-enabling a folder whose photos were queued while
+    // it was disabled. No-op when auto-write is off or nothing is pending.
+    void catchUpSidecarsIfPending();
 
     mutable Database m_db;
     PhotoModel *m_photos;

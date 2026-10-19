@@ -141,6 +141,7 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::implicationsExpanded, this, &Library::onImplicationsExpanded);
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     connect(this, &Library::requestSidecarFlush, m_worker, &LibraryWorker::flushSidecars);
+    connect(this, &Library::requestFolderSidecarFlush, m_worker, &LibraryWorker::flushSidecarsForFolder);
     connect(m_worker, &LibraryWorker::sidecarFlushFinished, this, &Library::onSidecarFlushFinished);
     m_workerThread.start();
 
@@ -307,11 +308,17 @@ void Library::setAutoWriteSidecars(bool on)
     // (and the startup restore of a saved "on") stays quiet. Routine per-edit auto
     // writes still flush silently via scheduleSidecarFlush(). This shows the
     // progress bar but, unlike the on-demand export, reports no toast.
-    if (on && m_db.sidecarDirtyCount() > 0) {
-        ++m_quietBarFlushes;
-        beginBusy(tr("Exporting tags…"), /*modal=*/false);
-        emit requestSidecarFlush();
-    }
+    if (on)
+        catchUpSidecarsIfPending();
+}
+
+void Library::catchUpSidecarsIfPending()
+{
+    if (!m_autoWriteSidecars || m_db.sidecarDirtyCount() <= 0)
+        return;
+    ++m_quietBarFlushes;
+    beginBusy(tr("Exporting tags…"), /*modal=*/false);
+    emit requestSidecarFlush();
 }
 
 void Library::scheduleSidecarFlush()
@@ -625,6 +632,17 @@ void Library::setFolderEnabled(int folderId, bool enabled)
     m_photos->setPhotos(m_db.loadPhotos()); // active set changed
     refreshTags();
     emit foldersChanged();
+    // Re-enabling a folder makes its photos active again. Write their sidecars —
+    // the folder's whole set, not just already-queued photos, since ones tagged
+    // before sidecar-writing existed were never queued. The queue + flush run on
+    // the worker (a big folder would stall the UI thread otherwise); show the
+    // progress bar meanwhile, with no toast. Gated on auto-write; the on-demand
+    // "Export tags" covers the off case.
+    if (enabled && m_autoWriteSidecars) {
+        ++m_quietBarFlushes;
+        beginBusy(tr("Exporting tags…"), /*modal=*/false);
+        emit requestFolderSidecarFlush(folderId);
+    }
 }
 
 int Library::orphanPhotoCount() const

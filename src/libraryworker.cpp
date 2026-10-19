@@ -416,6 +416,14 @@ void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)
     emit tagJobFinished();
 }
 
+void LibraryWorker::flushSidecarsForFolder(int folderId)
+{
+    // Queue the folder's whole photo set here on the worker — it can be large, so
+    // keeping it off the GUI thread avoids a stall — then flush as usual.
+    m_db.enqueueSidecarDirty(m_db.photoIdsUnderFolder(folderId));
+    flushSidecars();
+}
+
 void LibraryWorker::flushSidecars()
 {
     const QList<int> ids = m_db.sidecarDirtyIds();

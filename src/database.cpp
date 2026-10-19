@@ -540,6 +540,10 @@ void Database::enqueueSidecarDirty(const QList<int> &photoIds)
 {
     if (photoIds.isEmpty())
         return;
+    // One transaction, not one commit (fsync) per row — a whole-folder enqueue can
+    // be thousands of ids. Guarded so it's harmless if a caller already has a
+    // transaction open.
+    const bool txn = m_db.transaction();
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("INSERT OR IGNORE INTO sidecar_dirty(photo_id) VALUES(?)"));
     for (int id : photoIds) {
@@ -548,6 +552,8 @@ void Database::enqueueSidecarDirty(const QList<int> &photoIds)
         q.addBindValue(id);
         q.exec();
     }
+    if (txn)
+        m_db.commit();
 }
 
 void Database::enqueueSidecarDirtyForTag(int tagId)
@@ -710,6 +716,20 @@ bool Database::isPhotoActive(int photoId)
     q.addBindValue(photoId);
     q.exec();
     return q.next();
+}
+
+QList<int> Database::photoIdsUnderFolder(int folderId)
+{
+    QList<int> ids;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT p.id FROM photos p, folders f WHERE f.id = ? "
+        "AND (p.path = f.path OR substr(p.path, 1, length(f.path) + 1) = f.path || '/')"));
+    q.addBindValue(folderId);
+    q.exec();
+    while (q.next())
+        ids.append(q.value(0).toInt());
+    return ids;
 }
 
 void Database::backfillContentTags()
