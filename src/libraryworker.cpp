@@ -92,6 +92,35 @@ void LibraryWorker::runMigration()
     emit migrationFinished(total > 0 || takenTotal > 0);
 }
 
+void LibraryWorker::resampleHashes()
+{
+    // Re-fingerprint large files that still carry a whole-file hash with the
+    // cheaper sampled scheme, carrying their archived tags forward. Sampling only
+    // reads each file's head and tail, so this is fast even on a big video
+    // library. Idempotent: once a file is "s1:", it's no longer a candidate. Runs
+    // as a non-blocking background job (reported in the status bar).
+    const QVector<QPair<int, QString>> todo = m_db.photosNeedingResample();
+    bool changed = false;
+    if (!todo.isEmpty()) {
+        emit progress(tr("Optimizing media hashes…"), 0, todo.size());
+        const int step = qMax(1, todo.size() / 100);
+        int done = 0;
+        for (const auto &pr : todo) {
+            const QString newHash = Database::hashFile(pr.second);
+            const QString oldHash = m_db.photoHash(pr.first);
+            if (!newHash.isEmpty() && newHash != oldHash) {
+                m_db.supersedeHash(oldHash, newHash); // carry archived tags forward
+                m_db.setPhotoHash(pr.first, newHash);
+                changed = true; // a hash changed → duplicate grouping may shift
+            }
+            ++done;
+            if (done % step == 0 || done == todo.size())
+                emit progress(tr("Optimizing media hashes…"), done, todo.size());
+        }
+    }
+    emit resampleFinished(changed);
+}
+
 void LibraryWorker::importDirectory(const QString &root)
 {
     if (root.isEmpty()) {

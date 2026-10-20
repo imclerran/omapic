@@ -9,7 +9,9 @@
 #include <QSet>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QFile>
 #include <QString>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 
 #include "database.h"
@@ -50,6 +52,8 @@ private slots:
     void contentTagsSurviveReimport();
     void forgetContentTagDropsOrphanedArchive();
     void supersedeHashForwardsArchiveAndPrunesWhenUnreferenced();
+    void hashFileSamplesLargeFilesAndFullHashesSmall();
+    void photosNeedingResampleSelectsLargeLegacyHashes();
     void orphanHashLifecycleAcrossRemovalAndReimport();
     void sidecarDirtyQueueEnqueueDequeue();
     void sidecarTagsForPhotoClassifies();
@@ -1088,6 +1092,79 @@ void TestDatabase::coOccurringTagsEmptyWhenNoCoOccurrence()
     // Faceted drill-down on {a, b}: no photo carries both, so the co-occurring set
     // is empty — it must NOT fall back to the full active tag list.
     QVERIFY(m_db->coOccurringTags({a, b}).isEmpty());
+}
+
+void TestDatabase::hashFileSamplesLargeFilesAndFullHashesSmall()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const auto write = [&](const QString &name, const QByteArray &bytes) {
+        const QString p = dir.filePath(name);
+        QFile f(p);
+        return (f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size()) ? p : QString();
+    };
+    // Tiny thresholds so a few hundred bytes exercises sampling.
+    const qint64 kFull = 1024, kChunk = 256;
+
+    // At/under the threshold: whole-file hash, bare hex (unchanged scheme).
+    const QString smallHash = Database::hashFile(write("small.bin", QByteArray(500, '\1')),
+                                                 kFull, kChunk);
+    QVERIFY(!smallHash.isEmpty());
+    QVERIFY(!smallHash.startsWith(QLatin1String("s1:")));
+
+    // Build a > threshold buffer with a distinct head and tail.
+    QByteArray big(2000, 'x');
+    for (int i = 0; i < 256; ++i) {
+        big[i] = char('A' + (i % 26));
+        big[big.size() - 1 - i] = char('a' + (i % 26));
+    }
+    const QString bigHash = Database::hashFile(write("big.bin", big), kFull, kChunk);
+    QVERIFY(bigHash.startsWith(QLatin1String("s1:")));
+
+    // Byte-identical copy → identical fingerprint (content matching preserved).
+    QCOMPARE(Database::hashFile(write("big-copy.bin", big), kFull, kChunk), bigHash);
+
+    // A changed byte in the sampled head or tail → different fingerprint.
+    QByteArray tailEdit = big;
+    tailEdit[big.size() - 1] = tailEdit[big.size() - 1] + 1;
+    QVERIFY(Database::hashFile(write("tail.bin", tailEdit), kFull, kChunk) != bigHash);
+
+    // A changed byte strictly between the head and tail windows is NOT detected —
+    // the documented trade-off for big files.
+    QByteArray midEdit = big;
+    midEdit[1000] = midEdit[1000] + 1;
+    QCOMPARE(Database::hashFile(write("mid.bin", midEdit), kFull, kChunk), bigHash);
+
+    // A different length (same head, extended) → different fingerprint (size is mixed in).
+    QVERIFY(Database::hashFile(write("longer.bin", big + QByteArray(64, 'x')), kFull, kChunk)
+            != bigHash);
+}
+
+void TestDatabase::photosNeedingResampleSelectsLargeLegacyHashes()
+{
+    const qint64 T = 1000;
+    // Large files on a whole-file hash are candidates regardless of folder state,
+    // including one in a disabled folder (a full pass migrates the whole library).
+    const int big = m_db->insertPhoto(QStringLiteral("/p/big.mp4"),
+                                      QStringLiteral("deadbeef"), 0, 0, /*size=*/2000);
+    const int disabledFolder = m_db->insertFolder(QStringLiteral("/lib/off"));
+    m_db->setFolderEnabled(disabledFolder, false);
+    const int hidden = m_db->insertPhoto(QStringLiteral("/lib/off/big.mp4"),
+                                         QStringLiteral("deadbee2"), 0, 0, 2000);
+
+    m_db->insertPhoto(QStringLiteral("/p/already.mp4"),
+                      QStringLiteral("s1:cafef00d"), 0, 0, 3000); // already sampled
+    m_db->insertPhoto(QStringLiteral("/p/small.jpg"),
+                      QStringLiteral("abc123"), 0, 0, 500);       // under the threshold
+    m_db->insertPhoto(QStringLiteral("/p/new.mp4"), QString(), 0, 0, 5000); // not hashed yet
+
+    QList<int> ids;
+    for (const auto &pr : m_db->photosNeedingResample(T))
+        ids << pr.first;
+    QVERIFY(ids.contains(big));
+    QVERIFY(ids.contains(hidden)); // disabled folder included
+    QCOMPARE(ids.size(), 2);       // not the sampled, small, or un-hashed rows
+    QVERIFY(m_db->hasResampleCandidates(T));
 }
 
 QTEST_GUILESS_MAIN(TestDatabase)

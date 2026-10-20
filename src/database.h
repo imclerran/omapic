@@ -158,7 +158,21 @@ public:
 
     // Content-addressed tags: tags are archived against a file's content hash so
     // they survive re-import, restore, move, or an identical copy.
-    static QString hashFile(const QString &path);  // SHA-256 hex of contents, empty on error
+    //
+    // Files at or under kFullHashMaxBytes are SHA-256'd whole (bare hex). Larger
+    // files — videos, big RAWs — are fingerprinted from the first and last
+    // kSampleChunk bytes plus the exact size, which is ~constant-time regardless
+    // of length; the result is prefixed "s1:" so the two schemes never collide
+    // and the sampled ones are recognisable. A byte-identical file always yields
+    // the same fingerprint, so content matching (moves, re-adds, dedup) is
+    // preserved; only an edit confined to the middle of a huge file that keeps
+    // the head, tail, and size identical could go unnoticed — unreachable for
+    // real media. The thresholds are parameters so tests can exercise sampling
+    // without multi-megabyte fixtures.
+    static constexpr qint64 kFullHashMaxBytes = 32LL * 1024 * 1024;
+    static constexpr qint64 kSampleChunk = 4LL * 1024 * 1024;
+    static QString hashFile(const QString &path, qint64 fullHashMaxBytes = kFullHashMaxBytes,
+                            qint64 sampleChunk = kSampleChunk);
     QString photoHash(int photoId);                // stored hash for a photo, empty if none
     void applyContentTags(int photoId, const QString &hash); // link archived tags onto a photo
     void rememberContentTag(const QString &hash, int tagId); // archive a tag for this content
@@ -173,6 +187,11 @@ public:
     // bite-sized steps instead of all at once inside open().
     int unhashedPhotoCount();                             // photos still missing a hash
     QVector<QPair<int, QString>> photosMissingHash();     // (id, path) of those photos
+    // (id, path) of large files that still carry a whole-file hash — candidates to
+    // re-fingerprint with the sampled scheme. Small files keep their full hash
+    // unchanged by the new scheme, so they never appear here.
+    QVector<QPair<int, QString>> photosNeedingResample(qint64 fullHashMaxBytes = kFullHashMaxBytes);
+    bool hasResampleCandidates(qint64 fullHashMaxBytes = kFullHashMaxBytes); // cheap existence check
     void setPhotoHash(int photoId, const QString &hash);
     void setSidecarWrittenAt(int photoId, qint64 whenSecs); // last sidecar sync marker
     qint64 sidecarWrittenAt(int photoId);                   // the stored marker, -1 if NULL

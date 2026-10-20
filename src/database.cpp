@@ -1445,15 +1445,68 @@ void Database::deleteOrphanPhotos()
         recordOrphanIfUnreferenced(h);
 }
 
-QString Database::hashFile(const QString &path)
+QString Database::hashFile(const QString &path, qint64 fullHashMaxBytes, qint64 sampleChunk)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
         return {};
+    const qint64 size = f.size();
+
     QCryptographicHash h(QCryptographicHash::Sha256);
-    if (!h.addData(&f))
+    // Small enough to read whole (also the fallback when the two sample windows
+    // would overlap). Bare hex — byte-for-byte the original whole-file scheme, so
+    // these hashes are unchanged by this feature and need no migration.
+    if (size <= fullHashMaxBytes || size < 2 * sampleChunk) {
+        if (!h.addData(&f))
+            return {};
+        return QString::fromLatin1(h.result().toHex());
+    }
+
+    // Large file: fingerprint the first and last sampleChunk bytes plus the exact
+    // size — ~constant-time regardless of length. The tail disambiguates files
+    // that share a long common header (same camera/encoder); the size guards
+    // against head+tail collisions.
+    const QByteArray head = f.read(sampleChunk);
+    if (head.size() != sampleChunk)
         return {};
-    return QString::fromLatin1(h.result().toHex());
+    if (!f.seek(size - sampleChunk))
+        return {};
+    const QByteArray tail = f.read(sampleChunk);
+    if (tail.size() != sampleChunk)
+        return {};
+    h.addData(head);
+    h.addData(tail);
+    h.addData(QByteArray::number(size));
+    return QStringLiteral("s1:") + QString::fromLatin1(h.result().toHex());
+}
+
+QVector<QPair<int, QString>> Database::photosNeedingResample(qint64 fullHashMaxBytes)
+{
+    // Every large file still on a whole-file hash, regardless of folder state —
+    // one full pass converts the library so the scheme stays consistent across
+    // enabled, disabled, and orphaned rows alike.
+    QVector<QPair<int, QString>> todo;
+    QSqlQuery q(m_db);
+    q.setForwardOnly(true);
+    q.prepare(QStringLiteral(
+        "SELECT id, path FROM photos "
+        "WHERE size > ? AND hash IS NOT NULL AND hash != '' AND hash NOT LIKE 's1:%'"));
+    q.addBindValue(fullHashMaxBytes);
+    q.exec();
+    while (q.next())
+        todo.append({q.value(0).toInt(), q.value(1).toString()});
+    return todo;
+}
+
+bool Database::hasResampleCandidates(qint64 fullHashMaxBytes)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT 1 FROM photos "
+        "WHERE size > ? AND hash IS NOT NULL AND hash != '' AND hash NOT LIKE 's1:%' LIMIT 1"));
+    q.addBindValue(fullHashMaxBytes);
+    q.exec();
+    return q.next();
 }
 
 QString Database::photoHash(int photoId)

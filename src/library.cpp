@@ -159,6 +159,8 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::sidecarFlushFinished, this, &Library::onSidecarFlushFinished);
     connect(this, &Library::requestFacetTags, m_worker, &LibraryWorker::loadFacetTags);
     connect(m_worker, &LibraryWorker::facetTagsReady, this, &Library::onFacetTagsReady);
+    connect(this, &Library::requestResample, m_worker, &LibraryWorker::resampleHashes);
+    connect(m_worker, &LibraryWorker::resampleFinished, this, &Library::onResampleFinished);
     m_workerThread.start();
 
     // Build the filter sidebar off-thread now that the worker is wired up, so the
@@ -184,6 +186,15 @@ Library::Library(QObject *parent)
     // it when no folders are registered yet (nothing to scan).
     if (!m_db.loadFolders().isEmpty())
         rescan();
+
+    // One full pass to re-fingerprint large files with the cheaper sampled hash.
+    // Non-modal — it reports in the status bar and the library stays usable — and
+    // queued behind the migration/rescan on the worker. Once every large file is
+    // on the sampled scheme there are no candidates, so later launches skip it.
+    if (m_db.hasResampleCandidates()) {
+        beginBusy(tr("Optimizing media hashes…"), /*modal=*/false);
+        emit requestResample();
+    }
 }
 
 Library::~Library()
@@ -304,6 +315,17 @@ void Library::onRescanFinished(bool changed)
     endBusy(/*modal=*/false); // rescan reports in the status bar
     emit foldersChanged(); // also refreshes the remembered-removed stat (see ctor)
     scheduleSidecarFlush(); // flush anything queued before the rescan, if auto-write is on
+}
+
+void Library::onResampleFinished(bool changed)
+{
+    // Re-fingerprinting only rewrote hash values and rekeyed the (hidden) tag
+    // archive; a photo's live tags are untouched. It can shift duplicate grouping,
+    // though, so reload the photo model when something actually changed (the
+    // setPhotos guard no-ops it when the displayed set is identical).
+    if (changed)
+        m_photos->setPhotos(m_db.loadPhotos());
+    endBusy(/*modal=*/false); // reported in the status bar
 }
 
 void Library::onImplicationsExpanded()
