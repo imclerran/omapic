@@ -116,8 +116,19 @@ Library::Library(QObject *parent)
     // in "match all" mode.
     connect(m_tags, &TagModel::selectionChanged, this, &Library::refreshTags);
 
-    m_photos->setPhotos(m_db.loadPhotos());
-    refreshTags();
+    QVector<Photo> loaded = m_db.loadPhotos();
+    // Preset the timeline's date ordering (the first-launch default) before the
+    // model is populated, so the initial sort is a cheap integer compare. Without
+    // this the proxy's default name ordering runs a full QCollator sort on load
+    // that the timeline view immediately re-sorts away. applyViewFilter() (QML,
+    // on completion) still applies the actually-saved view; for a non-timeline
+    // saved view it re-sorts once — the same cost as before, just not doubled.
+    m_filtered->setSortByDate(true);
+    m_photos->setPhotos(std::move(loaded));
+    // Building the faceted tag sidebar is ~150ms on a large library, and nothing
+    // in the first frame needs it (no tag is selected yet). Populate it just after
+    // the window is up instead of blocking launch.
+    QMetaObject::invokeMethod(this, &Library::refreshTags, Qt::QueuedConnection);
     updateFolderRoots();
     updateAlbumTagIds();
     // Keep the folder-view's orphan detection in step as folders come and go.

@@ -13,6 +13,8 @@
 #include <QSqlQuery>
 #include <QVariant>
 
+#include <algorithm>
+
 namespace {
 // The schema version this build writes, stored in PRAGMA user_version. Bump this
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
@@ -939,11 +941,12 @@ QVector<Photo> Database::loadPhotos()
     // only active photos are loaded, disabling the folder holding the kept copy
     // promotes a still-visible duplicate to representative on the next reload.
     QSet<QString> seenHashes;
-    QSqlQuery q(QStringLiteral(
-                    "SELECT p.id, p.path, p.taken_at, p.hash FROM photos p WHERE %1 "
-                    "ORDER BY p.added_at, p.id")
-                    .arg(activeClause(QStringLiteral("p"))),
-                m_db);
+    QSqlQuery q(m_db);
+    q.setForwardOnly(true); // stream rows, don't cache — this is a hot launch query
+    q.exec(QStringLiteral(
+               "SELECT p.id, p.path, p.taken_at, p.hash FROM photos p WHERE %1 "
+               "ORDER BY p.added_at, p.id")
+               .arg(activeClause(QStringLiteral("p"))));
     while (q.next()) {
         Photo p;
         p.id = q.value(0).toInt();
@@ -954,22 +957,34 @@ QVector<Photo> Database::loadPhotos()
             p.isDuplicate = seenHashes.contains(hash); // an earlier copy was seen
             seenHashes.insert(hash);
         }
-        p.fileName = QFileInfo(p.path).fileName();
+        p.fileName = p.path.mid(p.path.lastIndexOf(QLatin1Char('/')) + 1);
         p.isVideo = isVideoPath(p.path);
         indexOf.insert(p.id, photos.size());
         photos.append(p);
     }
 
-    // tagIds carries every tag (including the hidden album/favorites tags, which
-    // the album filter and the star need); tagNames carries only the user-visible
-    // ones, so album membership never shows as a chip or inflates the tag badge.
-    QSqlQuery t(QStringLiteral(
-                    "SELECT pt.photo_id, t.id, t.name, "
-                    "  (t.category_id IS NOT NULL AND t.category_id IN "
-                    "   (SELECT id FROM tag_categories WHERE system = 1)) "
-                    "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id "
-                    "ORDER BY t.name"),
-                m_db);
+    // The hidden album/favorites tags live in a "system" category; they belong in
+    // tagIds (the album filter and the star need them) but not in tagNames (never
+    // a visible chip or badge). Resolve that set once here instead of testing a
+    // correlated subquery for every photo_tags row below.
+    QSet<int> systemTagIds;
+    {
+        QSqlQuery s(QStringLiteral(
+                        "SELECT id FROM tags WHERE category_id IN "
+                        "(SELECT id FROM tag_categories WHERE system = 1)"),
+                    m_db);
+        while (s.next())
+            systemTagIds.insert(s.value(0).toInt());
+    }
+
+    // Distribute tags onto photos. No ORDER BY: sorting every photo_tags row in
+    // SQL was the bulk of this query's cost; the chip order is restored by sorting
+    // each photo's (short) name list in memory afterwards.
+    QSqlQuery t(m_db);
+    t.setForwardOnly(true); // ~64k rows on a large library — stream, don't cache
+    t.exec(QStringLiteral(
+               "SELECT pt.photo_id, t.id, t.name "
+               "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id"));
     while (t.next()) {
         const int pid = t.value(0).toInt();
         auto it = indexOf.constFind(pid);
@@ -978,10 +993,17 @@ QVector<Photo> Database::loadPhotos()
         Photo &p = photos[it.value()];
         const int tagId = t.value(1).toInt();
         p.tagIds.insert(tagId);
-        if (!t.value(3).toBool())
+        if (!systemTagIds.contains(tagId))
             p.tagNames.append(t.value(2).toString());
         if (tagId == m_favoritesTagId)
             p.favorite = true;
+    }
+    for (Photo &p : photos) {
+        if (p.tagNames.size() > 1)
+            std::sort(p.tagNames.begin(), p.tagNames.end(),
+                      [](const QString &a, const QString &b) {
+                          return a.compare(b, Qt::CaseInsensitive) < 0;
+                      });
     }
 
     return photos;
