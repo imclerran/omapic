@@ -64,6 +64,7 @@ Window {
         requestActivate()
         keyCatcher.forceActiveFocus()
         pokeControls()
+        applyMedia() // (re)start the video even if it's the same one as last time
     }
 
     function go(i) {
@@ -74,6 +75,7 @@ Window {
         // shows the previous photo instead of flashing to black.
         holdImg.source = (!currentIsVideo && currentSource !== "") ? currentSource : ""
         index = (i % count + count) % count
+        applyMedia() // switch to the player for a video, or stop it for an image
     }
     function next() { go(index + 1) }
     function prev() { go(index - 1) }
@@ -254,10 +256,23 @@ Window {
     }
     MediaPlayer {
         id: player
-        source: root.currentIsVideo ? root.currentSource : ""
         videoOutput: videoOut
         audioOutput: AudioOutput { muted: root.muted }
-        onSourceChanged: if (root.currentIsVideo) play()
+        loops: MediaPlayer.Infinite // loop videos while the viewer is open
+    }
+    // Drive the player imperatively (like SlideshowView) rather than binding
+    // MediaPlayer.source. Called from openAt()/go() on every open and navigation —
+    // not just when currentSource changes — so re-opening the same video still
+    // plays. Clearing the source first forces a reload from the start even when
+    // the URL is unchanged (re-opening, or replaying after it reached the end);
+    // otherwise MediaPlayer ignores the no-op assignment and shows a black frame.
+    function applyMedia() {
+        player.stop()
+        player.source = ""
+        if (root.currentIsVideo) {
+            player.source = root.currentSource
+            player.play()
+        }
     }
 
     // Filename overlay (toggle with N).
