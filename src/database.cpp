@@ -13,6 +13,8 @@
 #include <QSqlQuery>
 #include <QVariant>
 
+#include <algorithm>
+
 namespace {
 // The schema version this build writes, stored in PRAGMA user_version. Bump this
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
@@ -939,11 +941,12 @@ QVector<Photo> Database::loadPhotos()
     // only active photos are loaded, disabling the folder holding the kept copy
     // promotes a still-visible duplicate to representative on the next reload.
     QSet<QString> seenHashes;
-    QSqlQuery q(QStringLiteral(
-                    "SELECT p.id, p.path, p.taken_at, p.hash FROM photos p WHERE %1 "
-                    "ORDER BY p.added_at, p.id")
-                    .arg(activeClause(QStringLiteral("p"))),
-                m_db);
+    QSqlQuery q(m_db);
+    q.setForwardOnly(true); // stream rows, don't cache — this is a hot launch query
+    q.exec(QStringLiteral(
+               "SELECT p.id, p.path, p.taken_at, p.hash FROM photos p WHERE %1 "
+               "ORDER BY p.added_at, p.id")
+               .arg(activeClause(QStringLiteral("p"))));
     while (q.next()) {
         Photo p;
         p.id = q.value(0).toInt();
@@ -954,34 +957,65 @@ QVector<Photo> Database::loadPhotos()
             p.isDuplicate = seenHashes.contains(hash); // an earlier copy was seen
             seenHashes.insert(hash);
         }
-        p.fileName = QFileInfo(p.path).fileName();
+        p.fileName = p.path.mid(p.path.lastIndexOf(QLatin1Char('/')) + 1);
         p.isVideo = isVideoPath(p.path);
         indexOf.insert(p.id, photos.size());
         photos.append(p);
     }
 
-    // tagIds carries every tag (including the hidden album/favorites tags, which
-    // the album filter and the star need); tagNames carries only the user-visible
-    // ones, so album membership never shows as a chip or inflates the tag badge.
-    QSqlQuery t(QStringLiteral(
-                    "SELECT pt.photo_id, t.id, t.name, "
-                    "  (t.category_id IS NOT NULL AND t.category_id IN "
-                    "   (SELECT id FROM tag_categories WHERE system = 1)) "
-                    "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id "
-                    "ORDER BY t.name"),
-                m_db);
+    // The hidden album/favorites tags live in a "system" category; they belong in
+    // tagIds (the album filter and the star need them) but not in tagNames (never
+    // a visible chip or badge). Resolve that set once here instead of testing a
+    // correlated subquery for every photo_tags row below.
+    QSet<int> systemTagIds;
+    {
+        QSqlQuery s(QStringLiteral(
+                        "SELECT id FROM tags WHERE category_id IN "
+                        "(SELECT id FROM tag_categories WHERE system = 1)"),
+                    m_db);
+        while (s.next())
+            systemTagIds.insert(s.value(0).toInt());
+    }
+
+    // Distribute tags onto photos. Aggregate into one row per photo — each tag
+    // packed as "id<RS>name" joined by <US> — so a ~10k-row result crosses the Qt
+    // SQL boundary instead of the ~64k-row raw join (the per-row value() marshalling
+    // was this query's cost). The pairing is self-contained per element, so the
+    // group's arbitrary order is harmless; the chip order is restored in memory.
+    constexpr QChar kUnit(u'\x1f');   // between tags
+    constexpr QChar kRecord(u'\x1e'); // between a tag's id and name
+    QSqlQuery t(m_db);
+    t.setForwardOnly(true);
+    t.exec(QStringLiteral(
+               "SELECT pt.photo_id, "
+               "  group_concat(t.id || char(30) || t.name, char(31)) "
+               "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id "
+               "GROUP BY pt.photo_id"));
     while (t.next()) {
         const int pid = t.value(0).toInt();
         auto it = indexOf.constFind(pid);
         if (it == indexOf.constEnd())
             continue;
         Photo &p = photos[it.value()];
-        const int tagId = t.value(1).toInt();
-        p.tagIds.insert(tagId);
-        if (!t.value(3).toBool())
-            p.tagNames.append(t.value(2).toString());
-        if (tagId == m_favoritesTagId)
-            p.favorite = true;
+        const QString packed = t.value(1).toString();
+        for (QStringView entry : QStringView(packed).split(kUnit)) {
+            const qsizetype sep = entry.indexOf(kRecord);
+            if (sep < 0)
+                continue;
+            const int tagId = entry.left(sep).toInt();
+            p.tagIds.insert(tagId);
+            if (!systemTagIds.contains(tagId))
+                p.tagNames.append(entry.mid(sep + 1).toString());
+            if (tagId == m_favoritesTagId)
+                p.favorite = true;
+        }
+    }
+    for (Photo &p : photos) {
+        if (p.tagNames.size() > 1)
+            std::sort(p.tagNames.begin(), p.tagNames.end(),
+                      [](const QString &a, const QString &b) {
+                          return a.compare(b, Qt::CaseInsensitive) < 0;
+                      });
     }
 
     return photos;
@@ -1123,6 +1157,42 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QSt
         readCategory(q, 3, info);
         tags.append(info);
     }
+    return tags;
+}
+
+QVector<TagInfo> Database::facetTags(const QString &folderScope, const QList<int> &selected,
+                                     bool matchAll)
+{
+    const QVector<TagInfo> active = activeTags(folderScope);
+    QHash<int, TagInfo> activeById;
+    for (const TagInfo &t : active)
+        activeById.insert(t.id, t);
+    // A selected tag whose photos are all outside the current folder scope won't be
+    // in `active`; pull it from the unscoped active set so it stays deselectable.
+    if (!folderScope.isEmpty() && !selected.isEmpty()) {
+        for (const TagInfo &t : activeTags())
+            if (!activeById.contains(t.id))
+                activeById.insert(t.id, t);
+    }
+
+    QVector<TagInfo> tags =
+        (matchAll && !selected.isEmpty()) ? coOccurringTags(selected, folderScope) : active;
+
+    // Keep a selected tag visible even once it no longer applies to any active
+    // photo, so an incompatible match-all pick stays deselectable (count 0).
+    QSet<int> have;
+    for (const TagInfo &t : tags)
+        have.insert(t.id);
+    for (int id : selected) {
+        if (!have.contains(id) && activeById.contains(id)) {
+            TagInfo t = activeById.value(id); // keeps the category for coloring
+            t.count = 0;
+            tags.append(t);
+        }
+    }
+    std::sort(tags.begin(), tags.end(), [](const TagInfo &a, const TagInfo &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
     return tags;
 }
 

@@ -32,9 +32,13 @@ public slots:
     void addTagToPhotos(const QList<int> &photoIds, const QString &name);
     void removeTagFromPhotos(const QList<int> &photoIds, int tagId);
     void flushSidecars();                     // write queued photos' XMP sidecars
+    // Compute the filter-sidebar tag list off the GUI thread (the ~150ms query
+    // would otherwise freeze the window right after launch).
+    void loadFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
 
 signals:
     void progress(const QString &phase, int done, int total); // total <= 0 means indeterminate
+    void facetTagsReady(const QVector<TagInfo> &tags);
     void migrationFinished(bool changed); // changed == false when the backfill was a no-op
     void importFinished(const QString &root);
     void rescanFinished(bool changed); // changed == false when nothing displayable moved

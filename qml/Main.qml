@@ -955,8 +955,9 @@ ApplicationWindow {
         }
         if (srcs.length === 0)
             return
-        photoViewer.sources = srcs
-        photoViewer.openAt(Math.max(0, srcs.indexOf(startSrc)))
+        const v = win.ensurePhotoViewer()
+        v.sources = srcs
+        v.openAt(Math.max(0, srcs.indexOf(startSrc)))
     }
 
     // Enter in the grid/timeline: view the focused photo. (Folder view routes its
@@ -1078,8 +1079,9 @@ ApplicationWindow {
             startPos = Math.floor(Math.random() * srcs.length)
         }
 
-        slideshow.sources = srcs
-        slideshow.startAt(startPos, play)
+        const s = win.ensureSlideshow()
+        s.sources = srcs
+        s.startAt(startPos, play)
     }
 
     // Toggle image shuffle while the slideshow is running: reorder the upcoming
@@ -1089,15 +1091,19 @@ ApplicationWindow {
         if (slideshowBase.length === 0)
             return
 
-        const cur = slideshow.currentSource
+        // Only reachable while a slideshow is running, so it is already created.
+        const s = win.slideshow
+        if (!s)
+            return
+        const cur = s.currentSource
 
         if (slideshowFolderShuffleActive) {
             // Keep the folders in their current order (don't re-scramble them on an
             // image-shuffle toggle); only the within-folder order changes. The
             // current photo stays on screen at its new position.
             const order = orderByFolderShuffle(slideshowBase, slideshowShuffleActive,
-                                                "", folderSequence(slideshow.sources))
-            slideshow.setSources(order, Math.max(0, order.indexOf(cur)))
+                                                "", folderSequence(s.sources))
+            s.setSources(order, Math.max(0, order.indexOf(cur)))
             return
         }
 
@@ -1109,10 +1115,10 @@ ApplicationWindow {
                 list.unshift(cur)
             }
             shuffleTail(list, 0) // keep the current photo at the front
-            slideshow.setSources(list, 0)
+            s.setSources(list, 0)
         } else {
             const pos = Math.max(0, list.indexOf(cur))
-            slideshow.setSources(list, pos)
+            s.setSources(list, pos)
         }
     }
 
@@ -1884,57 +1890,79 @@ ApplicationWindow {
         }
     }
 
-    SlideshowView {
-        id: slideshow
-        intervalMs: appSettings.intervalMs
-        shuffle: win.slideshowShuffleActive
-        transitionMs: appSettings.fade ? 280 : 0
-        loop: appSettings.loop
-        // Gate the slideshow's theme/wallpaper menu items the same way the grid's
-        // photo menu is gated (SlideshowView has no Library reference of its own).
-        omarchyAvailable: library.omarchyAvailable
-        aetherAvailable: library.aetherAvailable
-        wallpaperAvailable: library.wallpaperAvailable
-        onToggleShuffleRequested: win.toggleSlideshowShuffle()
-        onToggleLoopRequested: appSettings.loop = !appSettings.loop
+    // Built lazily on first play — a full-screen Window with its own media
+    // pipeline, none of which is needed at launch. The property bindings below
+    // resolve against this same scope when the component is instantiated, so they
+    // stay reactive (shuffle/loop/interval track their sources as before).
+    property var slideshow: null
+    function ensureSlideshow() {
+        if (!win.slideshow)
+            win.slideshow = slideshowComponent.createObject(win)
+        return win.slideshow
+    }
+    Component {
+        id: slideshowComponent
+        SlideshowView {
+            intervalMs: appSettings.intervalMs
+            shuffle: win.slideshowShuffleActive
+            transitionMs: appSettings.fade ? 280 : 0
+            loop: appSettings.loop
+            // Gate the slideshow's theme/wallpaper menu items the same way the
+            // grid's photo menu is gated (SlideshowView has no Library reference).
+            omarchyAvailable: library.omarchyAvailable
+            aetherAvailable: library.aetherAvailable
+            wallpaperAvailable: library.wallpaperAvailable
+            onToggleShuffleRequested: win.toggleSlideshowShuffle()
+            onToggleLoopRequested: appSettings.loop = !appSettings.loop
 
-        // Theme actions from the slideshow's context menu. The Library lives here,
-        // and feedback goes to the slideshow's own toast (its window is on top).
-        onAddWallpaperRequested: (source) => slideshow.flashMessage(
-            library.addToThemeWallpapersUrl(source)
-                ? qsTr("Added to theme wallpapers")
-                : qsTr("Couldn't add to theme wallpapers"))
-        onEditInAetherRequested: (source) => {
-            // Editing opens Aether's GUI to switch to, so leave the fullscreen
-            // slideshow on success; stay and report if it couldn't launch.
-            if (library.editThemeInAetherUrl(source))
-                slideshow.stop()
-            else
-                slideshow.flashMessage(qsTr("Couldn't launch Aether"))
+            // Theme actions from the slideshow's context menu. The Library lives
+            // here, and feedback goes to the slideshow's own toast (on top).
+            onAddWallpaperRequested: (source) => flashMessage(
+                library.addToThemeWallpapersUrl(source)
+                    ? qsTr("Added to theme wallpapers")
+                    : qsTr("Couldn't add to theme wallpapers"))
+            onEditInAetherRequested: (source) => {
+                // Editing opens Aether's GUI to switch to, so leave the fullscreen
+                // slideshow on success; stay and report if it couldn't launch.
+                if (library.editThemeInAetherUrl(source))
+                    stop()
+                else
+                    flashMessage(qsTr("Couldn't launch Aether"))
+            }
+            onSetAetherThemeRequested: (source) => {
+                if (!library.setAetherThemeUrl(source))
+                    flashMessage(qsTr("Couldn't launch Aether"))
+            }
+            onSetAsWallpaperRequested: (source) => flashMessage(
+                library.setAsWallpaperUrl(source)
+                    ? qsTr("Set as wallpaper")
+                    : qsTr("Couldn't set the wallpaper"))
         }
-        onSetAetherThemeRequested: (source) => {
-            if (!library.setAetherThemeUrl(source))
-                slideshow.flashMessage(qsTr("Couldn't launch Aether"))
-        }
-        onSetAsWallpaperRequested: (source) => slideshow.flashMessage(
-            library.setAsWallpaperUrl(source)
-                ? qsTr("Set as wallpaper")
-                : qsTr("Couldn't set the wallpaper"))
     }
 
     // Single-item viewer (fit/pan/zoom), the Enter / double-click "view" action.
     // Full screen here so it reads like the slideshow it replaces; its own "start
-    // slideshow" hands the current set to the SlideshowView above.
-    PhotoViewer {
-        id: photoViewer
-        preferredVisibility: Window.FullScreen
-        onSlideshowRequested: {
-            photoViewer.visibility = Window.Hidden
-            win.playSlideshow(photoViewer.sources.slice(), photoViewer.currentSource, true, true)
-        }
-        onCloseRequested: {
-            photoViewer.visibility = Window.Hidden
-            win.focusGalleryView()
+    // slideshow" hands the current set to the SlideshowView above. Built lazily on
+    // first open — it's a full-screen Window with a media backend, ~nothing of
+    // which is needed at launch.
+    property var photoViewer: null
+    function ensurePhotoViewer() {
+        if (!win.photoViewer)
+            win.photoViewer = photoViewerComponent.createObject(win)
+        return win.photoViewer
+    }
+    Component {
+        id: photoViewerComponent
+        PhotoViewer {
+            preferredVisibility: Window.FullScreen
+            onSlideshowRequested: {
+                visibility = Window.Hidden
+                win.playSlideshow(sources.slice(), currentSource, true, true)
+            }
+            onCloseRequested: {
+                visibility = Window.Hidden
+                win.focusGalleryView()
+            }
         }
     }
 

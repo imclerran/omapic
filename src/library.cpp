@@ -116,8 +116,17 @@ Library::Library(QObject *parent)
     // in "match all" mode.
     connect(m_tags, &TagModel::selectionChanged, this, &Library::refreshTags);
 
-    m_photos->setPhotos(m_db.loadPhotos());
-    refreshTags();
+    QVector<Photo> loaded = m_db.loadPhotos();
+    // Preset the timeline's date ordering (the first-launch default) before the
+    // model is populated, so the initial sort is a cheap integer compare. Without
+    // this the proxy's default name ordering runs a full QCollator sort on load
+    // that the timeline view immediately re-sorts away. applyViewFilter() (QML,
+    // on completion) still applies the actually-saved view; for a non-timeline
+    // saved view it re-sorts once — the same cost as before, just not doubled.
+    m_filtered->setSortByDate(true);
+    m_photos->setPhotos(std::move(loaded));
+    // The tag sidebar is built asynchronously on the worker (see below), so the
+    // window appears and stays responsive instead of stalling on its ~150ms query.
     updateFolderRoots();
     updateAlbumTagIds();
     // Keep the folder-view's orphan detection in step as folders come and go.
@@ -129,6 +138,7 @@ Library::Library(QObject *parent)
 
     // Hashing runs on a worker thread so the window stays responsive. The worker
     // owns its own DB connection; we only touch the models here on the GUI thread.
+    qRegisterMetaType<QVector<TagInfo>>(); // crosses the thread boundary below
     m_worker = new LibraryWorker(dbPath);
     m_worker->moveToThread(&m_workerThread);
     connect(&m_workerThread, &QThread::started, m_worker, &LibraryWorker::initialize);
@@ -147,7 +157,13 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     connect(this, &Library::requestSidecarFlush, m_worker, &LibraryWorker::flushSidecars);
     connect(m_worker, &LibraryWorker::sidecarFlushFinished, this, &Library::onSidecarFlushFinished);
+    connect(this, &Library::requestFacetTags, m_worker, &LibraryWorker::loadFacetTags);
+    connect(m_worker, &LibraryWorker::facetTagsReady, this, &Library::onFacetTagsReady);
     m_workerThread.start();
+
+    // Build the filter sidebar off-thread now that the worker is wired up, so the
+    // first frame paints without waiting on it.
+    refreshTagsAsync();
 
     // Debounced auto-write: a burst of tag edits coalesces into one flush.
     m_sidecarDebounce = new QTimer(this);
@@ -1571,57 +1587,37 @@ void Library::setTagFolderScope(const QString &path)
 void Library::refreshTags()
 {
     // The filter sidebar shows only tags relevant to the active (shown) set, with
-    // counts over that set; tags touching only hidden folders drop out. Unused
-    // tags still live in the DB and appear in the tag manager.
-    //
-    // In "match all" mode with tags already selected, narrow further to tags that
-    // co-occur on the currently-matching photos (faceted drill-down), so chips
-    // that could only ever yield an empty result disappear.
-    const QList<int> sel = m_tags->selectedTagIds();
-    // In folder view the chips are scoped to the current folder subtree.
-    const QVector<TagInfo> active = m_db.activeTags(m_tagFolderScope);
-    QHash<int, TagInfo> activeById;
-    for (const TagInfo &t : active)
-        activeById.insert(t.id, t);
-    // A selected tag whose photos are all outside the current folder scope won't
-    // be in `active`; pull it from the unscoped active set so it stays visible
-    // (and deselectable) rather than vanishing from under the selection.
-    if (!m_tagFolderScope.isEmpty() && !sel.isEmpty()) {
-        for (const TagInfo &t : m_db.activeTags())
-            if (!activeById.contains(t.id))
-                activeById.insert(t.id, t);
-    }
+    // counts over that set; tags touching only hidden folders drop out. In "match
+    // all" mode with tags already selected, it narrows further to co-occurring
+    // tags (faceted drill-down). Database::facetTags does all of that; apply it
+    // here on the GUI thread.
+    applyFacetTags(m_db.facetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll));
+}
 
-    QVector<TagInfo> tags =
-        (m_matchAll && !sel.isEmpty()) ? m_db.coOccurringTags(sel, m_tagFolderScope) : active;
+void Library::refreshTagsAsync()
+{
+    // Same result as refreshTags(), but the ~150ms query runs on the worker so it
+    // never freezes the window — used at launch, where a synchronous build would
+    // stall the first interaction.
+    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll);
+}
 
-    // Keep a selected tag visible only while it still applies to some active
-    // photo. This keeps an incompatible match-all pick deselectable, but lets a
-    // tag whose photos all left the active set (e.g. its folder was disabled) be
-    // pruned by setTags, which drops it from the selection and the filter.
-    QSet<int> have;
-    for (const TagInfo &t : tags)
-        have.insert(t.id);
-    for (int id : sel) {
-        if (!have.contains(id) && activeById.contains(id)) {
-            TagInfo t = activeById.value(id); // keeps the category for coloring
-            t.count = 0;
-            tags.append(t);
-        }
-    }
-    std::sort(tags.begin(), tags.end(), [](const TagInfo &a, const TagInfo &b) {
-        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
-    });
+void Library::onFacetTagsReady(const QVector<TagInfo> &tags)
+{
+    applyFacetTags(tags);
+}
 
+void Library::applyFacetTags(const QVector<TagInfo> &tags)
+{
+    // setTags drops any selected tag no longer in the list, so an incompatible
+    // match-all pick is deselected once it leaves the active set.
     m_tags->setTags(tags);
     emit tagsChanged();
     // Category and implication visibility in the tag manager depend on the same
     // active set (a category is hidden once all its tags leave the active folders;
-    // an association is hidden once either of its tags does), so refresh both in
-    // lockstep with the tag list.
+    // an association once either of its tags does), so refresh both in lockstep.
     emit categoriesChanged();
     emit implicationsChanged();
-    // Album tiles count only active photos (and honor the tag filter), so refresh
-    // them in lockstep too.
+    // Album tiles count only active photos (and honor the tag filter), too.
     emit albumsChanged();
 }

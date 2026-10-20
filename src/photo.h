@@ -6,6 +6,7 @@
 
 #include <QFileInfo>
 #include <QList>
+#include <QMetaType>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -18,7 +19,13 @@ inline bool isVideoPath(const QString &path)
         QStringLiteral("mp4"), QStringLiteral("m4v"), QStringLiteral("webm"),
         QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("avi"),
     };
-    return kVideoSuffixes.contains(QFileInfo(path).suffix().toLower());
+    // Extract the suffix directly instead of constructing a QFileInfo per call —
+    // this runs for every photo on load. A dot at or before the last '/' (or
+    // none) means no extension, matching QFileInfo::suffix for dotfiles.
+    const int dot = path.lastIndexOf(QLatin1Char('.'));
+    if (dot <= path.lastIndexOf(QLatin1Char('/')) + 1)
+        return false;
+    return kVideoSuffixes.contains(path.mid(dot + 1).toLower());
 }
 
 struct Photo {
@@ -130,3 +137,6 @@ struct PhotoRef {
     qint64 size = -1;
     qint64 sidecarWrittenAt = -1;
 };
+
+// Passed across the worker↔GUI thread boundary by the async tag-sidebar refresh.
+Q_DECLARE_METATYPE(TagInfo)

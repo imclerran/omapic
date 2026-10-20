@@ -297,6 +297,7 @@ signals:
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
+    void requestFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
 
 private:
     // How to set the desktop wallpaper, resolved once at startup. Omarchy's own
@@ -318,7 +319,10 @@ private:
     static WallpaperBackend detectWallpaperBackend(bool omarchyAvailable);
 
     void applyTags(int photoId);
-    void refreshTags();
+    void refreshTags();          // synchronous: query + apply on the GUI thread
+    void refreshTagsAsync();     // query on the worker, apply via onFacetTagsReady
+    void applyFacetTags(const QVector<TagInfo> &tags); // set the model + notify (GUI)
+    void onFacetTagsReady(const QVector<TagInfo> &tags);
     // Keep the filter model's list of registered folder roots in step with the
     // DB, so the folder view can tell orphan photos from foldered ones.
     void updateFolderRoots();
