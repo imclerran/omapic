@@ -44,6 +44,11 @@ public:
     // Tags on the active photos that carry ALL of `selected` (faceted drill-down),
     // counted over that matching set. Used for the "match all" filter sidebar.
     QVector<TagInfo> coOccurringTags(const QList<int> &selected, const QString &folderScope = {});
+    // The finished filter-sidebar tag list: the active (or match-all co-occurring)
+    // set, with any still-selected tag kept visible, sorted by name. Wraps the two
+    // queries above so the same computation can run on the GUI or the worker thread
+    // (the latter keeps the ~150ms DB work off the launch path).
+    QVector<TagInfo> facetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
     QStringList allTagNames();           // tag names relevant to the active set, for autocomplete
     QVector<FolderInfo> loadFolders(); // registered library folders, with photo counts + enabled
 

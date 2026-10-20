@@ -39,6 +39,12 @@ void LibraryWorker::initialize()
     m_db.open(m_dbPath, QStringLiteral("omapic_worker"));
 }
 
+void LibraryWorker::loadFacetTags(const QString &folderScope, const QList<int> &selected,
+                                  bool matchAll)
+{
+    emit facetTagsReady(m_db.facetTags(folderScope, selected, matchAll));
+}
+
 void LibraryWorker::runMigration()
 {
     const QVector<QPair<int, QString>> todo = m_db.photosMissingHash();

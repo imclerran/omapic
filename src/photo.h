@@ -6,6 +6,7 @@
 
 #include <QFileInfo>
 #include <QList>
+#include <QMetaType>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -136,3 +137,6 @@ struct PhotoRef {
     qint64 size = -1;
     qint64 sidecarWrittenAt = -1;
 };
+
+// Passed across the worker↔GUI thread boundary by the async tag-sidebar refresh.
+Q_DECLARE_METATYPE(TagInfo)

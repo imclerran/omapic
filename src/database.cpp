@@ -1160,6 +1160,42 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QSt
     return tags;
 }
 
+QVector<TagInfo> Database::facetTags(const QString &folderScope, const QList<int> &selected,
+                                     bool matchAll)
+{
+    const QVector<TagInfo> active = activeTags(folderScope);
+    QHash<int, TagInfo> activeById;
+    for (const TagInfo &t : active)
+        activeById.insert(t.id, t);
+    // A selected tag whose photos are all outside the current folder scope won't be
+    // in `active`; pull it from the unscoped active set so it stays deselectable.
+    if (!folderScope.isEmpty() && !selected.isEmpty()) {
+        for (const TagInfo &t : activeTags())
+            if (!activeById.contains(t.id))
+                activeById.insert(t.id, t);
+    }
+
+    QVector<TagInfo> tags =
+        (matchAll && !selected.isEmpty()) ? coOccurringTags(selected, folderScope) : active;
+
+    // Keep a selected tag visible even once it no longer applies to any active
+    // photo, so an incompatible match-all pick stays deselectable (count 0).
+    QSet<int> have;
+    for (const TagInfo &t : tags)
+        have.insert(t.id);
+    for (int id : selected) {
+        if (!have.contains(id) && activeById.contains(id)) {
+            TagInfo t = activeById.value(id); // keeps the category for coloring
+            t.count = 0;
+            tags.append(t);
+        }
+    }
+    std::sort(tags.begin(), tags.end(), [](const TagInfo &a, const TagInfo &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return tags;
+}
+
 QVector<FolderInfo> Database::loadFolders()
 {
     QVector<FolderInfo> folders;
