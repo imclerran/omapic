@@ -977,26 +977,38 @@ QVector<Photo> Database::loadPhotos()
             systemTagIds.insert(s.value(0).toInt());
     }
 
-    // Distribute tags onto photos. No ORDER BY: sorting every photo_tags row in
-    // SQL was the bulk of this query's cost; the chip order is restored by sorting
-    // each photo's (short) name list in memory afterwards.
+    // Distribute tags onto photos. Aggregate into one row per photo — each tag
+    // packed as "id<RS>name" joined by <US> — so a ~10k-row result crosses the Qt
+    // SQL boundary instead of the ~64k-row raw join (the per-row value() marshalling
+    // was this query's cost). The pairing is self-contained per element, so the
+    // group's arbitrary order is harmless; the chip order is restored in memory.
+    constexpr QChar kUnit(u'\x1f');   // between tags
+    constexpr QChar kRecord(u'\x1e'); // between a tag's id and name
     QSqlQuery t(m_db);
-    t.setForwardOnly(true); // ~64k rows on a large library — stream, don't cache
+    t.setForwardOnly(true);
     t.exec(QStringLiteral(
-               "SELECT pt.photo_id, t.id, t.name "
-               "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id"));
+               "SELECT pt.photo_id, "
+               "  group_concat(t.id || char(30) || t.name, char(31)) "
+               "FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id "
+               "GROUP BY pt.photo_id"));
     while (t.next()) {
         const int pid = t.value(0).toInt();
         auto it = indexOf.constFind(pid);
         if (it == indexOf.constEnd())
             continue;
         Photo &p = photos[it.value()];
-        const int tagId = t.value(1).toInt();
-        p.tagIds.insert(tagId);
-        if (!systemTagIds.contains(tagId))
-            p.tagNames.append(t.value(2).toString());
-        if (tagId == m_favoritesTagId)
-            p.favorite = true;
+        const QString packed = t.value(1).toString();
+        for (QStringView entry : QStringView(packed).split(kUnit)) {
+            const qsizetype sep = entry.indexOf(kRecord);
+            if (sep < 0)
+                continue;
+            const int tagId = entry.left(sep).toInt();
+            p.tagIds.insert(tagId);
+            if (!systemTagIds.contains(tagId))
+                p.tagNames.append(entry.mid(sep + 1).toString());
+            if (tagId == m_favoritesTagId)
+                p.favorite = true;
+        }
     }
     for (Photo &p : photos) {
         if (p.tagNames.size() > 1)
