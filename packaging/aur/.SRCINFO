@@ -1,6 +1,6 @@
 pkgbase = omapic
 	pkgdesc = A photo gallery with tagging, tag filtering, and slideshows
-	pkgver = 0.4.0
+	pkgver = 0.5.0
 	pkgrel = 1
 	url = https://github.com/imclerran/omapic
 	arch = x86_64
@@ -20,7 +20,7 @@ pkgbase = omapic
 	depends = libheif
 	depends = libavif
 	optdepends = aether: generate and edit Omarchy themes from a photo
-	source = omapic-0.4.0.tar.gz::https://github.com/imclerran/omapic/archive/refs/tags/v0.4.0.tar.gz
+	source = omapic-0.5.0.tar.gz::https://github.com/imclerran/omapic/archive/refs/tags/v0.5.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = omapic
