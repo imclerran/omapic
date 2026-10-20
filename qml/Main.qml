@@ -1239,6 +1239,10 @@ ApplicationWindow {
         // on the window (the Loader is this dialog's parent). Empty while inactive.
         anchors.fill: parent
         active: false
+        // The startup re-apply that beats the gtk3 platform palette (see main.cpp)
+        // runs once on the main window's first frame; a dialog built lazily after
+        // that misses it and inherits the stale light palette. Re-apply on load.
+        onLoaded: omarchyTheme.reapplyForced()
         sourceComponent: SettingsDialog {
             library: library
             accent: win.accent
@@ -1266,6 +1270,7 @@ ApplicationWindow {
         id: tagManagerLoader
         anchors.fill: parent
         active: false
+        onLoaded: omarchyTheme.reapplyForced() // see settingsLoader
         sourceComponent: TagManager {
             library: library
             accent: win.accent
