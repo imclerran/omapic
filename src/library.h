@@ -298,6 +298,7 @@ signals:
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
     void requestFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
+    void requestResample();
 
 private:
     // How to set the desktop wallpaper, resolved once at startup. Omarchy's own
@@ -340,6 +341,7 @@ private:
     void onMigrationFinished(bool changed);
     void onImportFinished(const QString &root);
     void onRescanFinished(bool changed);
+    void onResampleFinished(bool changed);
     void onImplicationsExpanded();
     void onTagJobFinished();
     void onSidecarFlushFinished(int written, int failed);
