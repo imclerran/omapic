@@ -13,6 +13,21 @@ Rectangle {
 
     property var tagModel
     property color accent: "#4a90d9"
+    // Tag aliases ({aliasName, tagId, tagName, …}), so the filter matches a tag by
+    // its aliases too — typing an alias reveals its canonical chip. Bound from Main.
+    property var aliases: []
+
+    // True when `foldedQuery` matches any alias of the tag named `tagName`.
+    function aliasMatches(tagName, foldedQuery) {
+        const al = root.aliases
+        const tn = TextMatch.fold(tagName)
+        for (let i = 0; i < al.length; ++i) {
+            if (TextMatch.fold(al[i].tagName) === tn
+                    && TextMatch.fold(al[i].aliasName).indexOf(foldedQuery) !== -1)
+                return true
+        }
+        return false
+    }
     // Exposed so Main can drive the filter / faceting from these controls.
     property alias matchAll: matchAllSwitch.checked
     property int tagPresence: 0 // 0 all, 1 tagged only, 2 untagged only
@@ -47,7 +62,7 @@ Rectangle {
         let c = 0
         for (let i = 0; i < rep.count; ++i) {
             const it = rep.itemAt(i)
-            if (it && TextMatch.fold(it.name).indexOf(s) !== -1)
+            if (it && (TextMatch.fold(it.name).indexOf(s) !== -1 || root.aliasMatches(it.name, s)))
                 ++c
         }
         return c
@@ -125,6 +140,7 @@ Rectangle {
                             visible: {
                                 const q = TextMatch.fold(searchField.text.trim())
                                 return q === "" || TextMatch.fold(chip.name).indexOf(q) !== -1
+                                       || root.aliasMatches(chip.name, q)
                             }
 
                             // Categorized tags take their category's color on the

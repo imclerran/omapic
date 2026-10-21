@@ -33,6 +33,9 @@ class Library : public QObject {
     // Tag implications ("if this tag, then that tag"): each entry carries both
     // tags' {id, name, colorSlot} for the manager's chips.
     Q_PROPERTY(QVariantList tagImplications READ tagImplications NOTIFY implicationsChanged)
+    // Tag aliases: each entry {aliasName, tagId, tagName, colorSlot} of the
+    // canonical tag, ordered by canonical name then alias, for the manager's list.
+    Q_PROPERTY(QVariantList tagAliases READ tagAliases NOTIFY aliasesChanged)
     // Albums for the album view: each entry {id, name, favorite, count, thumbs},
     // Favorites first. Counts/covers honor the current tag filter, so an album
     // with no matching photos drops out — just like folders.
@@ -100,6 +103,7 @@ public:
     QVariantList allTags() const;
     QVariantList categories() const;
     QVariantList tagImplications() const;
+    QVariantList tagAliases() const;
     QVariantList albums() const;
     QVariantList allAlbums() const;
     QVariantList folders() const;
@@ -200,6 +204,15 @@ public:
     // on the spot, so a rule can be defined before the tag exists anywhere.
     Q_INVOKABLE int ensureTag(const QString &name);
 
+    // --- Tag aliases ("this name means that tag") ---
+    // Create an alias `name` for the canonical tag `canonicalTagId`. When `name` is
+    // itself an existing tag it is merged into the canonical one on the worker
+    // thread (the UI confirms first, since a merge can't be undone); otherwise the
+    // alias row is written directly. Returns false when the request is invalid (a
+    // blank name, the canonical tag's own name, or a name already used by an alias).
+    Q_INVOKABLE bool createTagAlias(const QString &name, int canonicalTagId);
+    Q_INVOKABLE void removeTagAlias(const QString &name);
+
     // --- Albums & favorites ---
     // Create an album and add the given photos to it in one step. Returns the
     // album id, or -1 when the name is blank or already used by a non-album tag.
@@ -278,6 +291,7 @@ signals:
     void tagsChanged();
     void categoriesChanged();
     void implicationsChanged();
+    void aliasesChanged();
     void albumsChanged();
     void busyChanged();
     void progressChanged();
@@ -294,6 +308,7 @@ signals:
     void requestImport(const QString &root);
     void requestRescan(int retentionDays);
     void requestImplicationMigration();
+    void requestCreateAlias(const QString &name, int tagId);
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
@@ -323,6 +338,10 @@ private:
     void refreshTags();          // synchronous: query + apply on the GUI thread
     void refreshTagsAsync();     // query on the worker, apply via onFacetTagsReady
     void applyFacetTags(const QVector<TagInfo> &tags); // set the model + notify (GUI)
+    // Push each tag's alias names into the photo model, so a gallery search for an
+    // alias finds photos carrying its canonical tag. Called at startup and whenever
+    // the alias set changes.
+    void updateSearchAliases();
     void onFacetTagsReady(const QVector<TagInfo> &tags);
     // Keep the filter model's list of registered folder roots in step with the
     // DB, so the folder view can tell orphan photos from foldered ones.
@@ -343,6 +362,7 @@ private:
     void onRescanFinished(bool changed);
     void onResampleFinished(bool changed);
     void onImplicationsExpanded();
+    void onAliasCreated();
     void onTagJobFinished();
     void onSidecarFlushFinished(int written, int failed);
     // If auto-write is on, (re)start the debounce so a burst of edits coalesces

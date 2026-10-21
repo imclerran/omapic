@@ -1687,6 +1687,7 @@ ApplicationWindow {
                 SplitView.fillHeight: true
                 SplitView.minimumHeight: 120
                 tagModel: library.tags
+                aliases: library.tagAliases // match a tag by its aliases in the filter
                 accent: win.accent
                 // Keep the library's filter mode in sync so the sidebar can
                 // narrow its tags to the current match set when this is on.
@@ -2189,6 +2190,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 tagModel: library.tags
+                aliases: library.tagAliases // match a tag by its aliases in the search
                 accent: win.accent
             }
         }

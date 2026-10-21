@@ -31,6 +31,7 @@ private slots:
     void matchAllRequiresEveryTag();
     void matchAnyAcceptsOneTag();
     void searchMatchesNameAndTagFolded();
+    void searchMatchesTagAliases();
     void tagPresenceFilter();
     void dedupeHidesDuplicates();
     void naturalSortOrder();
@@ -171,6 +172,31 @@ void TestPhotoFilterModel::searchMatchesNameAndTagFolded()
     // Clearing the search shows everything again.
     m_proxy->setSearchText(QString());
     QCOMPARE(m_proxy->count(), 3);
+}
+
+void TestPhotoFilterModel::searchMatchesTagAliases()
+{
+    const int forest = 1;
+    QVector<Photo> photos{
+        makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"),
+                  {forest}, {QStringLiteral("forest")}),
+        makePhoto(11, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg")),
+    };
+    m_source->setPhotos(photos);
+    m_source->setTagAliases({{forest, {QStringLiteral("woods"), QStringLiteral("forêts")}}});
+
+    // Searching an alias finds the photo carrying its canonical tag.
+    m_proxy->setSearchText(QStringLiteral("woods"));
+    QCOMPARE(proxyIds(), QList<int>{10});
+
+    // Accent-/case-folded like tag names ("forets" finds the "forêts" alias).
+    m_proxy->setSearchText(QStringLiteral("FORETS"));
+    QCOMPARE(proxyIds(), QList<int>{10});
+
+    // Dropping the aliases stops the match.
+    m_source->setTagAliases({});
+    m_proxy->setSearchText(QStringLiteral("woods"));
+    QCOMPARE(m_proxy->count(), 0);
 }
 
 void TestPhotoFilterModel::tagPresenceFilter()

@@ -9,25 +9,35 @@
 
 #include "textfold.h"
 
-namespace {
-// Fold the file name and every tag name into one blob so the gallery search can
-// substring-match it directly, instead of re-folding each field per keystroke.
-// Pieces are joined by '\n' (never in a search term) so a match can't straddle
-// the file-name/tag boundary.
-QString buildSearchFold(const Photo &p)
+PhotoModel::PhotoModel(QObject *parent)
+    : QAbstractListModel(parent)
+{
+}
+
+// Fold the file name and every tag name — plus the aliases of those tags — into
+// one blob so the gallery search can substring-match it directly, instead of
+// re-folding each field per keystroke. Folding the aliases in means a search for
+// an alias finds photos carrying its canonical tag. Pieces are joined by '\n'
+// (never in a search term) so a match can't straddle a field boundary.
+QString PhotoModel::buildSearchFold(const Photo &p) const
 {
     QString blob = foldText(p.fileName);
     for (const QString &tag : p.tagNames) {
         blob += QLatin1Char('\n');
         blob += foldText(tag);
     }
+    if (!m_aliasesByTagId.isEmpty()) {
+        for (int tagId : p.tagIds) {
+            const auto it = m_aliasesByTagId.constFind(tagId);
+            if (it == m_aliasesByTagId.cend())
+                continue;
+            for (const QString &a : it.value()) {
+                blob += QLatin1Char('\n');
+                blob += foldText(a);
+            }
+        }
+    }
     return blob;
-}
-}
-
-PhotoModel::PhotoModel(QObject *parent)
-    : QAbstractListModel(parent)
-{
 }
 
 int PhotoModel::rowCount(const QModelIndex &parent) const
@@ -151,4 +161,16 @@ void PhotoModel::setTagsForId(int photoId, const QSet<int> &ids, const QStringLi
     p.searchFold = buildSearchFold(p); // tag names changed; refresh the search blob
     const QModelIndex idx = index(row, 0);
     emit dataChanged(idx, idx, {TagsRole, TagIdsRole, FavoriteRole, SearchFoldRole});
+}
+
+void PhotoModel::setTagAliases(const QHash<int, QStringList> &aliasesByTagId)
+{
+    if (m_aliasesByTagId == aliasesByTagId)
+        return;
+    m_aliasesByTagId = aliasesByTagId;
+    if (m_photos.isEmpty())
+        return;
+    for (int i = 0; i < m_photos.size(); ++i)
+        m_photos[i].searchFold = buildSearchFold(m_photos.at(i));
+    emit dataChanged(index(0, 0), index(m_photos.size() - 1, 0), {SearchFoldRole});
 }

@@ -138,6 +138,29 @@ public:
     // (handles chains; terminates on cycles). Returns rows added.
     int expandAllImplications();
 
+    // --- Tag aliases (schema v15+) ---
+    // An alias is an alternate name that resolves to a canonical tag, so typing or
+    // importing it applies the canonical tag instead of making a new one. Aliases
+    // are never themselves tags: they don't appear in any tag list, count, chip,
+    // smart album, implication, or sidecar export.
+    //
+    // resolveTagName is the single resolver every name entry point funnels through:
+    // it returns the alias's canonical tag id when `name` is an alias, else the
+    // tag's own id, else -1. ensureTag and the import path consult aliases too, so
+    // an alias never creates a tag.
+    int resolveTagName(const QString &name);
+    QVector<AliasInfo> loadAliases();       // every alias, ordered by canonical name then alias
+    bool aliasExists(const QString &name);  // case-insensitive: is `name` already an alias?
+    // Create an alias `name` -> canonical tag `tagId`. When `name` is also an
+    // existing tag, that tag is first merged into the canonical one (its photo,
+    // content, album, and implication links move over and dedupe, self-implications
+    // are dropped, and the tag row is deleted), so the alias is a true merge rather
+    // than a dangling redirect; the merged photos are queued for sidecar rewrite.
+    // Returns false when the name is blank, equals the canonical tag's own name, or
+    // is already an alias. Caller wraps the merge case in a transaction.
+    bool createAlias(const QString &name, int tagId);
+    void removeAlias(const QString &name);  // drop the alias row only; photos keep the canonical tag
+
     // --- Tag categories ---
     // All categories sorted by name. With activeOnly, drop categories whose tags
     // are all in hidden/removed folders (no tag applies to any active photo),
@@ -254,6 +277,14 @@ private:
     // tag: one not in a reserved (system) category. Used to keep album/favorites
     // tags out of every tag list, autocomplete, and the detail panel.
     QString nonSystemTagClause(const QString &alias) const;
+    // The canonical tag id an alias name maps to, -1 when `name` isn't an alias.
+    int aliasTarget(const QString &name);
+    // Fold one tag's links into another: move photo_tags / content_tags /
+    // smart_album_tags / tag_implications (both sides) from `fromTagId` to
+    // `intoTagId`, deduping on each table's primary key, drop any self-implication
+    // the move creates, then delete the emptied tag row. Shared by the '|'→'/'
+    // name migration and alias creation (both merge colliding tags the same way).
+    void mergeTagInto(int fromTagId, int intoTagId);
     // Resolve (creating if needed) the reserved Albums category and Favorites tag,
     // caching their ids. Idempotent; called at the end of open() on every open,
     // regardless of schema version, since the ids are per-instance in-memory.
@@ -285,6 +316,7 @@ private:
     void migrate_11_to_12(); // seed sidecar_dirty for never-synced tagged photos (additive)
     void migrate_12_to_13(); // replace '|' with '/' in tag/category names (non-additive)
     void migrate_13_to_14(); // clear videos' mtime dates so creation_time is re-read (additive)
+    void migrate_14_to_15(); // tag_aliases table (additive)
     // True when any tag or category name contains '|' (so the rename above would
     // actually change rows). Gates the pre-migration backup.
     bool namesContainPipe();

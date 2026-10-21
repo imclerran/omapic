@@ -7,6 +7,7 @@ A photo and video gallery for [Omarchy](https://omarchy.org), built around taggi
 - **Tags that stick** — tags follow the file's content, not its path, so they survive moves, renames, and even deleting and re-importing a folder.
 - **Color-coded tag categories** — group tags (people, places, events, …), with colors pulled from your active Omarchy theme.
 - **Tag rules** — "if *beach*, then also *vacation*." Set it once and it applies across your whole library, and to everything you tag from then on.
+- **Tag aliases** — teach a second name to mean an existing tag ("forests" → *forest*). Typing the alias anywhere — tagging, search, import — applies the canonical tag, and aliasing a name that's already a tag merges the two.
 - **Albums, Favorites, and Smart Albums** — star favorites, build albums by hand, or save a tag search as a smart album that keeps itself up to date.
 - **Drill into tags by folder** — pick a tag and the folder view narrows to just the folders that contain it.
 - **Forgiving search** — find tags without worrying about case or accents ("cafe" finds "café").
