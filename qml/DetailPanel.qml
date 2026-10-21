@@ -396,8 +396,9 @@ Rectangle {
                     // {name, colorSlot, categoryName} so rows can show the color.
                     const all = root.library.tagSuggestions()
                     const matches = []
-                    const seen = ({}) // folded names already in `matches`
-                    var exact = null
+                    const seen = ({}) // folded canonical name -> index in `matches`
+                    var exact = -1    // index of an exact (name or alias) match, to pre-highlight
+
                     for (var i = 0; i < all.length; ++i) {
                         // Exclude tags already applied (exact lower-cased name), but
                         // match the typed query accent-/case-folded so "cafe" finds
@@ -405,44 +406,39 @@ Rectangle {
                         if (applied.indexOf(all[i].name.toLowerCase()) !== -1)
                             continue
                         const ln = TextMatch.fold(all[i].name)
-                        if (ln === q)
-                            exact = all[i] // keep the exact typed match, surfaced below
-                        else if (ln.indexOf(q) !== -1 && matches.length < 8) {
+                        if (ln.indexOf(q) === -1)
+                            continue
+                        if (!(ln in seen) && matches.length < 8) {
+                            seen[ln] = matches.length
                             matches.push(all[i])
-                            seen[ln] = true
                         }
+                        if (ln === q && (ln in seen))
+                            exact = seen[ln]
                     }
-                    // A typed alias matches its canonical tag: the row shows the
-                    // canonical tag (like a direct match) and applies it on pick.
+                    // A typed alias resolves to its canonical tag: show the canonical
+                    // tag itself (same name/color/category), never a second row for a
+                    // tag already listed, and pre-highlight it on an exact alias.
                     const aliases = root.aliasList
-                    var exactAlias = null
                     for (var j = 0; j < aliases.length; ++j) {
                         const cn = aliases[j].tagName || ""
                         if (applied.indexOf(cn.toLowerCase()) !== -1)
                             continue // canonical already on the photo
                         const af = TextMatch.fold(aliases[j].aliasName)
+                        if (af.indexOf(q) === -1)
+                            continue
                         const cf = TextMatch.fold(cn)
-                        // Shown as the canonical tag itself — the alias just matches it.
-                        const hint = { name: cn, colorSlot: aliases[j].colorSlot, categoryName: "" }
-                        if (af === q) {
-                            if (!exact) exactAlias = hint
-                        } else if (af.indexOf(q) !== -1 && matches.length < 8 && !seen[cf]) {
-                            matches.push(hint)
-                            seen[cf] = true
+                        if (!(cf in seen) && matches.length < 8) {
+                            seen[cf] = matches.length
+                            matches.push({ name: cn, colorSlot: aliases[j].colorSlot,
+                                           categoryName: aliases[j].categoryName || "" })
                         }
+                        if (af === q && (cf in seen))
+                            exact = seen[cf]
                     }
-                    // When the text is an exact tag (or alias) name, keep it at the
-                    // top and pre-highlight it — as though the user had arrow-keyed to
-                    // it — so Enter accepts the real (canonically-cased) tag.
-                    if (exact) {
-                        matches.unshift(exact)
-                        if (matches.length > 8)
-                            matches.pop()
-                        highlighted = 0
-                    } else if (exactAlias) {
-                        matches.unshift(exactAlias)
-                        if (matches.length > 8)
-                            matches.pop()
+                    // Surface the exact match at the top, pre-highlighted — as though
+                    // the user had arrow-keyed to it — so Enter accepts the tag.
+                    if (exact >= 0) {
+                        matches.unshift(matches.splice(exact, 1)[0])
                         highlighted = 0
                     }
                     suggestions = matches

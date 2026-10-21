@@ -1804,7 +1804,7 @@ QVector<AliasInfo> Database::loadAliases()
 {
     QVector<AliasInfo> out;
     QSqlQuery q(QStringLiteral(
-                    "SELECT a.alias_name, t.id, t.name, c.color_slot "
+                    "SELECT a.alias_name, t.id, t.name, c.color_slot, c.name "
                     "FROM tag_aliases a "
                     "JOIN tags t ON t.id = a.tag_id "
                     "LEFT JOIN tag_categories c ON c.id = t.category_id "
@@ -1816,6 +1816,7 @@ QVector<AliasInfo> Database::loadAliases()
         info.tagId = q.value(1).toInt();
         info.tagName = q.value(2).toString();
         info.colorSlot = q.value(3).isNull() ? -1 : q.value(3).toInt();
+        info.categoryName = q.value(4).toString(); // empty when uncategorized
         out.append(info);
     }
     return out;

@@ -52,46 +52,42 @@ Item {
             highlighted = -1
             if (q === "") { suggestions = []; pop.close(); return }
             const out = []
-            const seen = ({}) // folded names already in `out`, to skip alias dupes
-            let exact = null
+            const seen = ({}) // folded canonical name -> index in `out`, deduped
+            let exact = -1    // index of an exact (name or alias) match, to pre-highlight
+
+            // Tags whose name contains the query (folded, so "cafe" finds "café").
             for (let i = 0; i < root.tags.length; ++i) {
-                // Fold the candidate too, so unaccented typing finds accented
-                // tags ("cafe" -> "café") and casing is ignored.
                 const ln = TextMatch.fold(root.tags[i].name)
-                if (ln === q)
-                    exact = root.tags[i] // keep the exact match, surfaced below
-                else if (ln.indexOf(q) !== -1 && out.length < 8) {
+                if (ln.indexOf(q) === -1)
+                    continue
+                if (!(ln in seen) && out.length < 8) {
+                    seen[ln] = out.length
                     out.push(root.tags[i])
-                    seen[ln] = true
                 }
+                if (ln === q && (ln in seen))
+                    exact = seen[ln]
             }
-            // A typed alias matches its canonical tag: the row shows the canonical
-            // tag (indistinguishable from a direct match) and fills it on pick. An
-            // exact alias match is surfaced + pre-highlighted just like an exact tag.
-            let exactAlias = null
+            // A typed alias resolves to its canonical tag. Show the canonical tag
+            // itself (same name/color/category) — never a second row for a tag
+            // already listed, and pre-highlight it when the alias is an exact match.
             for (let i = 0; i < root.aliases.length; ++i) {
                 const a = root.aliases[i]
                 const af = TextMatch.fold(a.aliasName)
+                if (af.indexOf(q) === -1)
+                    continue
                 const cn = TextMatch.fold(a.tagName)
-                // Shown as the canonical tag itself — the alias just matches it.
-                const hint = { name: a.tagName, colorSlot: a.colorSlot, categoryName: "" }
-                if (af === q) {
-                    if (!exact) exactAlias = hint
-                } else if (af.indexOf(q) !== -1 && out.length < 8 && !seen[cn]) {
-                    out.push(hint)
-                    seen[cn] = true
+                if (!(cn in seen) && out.length < 8) {
+                    seen[cn] = out.length
+                    out.push({ name: a.tagName, colorSlot: a.colorSlot, categoryName: a.categoryName })
                 }
+                if (af === q && (cn in seen))
+                    exact = seen[cn]
             }
-            // When the text is an exact tag (or alias) name, keep that at the top
-            // and pre-highlight it — as though the user had arrow-keyed to it — so
-            // Enter accepts the real (canonically-cased) tag.
-            if (exact) {
-                out.unshift(exact)
-                if (out.length > 8) out.pop()
-                highlighted = 0
-            } else if (exactAlias) {
-                out.unshift(exactAlias)
-                if (out.length > 8) out.pop()
+
+            // Surface the exact match at the top, pre-highlighted — as though the
+            // user had arrow-keyed to it — so Enter accepts the canonical tag.
+            if (exact >= 0) {
+                out.unshift(out.splice(exact, 1)[0])
                 highlighted = 0
             }
             suggestions = out
