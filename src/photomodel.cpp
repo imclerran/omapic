@@ -87,6 +87,8 @@ QVariant PhotoModel::data(const QModelIndex &index, int role) const
         return p.favorite;
     case SearchFoldRole:
         return p.searchFold;
+    case TagCountRole:
+        return p.tagNames.size();
     default:
         return {};
     }
@@ -106,6 +108,7 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
         {MonthKeyRole, "monthKey"},
         {IsDuplicateRole, "isDuplicate"},
         {FavoriteRole, "favorite"},
+        {TagCountRole, "tagCount"},
     };
 }
 

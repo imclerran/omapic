@@ -123,7 +123,7 @@ Library::Library(QObject *parent)
     // that the timeline view immediately re-sorts away. applyViewFilter() (QML,
     // on completion) still applies the actually-saved view; for a non-timeline
     // saved view it re-sorts once — the same cost as before, just not doubled.
-    m_filtered->setSortByDate(true);
+    m_filtered->setSortMode(PhotoFilterModel::SortByDate);
     m_photos->setPhotos(std::move(loaded));
     // The tag sidebar is built asynchronously on the worker (see below), so the
     // window appears and stays responsive instead of stalling on its ~150ms query.

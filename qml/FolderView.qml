@@ -30,12 +30,15 @@ Item {
     // photos at proxy row (index - folderCount).
     readonly property int folderCount: entries.length
 
-    // Bumped on any model dataChanged so photo cells (which read photoAt() once)
-    // re-fetch — e.g. a tag edit updates the badge without a reload.
+    // Bumped on any model change so photo cells (which read photoAt() once)
+    // re-fetch — a tag edit updates a badge, and a re-sort (layoutChanged) or a
+    // reload (modelReset) re-reads every cell in the new order.
     property int dataRevision: 0
     Connections {
         target: fv.library ? fv.library.filtered : null
         function onDataChanged() { fv.dataRevision++ }
+        function onLayoutChanged() { fv.dataRevision++ }
+        function onModelReset() { fv.dataRevision++ }
     }
     // A favorite/tag change made in another view can remove or alter rows without
     // a dataChanged this view observes, leaving its cached photoAt() snapshots

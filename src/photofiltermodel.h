@@ -24,10 +24,16 @@ class PhotoFilterModel : public QSortFilterProxyModel {
     Q_PROPERTY(QList<int> selectedTagIds READ selectedTagIds WRITE setSelectedTagIds NOTIFY selectedTagIdsChanged)
     Q_PROPERTY(bool matchAll READ matchAll WRITE setMatchAll NOTIFY matchAllChanged)
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
-    Q_PROPERTY(TagPresence tagPresence READ tagPresence WRITE setTagPresence NOTIFY tagPresenceChanged)
     Q_PROPERTY(bool folderFirst READ folderFirst WRITE setFolderFirst NOTIFY folderFirstChanged)
-    // Timeline view: sort by capture time (newest first) instead of by name.
-    Q_PROPERTY(bool sortByDate READ sortByDate WRITE setSortByDate NOTIFY sortByDateChanged)
+    // How the flat / folder / album grids order photos (the timeline always sorts
+    // by date). SortByName is natural filename order; SortByDate is newest first;
+    // SortByTagCount is most-tagged first. Each falls back to the file name to keep
+    // ties stable.
+    Q_PROPERTY(SortMode sortMode READ sortMode WRITE setSortMode NOTIFY sortModeChanged)
+    // Sort direction. Ascending means A→Z / oldest first / fewest tags first;
+    // descending reverses the primary key (the file-name tiebreak stays ascending
+    // so ties keep a stable order). The timeline always uses descending date.
+    Q_PROPERTY(bool sortAscending READ sortAscending WRITE setSortAscending NOTIFY sortAscendingChanged)
     // Folder view: when on, restrict to one directory level (see folderPath).
     Q_PROPERTY(bool folderMode READ folderMode WRITE setFolderMode NOTIFY folderModeChanged)
     // The directory currently shown in folder view. Empty = the root level,
@@ -39,9 +45,10 @@ class PhotoFilterModel : public QSortFilterProxyModel {
     Q_PROPERTY(int count READ count NOTIFY countChanged)
 
 public:
-    // Whether to additionally restrict to tagged or untagged photos.
-    enum TagPresence { AnyTags, TaggedOnly, UntaggedOnly };
-    Q_ENUM(TagPresence)
+    // Photo ordering for the flat / folder / album grids (the timeline forces
+    // SortByDate). Each mode breaks ties on the file name for a stable order.
+    enum SortMode { SortByName, SortByDate, SortByTagCount };
+    Q_ENUM(SortMode)
 
     explicit PhotoFilterModel(QObject *parent = nullptr);
 
@@ -54,14 +61,14 @@ public:
     QString searchText() const { return m_search; }
     void setSearchText(const QString &text); // matches file name or any tag name
 
-    TagPresence tagPresence() const { return m_tagPresence; }
-    void setTagPresence(TagPresence mode);
-
     bool folderFirst() const { return m_folderFirst; }
     void setFolderFirst(bool on); // group by containing folder before file name
 
-    bool sortByDate() const { return m_sortByDate; }
-    void setSortByDate(bool on); // timeline: order by capture time, newest first
+    SortMode sortMode() const { return m_sortMode; }
+    void setSortMode(SortMode mode); // re-sorts the grid (ordering only)
+
+    bool sortAscending() const { return m_sortAscending; }
+    void setSortAscending(bool on); // re-sorts the grid (ordering only)
 
     bool folderMode() const { return m_folderMode; }
     void setFolderMode(bool on);
@@ -79,7 +86,7 @@ public:
     // albumTags is the current album's membership query: a regular album is a
     // single-tag query ([albumTagId]); a smart album is its saved tag set. An
     // empty list means the album-list level (tiles, not a photo grid).
-    Q_INVOKABLE void applyView(bool dedupe, bool sortByDate, bool folderMode,
+    Q_INVOKABLE void applyView(bool dedupe, int sortMode, bool sortAscending, bool folderMode,
                                const QString &folderPath, bool albumMode = false,
                                const QVariantList &albumTags = {}, bool albumMatchAll = true);
 
@@ -112,9 +119,9 @@ signals:
     void selectedTagIdsChanged();
     void matchAllChanged();
     void searchTextChanged();
-    void tagPresenceChanged();
     void folderFirstChanged();
-    void sortByDateChanged();
+    void sortModeChanged();
+    void sortAscendingChanged();
     void folderModeChanged();
     void folderPathChanged();
     void dedupeChanged();
@@ -141,9 +148,9 @@ private:
     bool m_matchAll = true;
     QString m_search;
     QString m_searchFolded; // m_search, accent-/case-folded for matching
-    TagPresence m_tagPresence = AnyTags;
     bool m_folderFirst = false;
-    bool m_sortByDate = false;
+    SortMode m_sortMode = SortByName;
+    bool m_sortAscending = true;
     bool m_folderMode = false;
     QString m_folderPath;
     bool m_dedupe = true; // ungrouped is the default view, which dedupes

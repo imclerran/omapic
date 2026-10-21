@@ -32,7 +32,6 @@ private slots:
     void matchAnyAcceptsOneTag();
     void searchMatchesNameAndTagFolded();
     void searchMatchesTagAliases();
-    void tagPresenceFilter();
     void dedupeHidesDuplicates();
     void naturalSortOrder();
     void containsIdTracksVisibility();
@@ -44,6 +43,7 @@ private slots:
 
     // Timeline (date sort + month sections)
     void sortByDateNewestFirstUndatedLast();
+    void sortByTagCountMostFirstThenName();
     void monthGroupsSectionsOverDateOrder();
 
     // Album view
@@ -199,25 +199,6 @@ void TestPhotoFilterModel::searchMatchesTagAliases()
     QCOMPARE(m_proxy->count(), 0);
 }
 
-void TestPhotoFilterModel::tagPresenceFilter()
-{
-    QVector<Photo> photos{
-        makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"), {1}, {QStringLiteral("x")}),
-        makePhoto(11, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg")),
-        makePhoto(12, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg"), {2}, {QStringLiteral("y")}),
-    };
-    m_source->setPhotos(photos);
-
-    m_proxy->setTagPresence(PhotoFilterModel::TaggedOnly);
-    QCOMPARE(proxyIds(), (QList<int>{10, 12}));
-
-    m_proxy->setTagPresence(PhotoFilterModel::UntaggedOnly);
-    QCOMPARE(proxyIds(), QList<int>{11});
-
-    m_proxy->setTagPresence(PhotoFilterModel::AnyTags);
-    QCOMPARE(m_proxy->count(), 3);
-}
-
 void TestPhotoFilterModel::dedupeHidesDuplicates()
 {
     Photo original = makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"));
@@ -276,8 +257,8 @@ void TestPhotoFilterModel::folderModeRootShowsOrphansOnly()
     m_proxy->setFolderRoots({QStringLiteral("/lib")});
 
     // Folder-view root with no search: only orphans (photos under no root) show.
-    m_proxy->applyView(/*dedupe=*/false, /*sortByDate=*/false, /*folderMode=*/true,
-                       /*folderPath=*/QString());
+    m_proxy->applyView(/*dedupe=*/false, PhotoFilterModel::SortByName, /*ascending=*/true,
+                       /*folderMode=*/true, /*folderPath=*/QString());
     QCOMPARE(proxyIds(), QList<int>{3});
 }
 
@@ -291,7 +272,8 @@ void TestPhotoFilterModel::folderModeInsideShowsImmediateChildren()
 
     // Inside "/lib": only photos directly in that directory, not nested deeper
     // (those are reached by descending into the subfolder).
-    m_proxy->applyView(false, false, /*folderMode=*/true, /*folderPath=*/QStringLiteral("/lib"));
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, /*folderMode=*/true,
+                       /*folderPath=*/QStringLiteral("/lib"));
     QCOMPARE(proxyIds(), QList<int>{1});
 }
 
@@ -303,7 +285,8 @@ void TestPhotoFilterModel::folderModeSearchFlattensSubtree()
         makePhoto(3, QStringLiteral("/outside/IMG3.jpg"), QStringLiteral("IMG3.jpg")),
     });
 
-    m_proxy->applyView(false, false, /*folderMode=*/true, /*folderPath=*/QStringLiteral("/lib"));
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, /*folderMode=*/true,
+                       /*folderPath=*/QStringLiteral("/lib"));
     // Searching flattens the folder to its whole subtree: the nested IMG2 now shows
     // alongside the immediate IMG1, but IMG3 outside "/lib" stays out.
     m_proxy->setSearchText(QStringLiteral("img"));
@@ -325,9 +308,29 @@ void TestPhotoFilterModel::sortByDateNewestFirstUndatedLast()
         datedPhoto(4, QStringLiteral("/p/d.jpg"), 0), // undated
     });
 
-    m_proxy->applyView(false, /*sortByDate=*/true, false, QString());
+    m_proxy->applyView(false, PhotoFilterModel::SortByDate, /*ascending=*/false, false, QString());
     // Newest first; the undated photo (takenAt 0) sorts last.
     QCOMPARE(proxyIds(), (QList<int>{2, 1, 3, 4}));
+}
+
+void TestPhotoFilterModel::sortByTagCountMostFirstThenName()
+{
+    m_source->setPhotos({
+        makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"),
+                  {1}, {QStringLiteral("x")}),                       // 1 tag
+        makePhoto(11, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg"),
+                  {1, 2, 3}, {QStringLiteral("x"), QStringLiteral("y"), QStringLiteral("z")}), // 3
+        makePhoto(12, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg"), {}, {}),  // 0 tags
+        makePhoto(13, QStringLiteral("/p/d.jpg"), QStringLiteral("d.jpg"),
+                  {1, 2}, {QStringLiteral("x"), QStringLiteral("y")}),               // 2 tags
+        makePhoto(14, QStringLiteral("/p/aa.jpg"), QStringLiteral("aa.jpg"),
+                  {4}, {QStringLiteral("w")}),                       // 1 tag (ties with a.jpg)
+    });
+
+    m_proxy->applyView(false, PhotoFilterModel::SortByTagCount, /*ascending=*/false, false, QString());
+    // Most-tagged first; a tie (10 and 14, one tag each) breaks on the file name
+    // ("a.jpg" before "aa.jpg"); the untagged photo sorts last.
+    QCOMPARE(proxyIds(), (QList<int>{11, 13, 10, 14, 12}));
 }
 
 void TestPhotoFilterModel::monthGroupsSectionsOverDateOrder()
@@ -342,7 +345,7 @@ void TestPhotoFilterModel::monthGroupsSectionsOverDateOrder()
         datedPhoto(3, QStringLiteral("/p/c.jpg"), dec15),
         datedPhoto(4, QStringLiteral("/p/d.jpg"), 0),
     });
-    m_proxy->applyView(false, /*sortByDate=*/true, false, QString());
+    m_proxy->applyView(false, PhotoFilterModel::SortByDate, /*ascending=*/false, false, QString());
 
     const QVariantList groups = m_proxy->monthGroups();
     QCOMPARE(groups.size(), 3); // 2024-03, 2023-12, then undated
@@ -382,17 +385,17 @@ void TestPhotoFilterModel::albumModeInsideFiltersByAlbumQuery()
     });
 
     // A regular album is a single-tag query: show only its members.
-    m_proxy->applyView(false, false, false, QString(), /*albumMode=*/true,
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), /*albumMode=*/true,
                        /*albumTags=*/QVariantList{albumA}, /*albumMatchAll=*/true);
     QCOMPARE(proxyIds(), (QList<int>{1, 3}));
 
     // A smart album in OR mode: carry any of its tags.
-    m_proxy->applyView(false, false, false, QString(), true,
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true,
                        QVariantList{albumA, albumB}, /*albumMatchAll=*/false);
     QCOMPARE(proxyIds(), (QList<int>{1, 2, 3}));
 
     // A smart album in AND mode: carry every tag.
-    m_proxy->applyView(false, false, false, QString(), true,
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true,
                        QVariantList{albumA, albumB}, /*albumMatchAll=*/true);
     QCOMPARE(proxyIds(), QList<int>{3});
 }
@@ -408,7 +411,7 @@ void TestPhotoFilterModel::albumModeListLevelFlattenedSearch()
     m_proxy->setAlbumTagIds({albumA, albumB});
 
     // Album-list level (no album selected): a grid of tiles, so no photos show...
-    m_proxy->applyView(false, false, false, QString(), /*albumMode=*/true,
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), /*albumMode=*/true,
                        /*albumTags=*/QVariantList{}, true);
     QCOMPARE(m_proxy->count(), 0);
 
@@ -448,10 +451,6 @@ void TestPhotoFilterModel::combinedTagAndSearchFilters()
     m_proxy->setSelectedTagIds({dog});
     m_proxy->setSearchText(QStringLiteral("park"));
     QCOMPARE(proxyIds(), QList<int>{10}); // dog + "park" name; 11 fails text, 12 fails tag
-
-    // Adding an untagged-only restriction now excludes everything (all are tagged).
-    m_proxy->setTagPresence(PhotoFilterModel::UntaggedOnly);
-    QCOMPARE(m_proxy->count(), 0);
 }
 
 void TestPhotoFilterModel::accessorsHandleOutOfRange()

@@ -32,12 +32,15 @@ Item {
     // list level with no search); the rest are photos at proxy row index-albumCount.
     readonly property int albumCount: entries.length
 
-    // Bumped on any model dataChanged so photo cells (which read photoAt() once)
-    // re-fetch — e.g. a favorite toggle updates the star without a reload.
+    // Bumped on any model change so photo cells (which read photoAt() once)
+    // re-fetch — a favorite toggle updates a star, and a re-sort (layoutChanged)
+    // or a reload (modelReset) re-reads every cell in the new order.
     property int dataRevision: 0
     Connections {
         target: av.library ? av.library.filtered : null
         function onDataChanged() { av.dataRevision++ }
+        function onLayoutChanged() { av.dataRevision++ }
+        function onModelReset() { av.dataRevision++ }
     }
     // A favorite/tag change made in another view can remove or alter rows without
     // a dataChanged this view observes, leaving its cached photoAt() snapshots
