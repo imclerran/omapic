@@ -25,6 +25,9 @@ Rectangle {
     property var info: ({})
     property var chips: []
     property var appliedLower: []
+    // Tag aliases, cached per change, so the add-a-tag autocomplete can offer
+    // "alias → tag" hint rows (and the typed alias resolves to its canonical tag).
+    readonly property var aliasList: root.library ? root.library.tagAliases : []
 
     // Tab focus cycle (routed by Main): forward from / back to the add-a-tag field.
     signal tabForward()
@@ -393,6 +396,7 @@ Rectangle {
                     // {name, colorSlot, categoryName} so rows can show the color.
                     const all = root.library.tagSuggestions()
                     const matches = []
+                    const seen = ({}) // folded names already in `matches`
                     var exact = null
                     for (var i = 0; i < all.length; ++i) {
                         // Exclude tags already applied (exact lower-cased name), but
@@ -403,14 +407,41 @@ Rectangle {
                         const ln = TextMatch.fold(all[i].name)
                         if (ln === q)
                             exact = all[i] // keep the exact typed match, surfaced below
-                        else if (ln.indexOf(q) !== -1 && matches.length < 8)
+                        else if (ln.indexOf(q) !== -1 && matches.length < 8) {
                             matches.push(all[i])
+                            seen[ln] = true
+                        }
                     }
-                    // When the text is an exact tag name, keep that tag in the list at
-                    // the top and pre-highlight it — as though the user had arrow-keyed
-                    // to it — so Enter accepts the real (canonically-cased) tag.
+                    // Alias hints resolve to their canonical tag: shown as "alias →
+                    // tag", they fill the canonical name on pick, so typing an alias
+                    // here applies the canonical tag.
+                    const aliases = root.aliasList
+                    var exactAlias = null
+                    for (var j = 0; j < aliases.length; ++j) {
+                        const cn = aliases[j].tagName || ""
+                        if (applied.indexOf(cn.toLowerCase()) !== -1)
+                            continue // canonical already on the photo
+                        const af = TextMatch.fold(aliases[j].aliasName)
+                        const cf = TextMatch.fold(cn)
+                        const hint = { name: cn, colorSlot: aliases[j].colorSlot,
+                                       categoryName: "", aliasFrom: aliases[j].aliasName }
+                        if (af === q) {
+                            if (!exact) exactAlias = hint
+                        } else if (af.indexOf(q) !== -1 && matches.length < 8 && !seen[cf]) {
+                            matches.push(hint)
+                            seen[cf] = true
+                        }
+                    }
+                    // When the text is an exact tag (or alias) name, keep it at the
+                    // top and pre-highlight it — as though the user had arrow-keyed to
+                    // it — so Enter accepts the real (canonically-cased) tag.
                     if (exact) {
                         matches.unshift(exact)
+                        if (matches.length > 8)
+                            matches.pop()
+                        highlighted = 0
+                    } else if (exactAlias) {
+                        matches.unshift(exactAlias)
                         if (matches.length > 8)
                             matches.pop()
                         highlighted = 0
@@ -482,7 +513,10 @@ Rectangle {
                                 }
                                 Label {
                                     Layout.fillWidth: true
-                                    text: suggestion.modelData.name
+                                    // Alias rows read "alias → tag"; plain tags show the name.
+                                    text: suggestion.modelData.aliasFrom
+                                          ? (suggestion.modelData.aliasFrom + " → " + suggestion.modelData.name)
+                                          : suggestion.modelData.name
                                     elide: Text.ElideRight
                                     // Custom contentItem loses the delegate's
                                     // automatic highlight recoloring, so track it

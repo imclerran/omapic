@@ -76,6 +76,24 @@ Dialog {
         }
         return -1
     }
+    // Like tagIdByName, but a typed alias resolves to its canonical tag — so the
+    // association pickers accept an alias anywhere a tag name is entered. (The
+    // Aliases tab keeps using the raw tagIdByName to detect a name that is still a
+    // real tag, which it then merges.)
+    function resolveTagId(name) {
+        const direct = root.tagIdByName(name)
+        if (direct >= 0)
+            return direct
+        const n = TextMatch.fold((name || "").trim())
+        if (n === "")
+            return -1
+        const al = root.aliases
+        for (let i = 0; i < al.length; ++i) {
+            if (TextMatch.fold(al[i].aliasName) === n)
+                return al[i].tagId
+        }
+        return -1
+    }
     // Palette color for a tag by id (for the association chips).
     function tagColorSlot(tagId) {
         const all = root.allTags
@@ -940,8 +958,9 @@ Dialog {
                     // Folded antecedent text, for live-filtering the list below
                     // (accent-/case-insensitive, matching the pickers).
                     readonly property string query: TextMatch.fold(antField.text.trim())
-                    readonly property int antId: root.tagIdByName(antField.text)
-                    readonly property int conId: root.tagIdByName(conField.text)
+                    // resolveTagId so a typed alias resolves to its canonical tag.
+                    readonly property int antId: root.resolveTagId(antField.text)
+                    readonly property int conId: root.resolveTagId(conField.text)
                     // The typed consequent, and whether it names a tag that doesn't
                     // exist yet — in which case Add creates it (see submit()).
                     readonly property string conName: conField.text.trim()
@@ -990,6 +1009,7 @@ Dialog {
                         Layout.fillWidth: true
                         placeholderText: qsTr("this tag…")
                         tags: root.allTags
+                        aliases: root.aliases
                         categoryColorFn: root.categoryColor
                         onAccepted: conField.focusInput()
                     }
@@ -999,6 +1019,7 @@ Dialog {
                         Layout.fillWidth: true
                         placeholderText: qsTr("that tag…")
                         tags: root.allTags
+                        aliases: root.aliases
                         categoryColorFn: root.categoryColor
                         onAccepted: parent.submit()
                     }

@@ -17,6 +17,10 @@ Item {
     id: root
 
     property var tags: []                 // candidates: [{ name, colorSlot, categoryName }]
+    // Tag aliases: [{ aliasName, tagName, colorSlot }]. Offered as "alias → tag"
+    // hint rows that fill the canonical tag name on selection, so typing an alias
+    // resolves here too. Empty disables alias suggestions.
+    property var aliases: []
     property string placeholderText: ""
     property var categoryColorFn: null    // function(colorSlot) -> color, optional
     property alias text: field.text
@@ -48,6 +52,7 @@ Item {
             highlighted = -1
             if (q === "") { suggestions = []; pop.close(); return }
             const out = []
+            const seen = ({}) // folded names already in `out`, to skip alias dupes
             let exact = null
             for (let i = 0; i < root.tags.length; ++i) {
                 // Fold the candidate too, so unaccented typing finds accented
@@ -55,15 +60,37 @@ Item {
                 const ln = TextMatch.fold(root.tags[i].name)
                 if (ln === q)
                     exact = root.tags[i] // keep the exact match, surfaced below
-                else if (ln.indexOf(q) !== -1 && out.length < 8)
+                else if (ln.indexOf(q) !== -1 && out.length < 8) {
                     out.push(root.tags[i])
+                    seen[ln] = true
+                }
             }
-            // When the text is an exact tag name, keep that tag at the top and
-            // pre-highlight it — as though the user had arrow-keyed to it — so
-            // Enter accepts the real (canonically-cased) tag. Matches the detail
-            // panel's add-a-tag box 1:1.
+            // Alias hints resolve to their canonical tag: shown as "alias → tag",
+            // they fill the canonical name on pick. An exact alias match is
+            // surfaced + pre-highlighted just like an exact tag.
+            let exactAlias = null
+            for (let i = 0; i < root.aliases.length; ++i) {
+                const a = root.aliases[i]
+                const af = TextMatch.fold(a.aliasName)
+                const cn = TextMatch.fold(a.tagName)
+                const hint = { name: a.tagName, colorSlot: a.colorSlot,
+                               categoryName: "", aliasFrom: a.aliasName }
+                if (af === q) {
+                    if (!exact) exactAlias = hint
+                } else if (af.indexOf(q) !== -1 && out.length < 8 && !seen[cn]) {
+                    out.push(hint)
+                    seen[cn] = true
+                }
+            }
+            // When the text is an exact tag (or alias) name, keep that at the top
+            // and pre-highlight it — as though the user had arrow-keyed to it — so
+            // Enter accepts the real (canonically-cased) tag.
             if (exact) {
                 out.unshift(exact)
+                if (out.length > 8) out.pop()
+                highlighted = 0
+            } else if (exactAlias) {
+                out.unshift(exactAlias)
                 if (out.length > 8) out.pop()
                 highlighted = 0
             }
@@ -126,7 +153,10 @@ Item {
                         }
                         Label {
                             Layout.fillWidth: true
-                            text: sg.modelData.name
+                            // Alias rows read "alias → tag"; plain tags show the name.
+                            text: sg.modelData.aliasFrom
+                                  ? (sg.modelData.aliasFrom + " → " + sg.modelData.name)
+                                  : sg.modelData.name
                             elide: Text.ElideRight
                             // Track the highlight so the name stays readable (see
                             // the suggestion-contrast fix on the detail panel).
