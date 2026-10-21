@@ -109,6 +109,7 @@ struct AliasInfo {
     QString aliasName;
     int tagId = -1;
     QString tagName;
+    QString categoryName; // canonical tag's category, for the autocomplete row
     int colorSlot = -1;
 };
 

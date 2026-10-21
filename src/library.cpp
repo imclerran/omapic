@@ -572,6 +572,7 @@ QVariantList Library::tagAliases() const
             {QStringLiteral("aliasName"), a.aliasName},
             {QStringLiteral("tagId"), a.tagId},
             {QStringLiteral("tagName"), a.tagName},
+            {QStringLiteral("categoryName"), a.categoryName},
             {QStringLiteral("colorSlot"), a.colorSlot},
         });
     }
