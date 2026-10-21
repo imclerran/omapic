@@ -5,6 +5,7 @@
 #include <QtTest>
 
 #include <QDir>
+#include <QHash>
 #include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -14,6 +15,7 @@
 #include <QTemporaryDir>
 
 #include "database.h"
+#include "photo.h"
 
 // Exercises the schema-versioning / migration path in Database::open: an older or
 // unversioned library is upgraded in place to the current version, a library from
@@ -34,6 +36,7 @@ private slots:
     void upgradesToV11AddsSidecarDirty();
     void seedsSidecarDirtyForNeverSyncedTaggedPhotos();
     void convertsPipeNamesAndMergesCollisions();
+    void clearsVideoDatesForCreationTimeReread();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -379,6 +382,34 @@ void TestSchema::convertsPipeNamesAndMergesCollisions()
         QVERIFY(!backupFiles().isEmpty());
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v13"));
+}
+
+void TestSchema::clearsVideoDatesForCreationTimeReread()
+{
+    int video = -1, image = -1;
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_seed14")));
+        video = db.insertPhoto(QStringLiteral("/p/clip.mp4"), QString(), /*takenAt=*/1000);
+        image = db.insertPhoto(QStringLiteral("/p/pic.jpg"), QString(), /*takenAt=*/2000);
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_seed14"));
+
+    // Rewind so the v14 step re-runs on reopen.
+    execRaw(dbPath(), QStringLiteral("PRAGMA user_version = 13;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v14")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+        QHash<int, qint64> taken;
+        for (const Photo &p : db.loadPhotos())
+            taken.insert(p.id, p.takenAt);
+        QCOMPARE(taken.value(video), qint64(0));    // video date cleared (NULL → 0), to be re-read
+        QCOMPARE(taken.value(image), qint64(2000)); // image date left alone
+        QVERIFY(backupFiles().isEmpty());           // additive step → no backup
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v14"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)

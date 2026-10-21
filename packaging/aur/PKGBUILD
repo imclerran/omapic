@@ -10,8 +10,8 @@ license=('GPL-3.0-or-later')
 # libheif and libavif respectively, so .heic/.heif/.avif photos display out of
 # the box.
 depends=('qt6-base' 'qt6-declarative' 'qt6-imageformats' 'qt6-wayland'
-         'qt6-multimedia' 'qt6-multimedia-ffmpeg' 'exiv2' 'ffmpegthumbnailer' 'dbus'
-         'kimageformats' 'libheif' 'libavif')
+         'qt6-multimedia' 'qt6-multimedia-ffmpeg' 'exiv2' 'ffmpeg' 'ffmpegthumbnailer'
+         'dbus' 'kimageformats' 'libheif' 'libavif')
 optdepends=('aether: generate and edit Omarchy themes from a photo')
 makedepends=('cmake' 'ninja')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

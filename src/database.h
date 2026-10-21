@@ -284,6 +284,7 @@ private:
     void migrate_10_to_11(); // sidecar_dirty queue table (additive)
     void migrate_11_to_12(); // seed sidecar_dirty for never-synced tagged photos (additive)
     void migrate_12_to_13(); // replace '|' with '/' in tag/category names (non-additive)
+    void migrate_13_to_14(); // clear videos' mtime dates so creation_time is re-read (additive)
     // True when any tag or category name contains '|' (so the rename above would
     // actually change rows). Gates the pre-migration backup.
     bool namesContainPipe();

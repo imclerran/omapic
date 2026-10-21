@@ -20,7 +20,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 13;
+constexpr int kSchemaVersion = 14;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -136,6 +136,7 @@ bool Database::runMigrations(int fromVersion)
         {11, &Database::migrate_10_to_11, nullptr},
         {12, &Database::migrate_11_to_12, nullptr},
         {13, &Database::migrate_12_to_13, &Database::namesContainPipe},
+        {14, &Database::migrate_13_to_14, nullptr},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -498,6 +499,20 @@ void Database::migrate_12_to_13()
         drop.addBindValue(oldId);
         drop.exec();
     }
+}
+
+void Database::migrate_13_to_14()
+{
+    // Videos now take their timeline date from the container creation time (read
+    // via ffprobe on the capture-time backfill) instead of the file mtime. Clear
+    // the mtime-based dates already stored for video rows so that backfill re-reads
+    // them. Non-destructive: the value is re-derivable (mtime stays the fallback),
+    // so no backup is needed.
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral(
+        "UPDATE photos SET taken_at = NULL WHERE "
+        "lower(path) LIKE '%.mp4' OR lower(path) LIKE '%.m4v' OR lower(path) LIKE '%.webm' "
+        "OR lower(path) LIKE '%.mkv' OR lower(path) LIKE '%.mov' OR lower(path) LIKE '%.avi'"));
 }
 
 bool Database::legacyAlbumsNeedRename()
