@@ -1624,6 +1624,8 @@ void Library::deleteTag(int tagId)
     m_db.deleteTag(tagId); // removes the tag and all its photo links (cascade)
     m_photos->setPhotos(m_db.loadPhotos()); // refresh in-memory tag data
     refreshTags();
+    emit aliasesChanged();  // the tag's aliases cascaded away with it
+    updateSearchAliases();
     scheduleSidecarFlush();
 }
 
@@ -1650,6 +1652,7 @@ int Library::renameTag(int tagId, const QString &newName)
     m_db.enqueueSidecarDirtyForTag(tagId); // the keyword text changes for its carriers
     m_photos->setPhotos(m_db.loadPhotos()); // refresh in-memory tag names
     refreshTags();
+    emit aliasesChanged(); // the canonical name shown in the alias list changed
     scheduleSidecarFlush();
     return RenameOk;
 }
