@@ -17,8 +17,9 @@
 struct PhotoMetadata {
     QString dimensions; // e.g. "4032 × 3024"
     QString size;       // e.g. "3.8 MB"
-    QString taken;      // EXIF date taken, e.g. "2026-05-12 14:22:07"
+    QString taken;      // capture time (EXIF for images, creation_time for videos)
     QString camera;     // EXIF make + model, e.g. "FUJIFILM X-T30"
+    QString duration;   // videos only, e.g. "2:34"
     QString modified;   // file mtime, e.g. "2026-05-12 14:22"
 };
 

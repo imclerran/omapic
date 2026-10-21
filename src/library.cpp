@@ -1410,6 +1410,7 @@ QVariantMap Library::photoInfo(int photoId) const
     info[QStringLiteral("size")] = meta.size;
     info[QStringLiteral("taken")] = meta.taken;
     info[QStringLiteral("camera")] = meta.camera;
+    info[QStringLiteral("duration")] = meta.duration;
     info[QStringLiteral("modified")] = meta.modified;
     return info;
 }

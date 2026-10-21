@@ -260,6 +260,14 @@ Rectangle {
                     wrapMode: Text.WrapAnywhere
                 }
 
+                FieldLabel { visible: (root.info.duration || "") !== ""; text: qsTr("Duration") }
+                Label {
+                    visible: (root.info.duration || "") !== ""
+                    Layout.fillWidth: true
+                    text: root.info.duration || ""
+                    font.pixelSize: 12
+                }
+
                 FieldLabel { visible: (root.info.modified || "") !== ""; text: qsTr("Modified") }
                 Label {
                     visible: (root.info.modified || "") !== ""

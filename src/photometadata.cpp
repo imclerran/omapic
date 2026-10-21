@@ -12,6 +12,10 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
 #include <QSize>
 
 #include "photometadata.h"
@@ -68,17 +72,65 @@ QDateTime exifCaptureDateTime(const QString &path)
     }
 }
 
+// Parse an ffprobe creation_time (ISO-8601 UTC, e.g. "2023-05-14T10:30:00.000000Z")
+// into a QDateTime; invalid when empty/unparsable.
+QDateTime parseVideoCreationTime(const QString &s)
+{
+    if (s.isEmpty())
+        return {};
+    QDateTime dt = QDateTime::fromString(s, Qt::ISODate); // honours the trailing Z
+    if (!dt.isValid()) // ffmpeg sometimes emits microseconds, which ISODate rejects
+        dt = QDateTime::fromString(s.left(19), QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
+    if (!dt.isValid())
+        return {};
+    if (dt.timeSpec() == Qt::LocalTime) // no zone in the parsed form → it's UTC
+        dt.setTimeSpec(Qt::UTC);
+    return dt;
+}
+
+// The video's container creation time as a QDateTime (invalid when absent or
+// ffprobe is unavailable). exiv2 dropped video support in 0.28, so shell out to
+// ffprobe — it ships with ffmpeg, as ffmpegthumbnailer already does.
+QDateTime videoCaptureDateTime(const QString &path)
+{
+    QProcess proc;
+    proc.start(QStringLiteral("ffprobe"),
+               {QStringLiteral("-v"), QStringLiteral("quiet"),
+                QStringLiteral("-show_entries"), QStringLiteral("format_tags=creation_time"),
+                QStringLiteral("-of"), QStringLiteral("default=noprint_wrappers=1:nokey=1"),
+                path});
+    if (!proc.waitForStarted(3000))
+        return {}; // ffprobe not installed / not on PATH
+    if (!proc.waitForFinished(5000)) {
+        proc.kill();
+        return {};
+    }
+    return parseVideoCreationTime(QString::fromUtf8(proc.readAllStandardOutput()).trimmed());
+}
+
+// Seconds → "M:SS", or "H:MM:SS" past an hour. Empty for non-positive input.
+QString formatDuration(double seconds)
+{
+    if (!(seconds > 0))
+        return {};
+    const qint64 total = qRound64(seconds);
+    const qint64 h = total / 3600, mm = (total % 3600) / 60, ss = total % 60;
+    if (h > 0)
+        return QStringLiteral("%1:%2:%3").arg(h).arg(mm, 2, 10, QLatin1Char('0'))
+                   .arg(ss, 2, 10, QLatin1Char('0'));
+    return QStringLiteral("%1:%2").arg(mm).arg(ss, 2, 10, QLatin1Char('0'));
+}
+
 } // namespace
 
 qint64 capturedAtEpoch(const QString &path, bool isVideo)
 {
-    // Images: prefer the EXIF capture time; fall back to mtime below. Videos skip
-    // the EXIF read entirely (exiv2 doesn't cover them here) and use mtime.
-    if (!isVideo) {
-        const QDateTime dt = exifCaptureDateTime(path);
-        if (dt.isValid())
-            return dt.toSecsSinceEpoch();
-    }
+    // Prefer the real capture time — EXIF for images, the container creation time
+    // for videos — so both land on the timeline by when they were taken; fall back
+    // to the file mtime when neither is available.
+    const QDateTime dt = isVideo ? videoCaptureDateTime(path) : exifCaptureDateTime(path);
+    if (dt.isValid())
+        return dt.toSecsSinceEpoch();
 
     const QFileInfo fi(path);
     if (fi.exists())
@@ -148,6 +200,11 @@ ImportMetadata readImportMetadata(const QString &path, bool isVideo)
         } catch (...) {
             // Unreadable/metadata-less file: fall through to the mtime date.
         }
+    } else {
+        // Videos have no EXIF; take the container creation time via ffprobe.
+        const QDateTime dt = videoCaptureDateTime(path);
+        if (dt.isValid())
+            m.takenAt = dt.toSecsSinceEpoch();
     }
 
     if (m.takenAt == 0) {
@@ -168,9 +225,36 @@ PhotoMetadata readPhotoMetadata(const QString &path, bool isVideo)
         m.modified = fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
     }
 
-    // Dimensions and EXIF are image-only; videos get just the file facts above.
-    if (isVideo)
+    // Videos: exiv2 doesn't cover them; pull resolution, duration, and creation
+    // time from a single ffprobe call.
+    if (isVideo) {
+        QProcess proc;
+        proc.start(QStringLiteral("ffprobe"),
+                   {QStringLiteral("-v"), QStringLiteral("quiet"),
+                    QStringLiteral("-select_streams"), QStringLiteral("v:0"),
+                    QStringLiteral("-show_entries"),
+                    QStringLiteral("stream=width,height:format=duration:format_tags=creation_time"),
+                    QStringLiteral("-of"), QStringLiteral("json"), path});
+        if (proc.waitForStarted(3000) && proc.waitForFinished(5000)) {
+            const QJsonObject obj = QJsonDocument::fromJson(proc.readAllStandardOutput()).object();
+            const QJsonArray streams = obj.value(QStringLiteral("streams")).toArray();
+            if (!streams.isEmpty()) {
+                const QJsonObject s = streams.first().toObject();
+                const int w = s.value(QStringLiteral("width")).toInt();
+                const int h = s.value(QStringLiteral("height")).toInt();
+                if (w > 0 && h > 0)
+                    m.dimensions = QStringLiteral("%1 × %2").arg(w).arg(h);
+            }
+            const QJsonObject fmt = obj.value(QStringLiteral("format")).toObject();
+            m.duration = formatDuration(fmt.value(QStringLiteral("duration")).toString().toDouble());
+            const QDateTime dt = parseVideoCreationTime(
+                fmt.value(QStringLiteral("tags")).toObject()
+                   .value(QStringLiteral("creation_time")).toString());
+            if (dt.isValid())
+                m.taken = dt.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        }
         return m;
+    }
 
     // Pixel dimensions from the image header (cheap, covers every format Qt can
     // read). Swapped below if EXIF orientation rotates the image a quarter turn,
