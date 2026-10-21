@@ -338,6 +338,10 @@ private:
     void refreshTags();          // synchronous: query + apply on the GUI thread
     void refreshTagsAsync();     // query on the worker, apply via onFacetTagsReady
     void applyFacetTags(const QVector<TagInfo> &tags); // set the model + notify (GUI)
+    // Push each tag's alias names into the photo model, so a gallery search for an
+    // alias finds photos carrying its canonical tag. Called at startup and whenever
+    // the alias set changes.
+    void updateSearchAliases();
     void onFacetTagsReady(const QVector<TagInfo> &tags);
     // Keep the filter model's list of registered folder roots in step with the
     // DB, so the folder view can tell orphan photos from foldered ones.

@@ -45,8 +45,15 @@ public:
     Photo photoById(int id) const;
     const QVector<Photo> &photos() const { return m_photos; }
     void setTagsForId(int photoId, const QSet<int> &ids, const QStringList &names, bool favorite);
+    // Alias names per canonical tag id, folded into each photo's search blob so a
+    // gallery search for an alias finds photos carrying its canonical tag. Rebuilds
+    // the blobs when it changes.
+    void setTagAliases(const QHash<int, QStringList> &aliasesByTagId);
 
 private:
+    QString buildSearchFold(const Photo &p) const;
+
     QVector<Photo> m_photos;
     QHash<int, int> m_idToRow;
+    QHash<int, QStringList> m_aliasesByTagId; // canonical tag id -> its alias names
 };

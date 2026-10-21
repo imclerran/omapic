@@ -168,6 +168,7 @@ Library::Library(QObject *parent)
     // Build the filter sidebar off-thread now that the worker is wired up, so the
     // first frame paints without waiting on it.
     refreshTagsAsync();
+    updateSearchAliases(); // seed the photo model's alias-aware search blobs
 
     // Debounced auto-write: a burst of tag edits coalesces into one flush.
     m_sidecarDebounce = new QTimer(this);
@@ -346,6 +347,7 @@ void Library::onAliasCreated()
     // so the gallery, chips, and tag lists drop the merged-away tag.
     m_photos->setPhotos(m_db.loadPhotos());
     refreshTags();
+    updateSearchAliases(); // the merged tag's alias is now searchable
     endBusy(/*modal=*/false); // reported in the status bar
     emit aliasesChanged();
     scheduleSidecarFlush(); // the merged photos' sidecars now use the canonical name
@@ -540,8 +542,10 @@ bool Library::createTagAlias(const QString &name, int canonicalTagId)
     }
     // No tag to merge: just record the alias row (no photo's tags change).
     const bool ok = m_db.createAlias(trimmed, canonicalTagId);
-    if (ok)
+    if (ok) {
         emit aliasesChanged();
+        updateSearchAliases(); // the new alias becomes searchable
+    }
     return ok;
 }
 
@@ -549,6 +553,15 @@ void Library::removeTagAlias(const QString &name)
 {
     m_db.removeAlias(name.trimmed());
     emit aliasesChanged();
+    updateSearchAliases(); // drop the removed alias from the search blobs
+}
+
+void Library::updateSearchAliases()
+{
+    QHash<int, QStringList> byTag;
+    for (const AliasInfo &a : m_db.loadAliases())
+        byTag[a.tagId].append(a.aliasName);
+    m_photos->setTagAliases(byTag);
 }
 
 QVariantList Library::tagAliases() const
