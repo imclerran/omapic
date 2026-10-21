@@ -147,6 +147,7 @@ Library::Library(QObject *parent)
     connect(this, &Library::requestImport, m_worker, &LibraryWorker::importDirectory);
     connect(this, &Library::requestRescan, m_worker, &LibraryWorker::rescan);
     connect(this, &Library::requestImplicationMigration, m_worker, &LibraryWorker::expandImplications);
+    connect(this, &Library::requestCreateAlias, m_worker, &LibraryWorker::createAlias);
     connect(this, &Library::requestAddTagToPhotos, m_worker, &LibraryWorker::addTagToPhotos);
     connect(this, &Library::requestRemoveTagFromPhotos, m_worker, &LibraryWorker::removeTagFromPhotos);
     connect(m_worker, &LibraryWorker::progress, this, &Library::onWorkerProgress);
@@ -154,6 +155,7 @@ Library::Library(QObject *parent)
     connect(m_worker, &LibraryWorker::importFinished, this, &Library::onImportFinished);
     connect(m_worker, &LibraryWorker::rescanFinished, this, &Library::onRescanFinished);
     connect(m_worker, &LibraryWorker::implicationsExpanded, this, &Library::onImplicationsExpanded);
+    connect(m_worker, &LibraryWorker::aliasCreated, this, &Library::onAliasCreated);
     connect(m_worker, &LibraryWorker::tagJobFinished, this, &Library::onTagJobFinished);
     connect(this, &Library::requestSidecarFlush, m_worker, &LibraryWorker::flushSidecars);
     connect(m_worker, &LibraryWorker::sidecarFlushFinished, this, &Library::onSidecarFlushFinished);
@@ -338,6 +340,17 @@ void Library::onImplicationsExpanded()
     emit implicationsChanged();
 }
 
+void Library::onAliasCreated()
+{
+    // The merge folded one tag into another across photo_tags/content_tags; reload
+    // so the gallery, chips, and tag lists drop the merged-away tag.
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    endBusy(/*modal=*/false); // reported in the status bar
+    emit aliasesChanged();
+    scheduleSidecarFlush(); // the merged photos' sidecars now use the canonical name
+}
+
 void Library::onTagJobFinished()
 {
     // The worker changed photo_tags in bulk; reload the in-memory tags once.
@@ -504,6 +517,52 @@ int Library::ensureTag(const QString &name)
     // A tag with no memberships yet; the caller wires it into an association,
     // whose migration then applies it to photos (and refreshes the models).
     return m_db.ensureTag(trimmed);
+}
+
+bool Library::createTagAlias(const QString &name, int canonicalTagId)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty() || canonicalTagId < 0)
+        return false;
+    // Mirror the database's cheap rejections so an invalid request never spins up a
+    // worker job: a name already used by an alias, or the canonical tag's own name.
+    if (m_db.aliasExists(trimmed))
+        return false;
+    const int existing = m_db.tagIdByName(trimmed); // raw: is the alias name itself a tag?
+    if (existing == canonicalTagId)
+        return false;
+    if (existing >= 0) {
+        // Folding an existing tag into the canonical one rewrites photo_tags and the
+        // content archive — do it on the worker and reload the models when it's done.
+        beginBusy(tr("Merging tags…"), /*modal=*/false);
+        emit requestCreateAlias(trimmed, canonicalTagId);
+        return true;
+    }
+    // No tag to merge: just record the alias row (no photo's tags change).
+    const bool ok = m_db.createAlias(trimmed, canonicalTagId);
+    if (ok)
+        emit aliasesChanged();
+    return ok;
+}
+
+void Library::removeTagAlias(const QString &name)
+{
+    m_db.removeAlias(name.trimmed());
+    emit aliasesChanged();
+}
+
+QVariantList Library::tagAliases() const
+{
+    QVariantList out;
+    for (const AliasInfo &a : m_db.loadAliases()) {
+        out.append(QVariantMap{
+            {QStringLiteral("aliasName"), a.aliasName},
+            {QStringLiteral("tagId"), a.tagId},
+            {QStringLiteral("tagName"), a.tagName},
+            {QStringLiteral("colorSlot"), a.colorSlot},
+        });
+    }
+    return out;
 }
 
 QVariantList Library::folders() const
@@ -1568,6 +1627,10 @@ int Library::renameTag(int tagId, const QString &newName)
     // change of casing, which is allowed (the id, links, and archive are intact).
     const int existing = m_db.tagIdByName(trimmed);
     if (existing >= 0 && existing != tagId)
+        return RenameConflict;
+    // A name already used by an alias would make resolution ambiguous (the alias
+    // and a real tag sharing a name), so treat it as a conflict too.
+    if (m_db.aliasExists(trimmed))
         return RenameConflict;
 
     m_db.renameTag(tagId, trimmed);

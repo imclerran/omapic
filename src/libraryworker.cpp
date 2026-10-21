@@ -373,7 +373,9 @@ qint64 LibraryWorker::applyImportedTags(int photoId, const QString &path,
                 continue;
             // Only categorize a freshly-created tag — never move an existing one,
             // which the user may have filed deliberately. Imports stay additive.
-            const int existing = m_db.tagIdByName(tagName);
+            // resolveTagName maps an imported alias onto its canonical tag, so an
+            // alias is treated as the existing tag it points at (not re-categorized).
+            const int existing = m_db.resolveTagName(tagName);
             const int tagId = existing >= 0 ? existing : m_db.ensureTag(tagName);
             const QString cat = pr.first.trimmed();
             if (existing < 0 && !cat.isEmpty() && tagId >= 0) {
@@ -448,6 +450,18 @@ void LibraryWorker::expandImplications()
     m_db.expandAllImplications();
     m_db.commitTransaction();
     emit implicationsExpanded();
+}
+
+void LibraryWorker::createAlias(const QString &name, int tagId)
+{
+    // Folding the colliding tag into the canonical one moves photo_tags /
+    // content_tags / implications; do it in one transaction, then let the Library
+    // reload the models. Indeterminate progress — a handful of set-based statements.
+    emit progress(tr("Merging tags…"), 0, 0);
+    m_db.beginTransaction();
+    m_db.createAlias(name, tagId);
+    m_db.commitTransaction();
+    emit aliasCreated();
 }
 
 void LibraryWorker::removeTagFromPhotos(const QList<int> &photoIds, int tagId)

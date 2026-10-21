@@ -58,6 +58,8 @@ Dialog {
     readonly property var categories: root.library.categories
     // Tag implications ("if this tag, then that tag"), refreshed on any change.
     readonly property var implications: root.library.tagImplications
+    // Tag aliases ("this name means that tag"), refreshed on any change.
+    readonly property var aliases: root.library.tagAliases
 
     // Tag id for an exact (case-insensitive) name, or -1. Used by the Associations
     // tab's pickers, which only offer existing tag names.
@@ -614,6 +616,7 @@ Dialog {
             TabButton { text: qsTr("Tags") }
             TabButton { text: qsTr("Categories") }
             TabButton { text: qsTr("Associations") }
+            TabButton { text: qsTr("Aliases") }
         }
 
         StackLayout {
@@ -1086,6 +1089,251 @@ Dialog {
                         }
 
                         WheelScroller { flickable: assocList }
+                    }
+                }
+            }
+
+            // -------------------------------------------------------- Aliases tab
+            // "This name means that tag." Typing or importing an alias applies the
+            // canonical tag instead of making a new one; aliases never appear as
+            // tags themselves. Aliasing a name that is already a tag MERGES that tag
+            // into the canonical one (confirmed first — a merge can't be undone).
+            ColumnLayout {
+                id: aliasesTab
+                spacing: 10
+
+                // A merge awaiting confirmation; false while idle. Editing a field
+                // clears it, so the confirmation always matches what's shown.
+                property bool confirmPending: false
+
+                // Rounded chip for a row's tags: category-colored for the canonical
+                // tag, neutral (colorSlot -1) for the alias name, which isn't a tag.
+                component CanonChip: Rectangle {
+                    id: cchip
+                    property string label: ""
+                    property int colorSlot: -1
+                    readonly property bool categorized: cchip.colorSlot >= 0
+                    readonly property color tint: root.categoryColor(cchip.colorSlot)
+                    implicitHeight: 24
+                    implicitWidth: cchipText.implicitWidth + 16
+                    radius: height / 2
+                    color: cchip.categorized ? Qt.alpha(cchip.tint, 0.18) : sys.alternateBase
+                    border.width: 1
+                    border.color: cchip.categorized ? cchip.tint : sys.mid
+                    Label {
+                        id: cchipText
+                        anchors.centerIn: parent
+                        text: cchip.label
+                        font.pixelSize: 12
+                        color: palette.text
+                    }
+                }
+
+                // Validation state for the add row.
+                QtObject {
+                    id: alias
+                    readonly property string aliasName: aliasField.text.trim()
+                    readonly property string query: TextMatch.fold(alias.aliasName)
+                    // The alias points at an existing tag, chosen in the picker.
+                    readonly property int canonId: root.tagIdByName(canonField.text)
+                    readonly property string canonName: canonField.text.trim()
+                    // Folded canonical text — the list below narrows to this tag's
+                    // aliases as it's typed, so existing aliases surface up front.
+                    readonly property string canonQuery: TextMatch.fold(alias.canonName)
+                    // When the alias name is already a tag, Add merges that tag into
+                    // the canonical one; mergeCount is that tag's photo count.
+                    readonly property int matchTagId: root.tagIdByName(alias.aliasName)
+                    readonly property bool isMerge: alias.matchTagId >= 0 && alias.matchTagId !== alias.canonId
+                    readonly property int mergeCount: {
+                        if (alias.matchTagId < 0)
+                            return 0
+                        const all = root.allTags
+                        for (let i = 0; i < all.length; ++i) {
+                            if (all[i].id === alias.matchTagId)
+                                return all[i].count
+                        }
+                        return 0
+                    }
+                    // Aliasing a tag to its own name is meaningless; alias names are
+                    // unique among aliases.
+                    readonly property bool isSelf: alias.aliasName !== "" && alias.canonId >= 0
+                                                   && TextMatch.fold(alias.aliasName) === TextMatch.fold(alias.canonName)
+                    readonly property bool alreadyAlias: {
+                        const al = root.aliases
+                        for (let i = 0; i < al.length; ++i) {
+                            if (TextMatch.fold(al[i].aliasName) === alias.query && alias.query !== "")
+                                return true
+                        }
+                        return false
+                    }
+                    readonly property bool canAdd: alias.aliasName !== "" && alias.canonId >= 0
+                                                   && !alias.isSelf && !alias.alreadyAlias
+                }
+
+                RowLayout {
+                    id: aliasRow
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    function submit() {
+                        if (!alias.canAdd)
+                            return
+                        // A merge needs confirming first; a second Enter (or the
+                        // Merge button) commits it.
+                        if (alias.isMerge && !aliasesTab.confirmPending) {
+                            aliasesTab.confirmPending = true
+                            return
+                        }
+                        if (root.library.createTagAlias(alias.aliasName, alias.canonId)) {
+                            aliasesTab.confirmPending = false
+                            aliasField.text = ""
+                            canonField.clear()
+                            canonField.focusInput() // back to the tag box to start the next alias
+                        }
+                    }
+
+                    TagAutoField {
+                        id: canonField
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("this tag…")
+                        tags: root.allTags
+                        categoryColorFn: root.categoryColor
+                        onTextChanged: aliasesTab.confirmPending = false
+                        onAccepted: aliasField.forceActiveFocus()
+                    }
+                    Label { text: qsTr("=") }
+                    TextField {
+                        id: aliasField
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("alias…")
+                        // '|' is the sidecar hierarchy separator, barred from names.
+                        validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
+                        onTextEdited: aliasesTab.confirmPending = false
+                        onAccepted: aliasRow.submit()
+                    }
+                    Button {
+                        text: qsTr("Add")
+                        enabled: alias.canAdd && !aliasesTab.confirmPending
+                        onClicked: aliasRow.submit()
+                    }
+                }
+
+                // Inline merge confirmation (Enter confirms, Esc cancels). It takes
+                // focus when shown so the keys reach it rather than the dialog.
+                FocusScope {
+                    id: confirmBox
+                    Layout.fillWidth: true
+                    visible: aliasesTab.confirmPending
+                    implicitHeight: visible ? confirmRow.implicitHeight : 0
+                    onVisibleChanged: if (visible) forceActiveFocus()
+                    Keys.onReturnPressed: aliasRow.submit()
+                    Keys.onEnterPressed: aliasRow.submit()
+                    Keys.onEscapePressed: (event) => {
+                        aliasesTab.confirmPending = false
+                        event.accepted = true
+                    }
+
+                    RowLayout {
+                        id: confirmRow
+                        width: parent.width
+                        spacing: 8
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: 12
+                            text: qsTr("Merge %n photo(s) from “%1” into “%2”? This can’t be undone.", "",
+                                       alias.mergeCount).arg(alias.aliasName).arg(alias.canonName)
+                        }
+                        Button {
+                            text: qsTr("Merge")
+                            highlighted: true
+                            onClicked: aliasRow.submit()
+                        }
+                        Button {
+                            text: qsTr("Cancel")
+                            onClicked: aliasesTab.confirmPending = false
+                        }
+                    }
+                }
+
+                // Hint / validation message (hidden while confirming a merge).
+                Label {
+                    Layout.fillWidth: true
+                    visible: !aliasesTab.confirmPending
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 12
+                    color: palette.placeholderText
+                    text: alias.isSelf ? qsTr("A tag can’t be an alias of itself.")
+                        : alias.alreadyAlias ? qsTr("“%1” is already an alias.").arg(alias.aliasName)
+                        : (alias.aliasName !== "" && alias.canonId < 0 && alias.canonName !== "")
+                            ? qsTr("Pick an existing tag for the alias to point to.")
+                        : alias.isMerge && alias.canAdd
+                            ? qsTr("“%1” is already a tag — adding this merges it into “%2”.")
+                                  .arg(alias.aliasName).arg(alias.canonName)
+                        : qsTr("An alias lets a second name resolve to a tag, e.g. “forests” → “forest”.")
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    font.bold: true
+                    text: alias.canonQuery === "" ? qsTr("All aliases")
+                                                  : qsTr("Aliases for “%1”").arg(alias.canonName)
+                }
+
+                Frame {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 280
+                    padding: 0
+
+                    ListView {
+                        id: aliasList
+                        anchors.fill: parent
+                        clip: true
+                        // Live-filter to the aliases of the canonical tag being typed.
+                        model: alias.canonQuery === ""
+                               ? root.aliases
+                               : root.aliases.filter(a => TextMatch.fold(a.tagName).indexOf(alias.canonQuery) !== -1)
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar {}
+
+                        // Ordered by canonical tag then alias, so a tag's aliases sit
+                        // together — shown as "alias → canonical", like the rules list.
+                        delegate: ItemDelegate {
+                            id: alrow
+                            width: ListView.view.width
+                            required property var modelData
+
+                            contentItem: RowLayout {
+                                spacing: 10
+                                CanonChip { label: alrow.modelData.aliasName; colorSlot: -1 }
+                                Label { text: "→"; font.pixelSize: 16; color: palette.placeholderText }
+                                CanonChip {
+                                    label: alrow.modelData.tagName
+                                    colorSlot: alrow.modelData.colorSlot
+                                }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    text: qsTr("Remove")
+                                    onClicked: root.library.removeTagAlias(alrow.modelData.aliasName)
+                                }
+                            }
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            width: parent.width - 32
+                            visible: aliasList.count === 0
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: alias.canonQuery === ""
+                                  ? qsTr("No aliases yet. Add one above so a second name resolves to a tag.")
+                                  : qsTr("No aliases for “%1” yet.").arg(alias.canonName)
+                            color: palette.placeholderText
+                        }
+
+                        WheelScroller { flickable: aliasList }
                     }
                 }
             }

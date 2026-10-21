@@ -29,6 +29,9 @@ public slots:
     // of files removed more than `retentionDays` ago (0 = keep forever).
     void rescan(int retentionDays);
     void expandImplications();                // apply tag implications across the whole library
+    // Create a tag alias, merging the colliding tag into the canonical one in a
+    // single transaction (the merge moves photo_tags, so it runs off the GUI thread).
+    void createAlias(const QString &name, int tagId);
     void addTagToPhotos(const QList<int> &photoIds, const QString &name);
     void removeTagFromPhotos(const QList<int> &photoIds, int tagId);
     void flushSidecars();                     // write queued photos' XMP sidecars
@@ -46,6 +49,7 @@ signals:
     void importFinished(const QString &root);
     void rescanFinished(bool changed); // changed == false when nothing displayable moved
     void implicationsExpanded();
+    void aliasCreated(); // a merging alias finished; reload models + refresh the alias list
     void tagJobFinished();
     void sidecarFlushFinished(int written, int failed);
 

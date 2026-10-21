@@ -90,6 +90,16 @@ private slots:
     void expandAllImplicationsResolvesDiamond();
     void removeImplicationStopsFuturePropagationOnly();
     void deleteTagCascadesImplications();
+
+    // Tag aliases
+    void resolveTagNameAndEnsureTagFollowAliases();
+    void createAliasWithoutExistingTagAddsRedirectOnly();
+    void createAliasMergesExistingTagAcrossAllTables();
+    void createAliasRejectsSelfNameAndDuplicate();
+    void removeAliasKeepsCanonicalTag();
+    void deletingCanonicalTagCascadesAliases();
+    void renameTagOntoAliasNameIsRejectedByDatabase();
+
     void linkPhotoTagFailsOnMissingForeignKey();
     void coOccurringTagsEmptyWhenNoCoOccurrence();
 
@@ -1165,6 +1175,183 @@ void TestDatabase::photosNeedingResampleSelectsLargeLegacyHashes()
     QVERIFY(ids.contains(hidden)); // disabled folder included
     QCOMPARE(ids.size(), 2);       // not the sampled, small, or un-hashed rows
     QVERIFY(m_db->hasResampleCandidates(T));
+}
+
+// --- Tag aliases ------------------------------------------------------------
+
+void TestDatabase::resolveTagNameAndEnsureTagFollowAliases()
+{
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    QVERIFY(m_db->createAlias(QStringLiteral("forests"), forest));
+
+    // resolveTagName maps the alias (any case) to the canonical id, a real tag to
+    // its own id, and an unknown name to -1.
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("forests")), forest);
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("FORESTS")), forest);
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("forest")), forest);
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("nope")), -1);
+
+    // ensureTag resolves the alias to the canonical tag and never creates a row for
+    // the alias name.
+    QCOMPARE(m_db->ensureTag(QStringLiteral("forests")), forest);
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("forests")), -1); // raw: no "forests" tag exists
+}
+
+void TestDatabase::createAliasWithoutExistingTagAddsRedirectOnly()
+{
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    QVERIFY(m_db->createAlias(QStringLiteral("woods"), forest));
+
+    // No tag named "woods" is created; it only redirects.
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("woods")), -1);
+    QVERIFY(m_db->aliasExists(QStringLiteral("woods")));
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("woods")), forest);
+
+    const QVector<AliasInfo> aliases = m_db->loadAliases();
+    QCOMPARE(aliases.size(), 1);
+    QCOMPARE(aliases.first().aliasName, QStringLiteral("woods"));
+    QCOMPARE(aliases.first().tagId, forest);
+    QCOMPARE(aliases.first().tagName, QStringLiteral("forest"));
+}
+
+void TestDatabase::createAliasMergesExistingTagAcrossAllTables()
+{
+    // A is the canonical tag; B becomes an alias of A, so B's links fold into A.
+    const int a = m_db->ensureTag(QStringLiteral("forest"));
+    const int b = m_db->ensureTag(QStringLiteral("forests"));
+    const int x = m_db->ensureTag(QStringLiteral("x"));
+    const int y = m_db->ensureTag(QStringLiteral("y"));
+    const int z = m_db->ensureTag(QStringLiteral("z"));
+
+    // photo_tags: a photo only on B, and one on both (to exercise the dedupe).
+    const int pB = m_db->insertPhoto(QStringLiteral("/p/b.jpg"), QString());
+    const int pBoth = m_db->insertPhoto(QStringLiteral("/p/both.jpg"), QString());
+    m_db->linkPhotoTag(pB, b);
+    m_db->linkPhotoTag(pBoth, a);
+    m_db->linkPhotoTag(pBoth, b);
+
+    // content_tags: B archived under a hash; a shared hash archived under both.
+    m_db->rememberContentTag(QStringLiteral("HB"), b);
+    m_db->rememberContentTag(QStringLiteral("HS"), a);
+    m_db->rememberContentTag(QStringLiteral("HS"), b);
+
+    // smart_album_tags: an album referencing both A and B.
+    const int sa = m_db->createSmartAlbum(QStringLiteral("sa"), {a, b}, true);
+    QVERIFY(sa > 0);
+
+    // tag_implications on both sides, including two that become self-loops (A<->B)
+    // and one that becomes a duplicate (z->a and z->b).
+    m_db->addImplication(x, b);
+    m_db->addImplication(b, y);
+    m_db->addImplication(a, b);
+    m_db->addImplication(b, a);
+    m_db->addImplication(z, a);
+    m_db->addImplication(z, b);
+
+    QVERIFY(m_db->createAlias(QStringLiteral("forests"), a));
+
+    // B is gone; "forests" now resolves to A via the alias.
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("forests")), -1);
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("forests")), a);
+    QVERIFY(m_db->aliasExists(QStringLiteral("forests")));
+
+    // photo_tags moved to A (and deduped on the photo that had both).
+    QVERIFY(m_db->photoTagIds(pB).contains(a));
+    QVERIFY(m_db->photoTagIds(pBoth).contains(a));
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.exec(QStringLiteral("SELECT COUNT(*) FROM photo_tags WHERE photo_id = %1 AND tag_id = %2")
+               .arg(pBoth).arg(a));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toInt(), 1); // not duplicated
+
+    // content_tags moved to A: a fresh copy of HB now receives A, and HS carries A once.
+    const int pHB = m_db->insertPhoto(QStringLiteral("/p/hb.jpg"), QStringLiteral("HB"));
+    m_db->applyContentTags(pHB, QStringLiteral("HB"));
+    QVERIFY(m_db->photoTagIds(pHB).contains(a));
+    q.exec(QStringLiteral("SELECT COUNT(*) FROM content_tags WHERE hash = 'HS' AND tag_id = %1").arg(a));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toInt(), 1);
+    q.exec(QStringLiteral("SELECT COUNT(*) FROM content_tags WHERE tag_id = %1").arg(b));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toInt(), 0); // nothing left pointing at B
+
+    // smart_album_tags: the album now lists A once, not A+B.
+    QCOMPARE(m_db->smartAlbum(sa).tagIds, QList<int>{a});
+
+    // tag_implications: rewired to x->a, a->y, z->a; the A<->B self-loops dropped,
+    // z->b folded into the existing z->a.
+    q.exec(QStringLiteral("SELECT COUNT(*) FROM tag_implications WHERE antecedent_id = consequent_id"));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toInt(), 0);
+    q.exec(QStringLiteral("SELECT antecedent_id, consequent_id FROM tag_implications "
+                          "ORDER BY antecedent_id, consequent_id"));
+    QList<QPair<int, int>> rules;
+    while (q.next())
+        rules.append({q.value(0).toInt(), q.value(1).toInt()});
+    QCOMPARE(rules.size(), 3);
+    QVERIFY(rules.contains(qMakePair(x, a)));
+    QVERIFY(rules.contains(qMakePair(a, y)));
+    QVERIFY(rules.contains(qMakePair(z, a)));
+
+    // The merged photos are queued for sidecar rewrite (now under the canonical name).
+    const QList<int> dirty = m_db->sidecarDirtyIds();
+    QVERIFY(dirty.contains(pB));
+    QVERIFY(dirty.contains(pBoth));
+}
+
+void TestDatabase::createAliasRejectsSelfNameAndDuplicate()
+{
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    // Aliasing a tag to its own name (any case) is refused.
+    QVERIFY(!m_db->createAlias(QStringLiteral("forest"), forest));
+    QVERIFY(!m_db->createAlias(QStringLiteral("FOREST"), forest));
+    QVERIFY(!m_db->aliasExists(QStringLiteral("forest")));
+
+    // A second alias with the same name is refused.
+    const int tree = m_db->ensureTag(QStringLiteral("tree"));
+    QVERIFY(m_db->createAlias(QStringLiteral("woods"), forest));
+    QVERIFY(!m_db->createAlias(QStringLiteral("woods"), tree));
+    QVERIFY(!m_db->createAlias(QStringLiteral("WOODS"), tree));
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("woods")), forest); // still the first target
+}
+
+void TestDatabase::removeAliasKeepsCanonicalTag()
+{
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    const int p = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    m_db->linkPhotoTag(p, forest);
+    QVERIFY(m_db->createAlias(QStringLiteral("woods"), forest));
+
+    m_db->removeAlias(QStringLiteral("woods"));
+    QVERIFY(!m_db->aliasExists(QStringLiteral("woods")));
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("woods")), -1); // no longer resolves
+    // The canonical tag and its photo link are untouched.
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("forest")), forest);
+    QVERIFY(m_db->photoTagIds(p).contains(forest));
+}
+
+void TestDatabase::deletingCanonicalTagCascadesAliases()
+{
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    QVERIFY(m_db->createAlias(QStringLiteral("woods"), forest));
+    QVERIFY(m_db->createAlias(QStringLiteral("forests"), forest));
+    QCOMPARE(m_db->loadAliases().size(), 2);
+
+    m_db->deleteTag(forest); // user tag (system = 0) → deletes
+    QCOMPARE(m_db->loadAliases().size(), 0); // ON DELETE CASCADE dropped both aliases
+    QVERIFY(!m_db->aliasExists(QStringLiteral("woods")));
+}
+
+void TestDatabase::renameTagOntoAliasNameIsRejectedByDatabase()
+{
+    // The Library guards this, but assert the DB primitives it relies on: an alias
+    // name is detectable so a tag can't be renamed onto it.
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    const int tree = m_db->ensureTag(QStringLiteral("tree"));
+    QVERIFY(m_db->createAlias(QStringLiteral("woods"), forest));
+    QVERIFY(m_db->aliasExists(QStringLiteral("woods")));
+    QCOMPARE(m_db->tagIdByName(QStringLiteral("woods")), -1); // not a tag, only an alias
+    Q_UNUSED(tree);
 }
 
 QTEST_GUILESS_MAIN(TestDatabase)

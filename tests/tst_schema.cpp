@@ -37,6 +37,7 @@ private slots:
     void seedsSidecarDirtyForNeverSyncedTaggedPhotos();
     void convertsPipeNamesAndMergesCollisions();
     void clearsVideoDatesForCreationTimeReread();
+    void upgradesToV15AddsTagAliases();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -410,6 +411,32 @@ void TestSchema::clearsVideoDatesForCreationTimeReread()
         QVERIFY(backupFiles().isEmpty());           // additive step → no backup
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v14"));
+}
+
+void TestSchema::upgradesToV15AddsTagAliases()
+{
+    // Build a current database, then rewind to v14: drop tag_aliases and the
+    // version so the v15 migration genuinely re-runs.
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v15_seed")));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v15_seed"));
+    execRaw(dbPath(), QStringLiteral(
+        "DROP TABLE IF EXISTS tag_aliases;"
+        "PRAGMA user_version = 14;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v15")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+        // The alias table exists and resolves names through it.
+        const int tag = db.ensureTag(QStringLiteral("forest"));
+        QVERIFY(db.createAlias(QStringLiteral("forests"), tag));
+        QCOMPARE(db.resolveTagName(QStringLiteral("forests")), tag);
+        QVERIFY(backupFiles().isEmpty()); // additive step → no backup
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v15"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)

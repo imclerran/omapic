@@ -20,7 +20,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 14;
+constexpr int kSchemaVersion = 15;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -137,6 +137,7 @@ bool Database::runMigrations(int fromVersion)
         {12, &Database::migrate_11_to_12, nullptr},
         {13, &Database::migrate_12_to_13, &Database::namesContainPipe},
         {14, &Database::migrate_13_to_14, nullptr},
+        {15, &Database::migrate_14_to_15, nullptr},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -426,37 +427,8 @@ void Database::migrate_12_to_13()
             continue;
         }
 
-        // Merge oldId into existing across every table that references a tag id.
-        // UPDATE OR IGNORE skips rows that would duplicate a primary key, and the
-        // follow-up DELETE clears whatever was left behind.
-        const char *const refs[][2] = {
-            {"photo_tags", "tag_id"},
-            {"content_tags", "tag_id"},
-            {"smart_album_tags", "tag_id"},
-            {"tag_implications", "antecedent_id"},
-            {"tag_implications", "consequent_id"},
-        };
-        for (const auto &r : refs) {
-            QSqlQuery up(m_db);
-            up.prepare(QStringLiteral("UPDATE OR IGNORE %1 SET %2 = ? WHERE %2 = ?")
-                           .arg(QLatin1String(r[0]), QLatin1String(r[1])));
-            up.addBindValue(existing);
-            up.addBindValue(oldId);
-            up.exec();
-            QSqlQuery del(m_db);
-            del.prepare(QStringLiteral("DELETE FROM %1 WHERE %2 = ?")
-                            .arg(QLatin1String(r[0]), QLatin1String(r[1])));
-            del.addBindValue(oldId);
-            del.exec();
-        }
-        // The merge can create a self-implication (a -> a); drop any.
-        QSqlQuery loop(m_db);
-        loop.exec(QStringLiteral(
-            "DELETE FROM tag_implications WHERE antecedent_id = consequent_id"));
-        QSqlQuery drop(m_db);
-        drop.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?"));
-        drop.addBindValue(oldId);
-        drop.exec();
+        // The sanitized name collides with another tag; fold this one into it.
+        mergeTagInto(oldId, existing);
     }
 
     // Categories. Only tags.category_id references a category, so the merge is
@@ -513,6 +485,20 @@ void Database::migrate_13_to_14()
         "UPDATE photos SET taken_at = NULL WHERE "
         "lower(path) LIKE '%.mp4' OR lower(path) LIKE '%.m4v' OR lower(path) LIKE '%.webm' "
         "OR lower(path) LIKE '%.mkv' OR lower(path) LIKE '%.mov' OR lower(path) LIKE '%.avi'"));
+}
+
+void Database::migrate_14_to_15()
+{
+    // Tag aliases: alternate names that resolve to a canonical tag. The name is the
+    // primary key (COLLATE NOCASE, like tag names), and ON DELETE CASCADE drops an
+    // alias when its canonical tag is deleted. Additive — no backup needed.
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS tag_aliases ("
+        "  alias_name TEXT PRIMARY KEY COLLATE NOCASE,"
+        "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tag_aliases_tag ON tag_aliases(tag_id)"));
 }
 
 bool Database::legacyAlbumsNeedRename()
@@ -1637,6 +1623,10 @@ void Database::clearOrphanedHash(const QString &hash)
 int Database::ensureTag(const QString &rawName)
 {
     const QString name = sanitizeName(rawName);
+    // An alias resolves to its canonical tag — never materialize a tag for it.
+    const int aliased = aliasTarget(name);
+    if (aliased >= 0)
+        return aliased;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("INSERT OR IGNORE INTO tags(name) VALUES(?)"));
     q.addBindValue(name);
@@ -1742,6 +1732,125 @@ void Database::deleteTag(int tagId)
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM tags WHERE id = ? AND system = 0")); // photo_tags + implications cascade
     q.addBindValue(tagId);
+    q.exec();
+}
+
+void Database::mergeTagInto(int fromTagId, int intoTagId)
+{
+    if (fromTagId < 0 || intoTagId < 0 || fromTagId == intoTagId)
+        return;
+    // Move fromTagId's rows to intoTagId across every table that references a tag
+    // id. UPDATE OR IGNORE skips rows that would duplicate a primary key (the
+    // target already has that link), and the follow-up DELETE clears whatever was
+    // left behind on the losing id.
+    const char *const refs[][2] = {
+        {"photo_tags", "tag_id"},
+        {"content_tags", "tag_id"},
+        {"smart_album_tags", "tag_id"},
+        {"tag_implications", "antecedent_id"},
+        {"tag_implications", "consequent_id"},
+    };
+    for (const auto &r : refs) {
+        QSqlQuery up(m_db);
+        up.prepare(QStringLiteral("UPDATE OR IGNORE %1 SET %2 = ? WHERE %2 = ?")
+                       .arg(QLatin1String(r[0]), QLatin1String(r[1])));
+        up.addBindValue(intoTagId);
+        up.addBindValue(fromTagId);
+        up.exec();
+        QSqlQuery del(m_db);
+        del.prepare(QStringLiteral("DELETE FROM %1 WHERE %2 = ?")
+                        .arg(QLatin1String(r[0]), QLatin1String(r[1])));
+        del.addBindValue(fromTagId);
+        del.exec();
+    }
+    // The merge can create a self-implication (a -> a); drop any.
+    QSqlQuery loop(m_db);
+    loop.exec(QStringLiteral("DELETE FROM tag_implications WHERE antecedent_id = consequent_id"));
+    QSqlQuery drop(m_db);
+    drop.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?"));
+    drop.addBindValue(fromTagId);
+    drop.exec();
+}
+
+int Database::aliasTarget(const QString &name)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT tag_id FROM tag_aliases WHERE alias_name = ?"));
+    q.addBindValue(name.trimmed()); // alias_name is COLLATE NOCASE, so case is ignored
+    q.exec();
+    if (q.next())
+        return q.value(0).toInt();
+    return -1;
+}
+
+int Database::resolveTagName(const QString &name)
+{
+    const int aliased = aliasTarget(name);
+    if (aliased >= 0)
+        return aliased;
+    return tagIdByName(name.trimmed());
+}
+
+bool Database::aliasExists(const QString &name)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT 1 FROM tag_aliases WHERE alias_name = ? LIMIT 1"));
+    q.addBindValue(name.trimmed());
+    q.exec();
+    return q.next();
+}
+
+QVector<AliasInfo> Database::loadAliases()
+{
+    QVector<AliasInfo> out;
+    QSqlQuery q(QStringLiteral(
+                    "SELECT a.alias_name, t.id, t.name, c.color_slot "
+                    "FROM tag_aliases a "
+                    "JOIN tags t ON t.id = a.tag_id "
+                    "LEFT JOIN tag_categories c ON c.id = t.category_id "
+                    "ORDER BY t.name COLLATE NOCASE, a.alias_name COLLATE NOCASE"),
+                m_db);
+    while (q.next()) {
+        AliasInfo info;
+        info.aliasName = q.value(0).toString();
+        info.tagId = q.value(1).toInt();
+        info.tagName = q.value(2).toString();
+        info.colorSlot = q.value(3).isNull() ? -1 : q.value(3).toInt();
+        out.append(info);
+    }
+    return out;
+}
+
+bool Database::createAlias(const QString &rawName, int tagId)
+{
+    const QString name = sanitizeName(rawName).trimmed();
+    if (name.isEmpty() || tagId < 0)
+        return false;
+    // Can't alias a tag to its own name, and alias names are unique among aliases.
+    if (name.compare(tagName(tagId), Qt::CaseInsensitive) == 0)
+        return false;
+    if (aliasExists(name))
+        return false;
+    // When the alias name is itself an existing tag, fold that tag into the
+    // canonical one so the alias is a true merge, not a dangling redirect, and
+    // queue the now-canonical photos for sidecar rewrite.
+    const int existing = tagIdByName(name);
+    if (existing >= 0 && existing != tagId) {
+        mergeTagInto(existing, tagId);
+        enqueueSidecarDirtyForTag(tagId);
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO tag_aliases(alias_name, tag_id) VALUES(?, ?)"));
+    q.addBindValue(name);
+    q.addBindValue(tagId);
+    return q.exec();
+}
+
+void Database::removeAlias(const QString &name)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM tag_aliases WHERE alias_name = ?"));
+    q.addBindValue(name.trimmed());
     q.exec();
 }
 

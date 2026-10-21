@@ -100,6 +100,18 @@ struct ImplicationInfo {
     int consequentColorSlot = -1;
 };
 
+// A tag alias: an alternate name that resolves to a canonical tag. Aliases never
+// appear as tags themselves (not in the sidebar, counts, chips, smart albums,
+// implications, or sidecar export) — they only redirect a typed or imported name
+// to the canonical tag. tagName/colorSlot describe the canonical tag, for
+// grouping and coloring the alias list in the manager.
+struct AliasInfo {
+    QString aliasName;
+    int tagId = -1;
+    QString tagName;
+    int colorSlot = -1;
+};
+
 // An album: a tag in the reserved (hidden) "Albums" category. Favorites is the
 // one album with favorite == true, always sorted first.
 struct AlbumInfo {
