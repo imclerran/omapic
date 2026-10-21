@@ -22,7 +22,7 @@ A PKGBUILD is in [`packaging/aur/`](packaging/aur/).
 
 ## Build
 
-Requires Qt 6.5+, exiv2, CMake, and a C++17 compiler. At runtime, `ffmpegthumbnailer` provides video thumbnails and `kimageformats` (with `libheif` and `libavif`) provides HEIC/AVIF support. Aether is optional.
+Requires Qt 6.5+, exiv2, CMake, and a C++17 compiler. At runtime, `ffmpegthumbnailer` provides video thumbnails, `ffprobe` (from `ffmpeg`) reads video capture dates and metadata, and `kimageformats` (with `libheif` and `libavif`) provides HEIC/AVIF support. Aether is optional.
 
 ```sh
 cmake -B build -G Ninja
