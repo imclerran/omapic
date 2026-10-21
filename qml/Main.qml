@@ -1150,6 +1150,11 @@ ApplicationWindow {
         // true: group photos by containing folder before sorting by file name.
         // false (original): sort by file name across all folders.
         property bool folderFirst: false
+        // How the flat / folder / album grids order photos (PhotoFilterModel.SortMode:
+        // 0 name, 1 date, 2 tag count) and the direction. The timeline always sorts
+        // by date, newest first.
+        property int sortMode: PhotoFilterModel.SortByName
+        property bool sortAscending: true
         // Central view mode: "ungrouped" (the flat grid), "timeline" (grouped by
         // capture month), or "folder" (navigable library folders). Timeline is the
         // first-launch default; a user's later choice is saved and restored.
@@ -1216,8 +1221,14 @@ ApplicationWindow {
         // level (currentAlbum <= 0) the query is empty.
         const q = (albums && win.currentAlbum > 0) ? library.albumQuery(win.currentAlbum)
                                                     : { tags: [], matchAll: true }
+        // Timeline is inherently chronological (newest first); the other views use
+        // the chosen sort mode and direction.
+        const timeline = win.viewMode === "timeline"
+        const sortMode = timeline ? PhotoFilterModel.SortByDate : gallerySettings.sortMode
+        const ascending = timeline ? false : gallerySettings.sortAscending
         library.filtered.applyView(win.viewMode === "ungrouped",     // dedupe
-                                   win.viewMode === "timeline" || albums, // sortByDate (albums: newest first)
+                                   sortMode,                          // name / date / tag count
+                                   ascending,                         // sort direction
                                    win.viewMode === "folder",         // folderMode
                                    win.currentFolder,                 // folderPath
                                    albums,                            // albumMode
@@ -1226,6 +1237,24 @@ ApplicationWindow {
         // Scope the filter sidebar's tag chips to the current folder subtree while
         // browsing folders; the whole library otherwise (and at the folder root).
         library.setTagFolderScope(win.viewMode === "folder" ? win.currentFolder : "")
+    }
+
+    // The natural direction for a sort mode: names read A→Z (ascending); dates and
+    // tag counts read high-to-low (newest / most-tagged first).
+    function sortDefaultAscending(mode) {
+        return mode === PhotoFilterModel.SortByName
+    }
+    // Pick a sort mode, resetting the direction to that mode's natural default, and
+    // re-sort the grid.
+    function setSortMode(mode) {
+        gallerySettings.sortMode = mode
+        gallerySettings.sortAscending = win.sortDefaultAscending(mode)
+        win.applyViewFilter()
+    }
+    // Flip the current sort direction and re-sort.
+    function toggleSortDirection() {
+        gallerySettings.sortAscending = !gallerySettings.sortAscending
+        win.applyViewFilter()
     }
 
     // The modal dialogs are lazy-loaded: their (sizable) content is only built
@@ -1318,7 +1347,6 @@ ApplicationWindow {
         function onMatchAllChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
         // Search toggles folder/album views between navigation (tiles) and flat results.
         function onSearchTextChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
-        function onTagPresenceChanged() { win.pruneSelection() }
     }
 
     // Changing the tag filter re-anchors the gallery to the top of the results.
@@ -1327,8 +1355,7 @@ ApplicationWindow {
         function onSelectionChanged() { win.scrollGalleryToTop() }
     }
 
-    // Push the sidebar's tag selection, match mode, and tagged/untagged filter
-    // into the gallery filter model.
+    // Push the sidebar's tag selection and match mode into the gallery filter model.
     Binding {
         target: library.filtered
         property: "selectedTagIds"
@@ -1338,11 +1365,6 @@ ApplicationWindow {
         target: library.filtered
         property: "matchAll"
         value: tagSidebar.matchAll
-    }
-    Binding {
-        target: library.filtered
-        property: "tagPresence"
-        value: tagSidebar.tagPresence
     }
 
     // Status bar: photo/selection count always, plus a progress bar for
@@ -1383,6 +1405,92 @@ ApplicationWindow {
                 indeterminate: library.progress < 0
                 from: 0; to: 1
                 value: library.progress < 0 ? 0 : library.progress
+            }
+
+            // Sort controls for the flat / folder / album grids: a mode picker and a
+            // direction toggle, kept tight together (spacing 2) while the row's own
+            // 12px gap separates them from the neighbors. Hidden in the timeline,
+            // which is always chronological. The choice is persisted.
+            RowLayout {
+                spacing: 2
+                visible: win.viewMode !== "timeline"
+
+                ToolButton {
+                    id: sortButton
+                    text: (gallerySettings.sortMode === PhotoFilterModel.SortByDate ? qsTr("Sort: Date")
+                           : gallerySettings.sortMode === PhotoFilterModel.SortByTagCount ? qsTr("Sort: Tags")
+                           : qsTr("Sort: Name")) + "  ▾"
+                    font.pixelSize: 12
+                    topPadding: 3
+                    bottomPadding: 3
+                    leftPadding: 10
+                    rightPadding: 10
+                    Layout.preferredHeight: 24
+                    onClicked: sortMenu.open()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("How photos are ordered in this view")
+
+                    Menu {
+                        id: sortMenu
+                        y: -height // open upward out of the status bar
+                        ButtonGroup { id: sortGroup }
+                        // Sync the radio state from the setting each time it opens, so
+                        // nothing clobbers the checked binding on click.
+                        onOpened: {
+                            sortByName.checked = gallerySettings.sortMode === PhotoFilterModel.SortByName
+                            sortByDateItem.checked = gallerySettings.sortMode === PhotoFilterModel.SortByDate
+                            sortByTags.checked = gallerySettings.sortMode === PhotoFilterModel.SortByTagCount
+                        }
+                        MenuItem {
+                            id: sortByName
+                            text: qsTr("Name")
+                            checkable: true
+                            ButtonGroup.group: sortGroup
+                            onTriggered: win.setSortMode(PhotoFilterModel.SortByName)
+                        }
+                        MenuItem {
+                            id: sortByDateItem
+                            text: qsTr("Date")
+                            checkable: true
+                            ButtonGroup.group: sortGroup
+                            onTriggered: win.setSortMode(PhotoFilterModel.SortByDate)
+                        }
+                        MenuItem {
+                            id: sortByTags
+                            text: qsTr("Tag count")
+                            checkable: true
+                            ButtonGroup.group: sortGroup
+                            onTriggered: win.setSortMode(PhotoFilterModel.SortByTagCount)
+                        }
+                    }
+                }
+
+                // Ascending / descending toggle for the sort above. The glyph points
+                // the way the values run (↑ ascending, ↓ descending); the tooltip
+                // spells out what that means for the current mode.
+                ToolButton {
+                    id: sortDirButton
+                    text: gallerySettings.sortAscending ? "↑" : "↓"
+                    font.pixelSize: 13
+                    topPadding: 3
+                    bottomPadding: 3
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredHeight: 24
+                    onClicked: win.toggleSortDirection()
+                    ToolTip.visible: hovered
+                    ToolTip.text: {
+                        const asc = gallerySettings.sortAscending
+                        switch (gallerySettings.sortMode) {
+                        case PhotoFilterModel.SortByDate:
+                            return asc ? qsTr("Oldest first") : qsTr("Newest first")
+                        case PhotoFilterModel.SortByTagCount:
+                            return asc ? qsTr("Fewest tags first") : qsTr("Most tags first")
+                        default:
+                            return asc ? qsTr("A → Z") : qsTr("Z → A")
+                        }
+                    }
+                }
             }
 
             // Toggle thumbnails between cropped-to-square and whole-image (fit).
@@ -1693,8 +1801,6 @@ ApplicationWindow {
                 // narrow its tags to the current match set when this is on.
                 onMatchAllChanged: { library.setMatchAll(matchAll); win.scrollGalleryToTop() }
                 Component.onCompleted: library.setMatchAll(matchAll)
-                // The tagged/untagged filter also re-anchors the gallery.
-                onTagPresenceChanged: win.scrollGalleryToTop()
                 // Tab cycle: tag filter → gallery; Shift+Tab → add-a-tag.
                 onTabForward: win.tabStepTo(2, true)
                 onTabBackward: win.tabStepTo(0, false)
@@ -1797,8 +1903,7 @@ ApplicationWindow {
             Label {
                 anchors.centerIn: parent
                 visible: grid.visible && grid.count === 0
-                text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === ""
-                       && tagSidebar.tagPresence === 0)
+                text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === "")
                       ? qsTr("Import a folder to get started.")
                       : qsTr("No photos match the current filters.")
                 color: palette.placeholderText
@@ -1849,7 +1954,7 @@ ApplicationWindow {
                 cursorIndex: win.cursorIndex
                 anchorIndex: win.anchorIndex
                 emptyFiltered: library.tags.selectedTagIds.length === 0
-                               && gallerySearch.text.trim() === "" && tagSidebar.tagPresence === 0
+                               && gallerySearch.text.trim() === ""
                 onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
                 onPhotoDoubleClicked: (id) => win.openViewer(id)
                 onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)

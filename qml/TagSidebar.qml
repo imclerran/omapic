@@ -30,7 +30,6 @@ Rectangle {
     }
     // Exposed so Main can drive the filter / faceting from these controls.
     property alias matchAll: matchAllSwitch.checked
-    property int tagPresence: 0 // 0 all, 1 tagged only, 2 untagged only
 
     // Tab focus cycle (routed by Main): forward from / back to the filter field.
     signal tabForward()
@@ -215,15 +214,6 @@ Rectangle {
                 checked: true
             }
             Item { Layout.fillWidth: true }
-            Button {
-                text: root.tagPresence === 0 ? qsTr("All")
-                    : root.tagPresence === 1 ? qsTr("Tagged")
-                    : qsTr("Untagged")
-                highlighted: root.tagPresence !== 0
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Cycle: all photos → tagged only → untagged only")
-                onClicked: root.tagPresence = (root.tagPresence + 1) % 3
-            }
         }
     }
 }

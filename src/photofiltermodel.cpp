@@ -75,16 +75,6 @@ void PhotoFilterModel::setSearchText(const QString &text)
     emit countChanged();
 }
 
-void PhotoFilterModel::setTagPresence(TagPresence mode)
-{
-    if (m_tagPresence == mode)
-        return;
-    m_tagPresence = mode;
-    invalidateRowFilter();
-    emit tagPresenceChanged();
-    emit countChanged();
-}
-
 void PhotoFilterModel::setFolderFirst(bool on)
 {
     if (m_folderFirst == on)
@@ -95,13 +85,22 @@ void PhotoFilterModel::setFolderFirst(bool on)
     emit folderFirstChanged();
 }
 
-void PhotoFilterModel::setSortByDate(bool on)
+void PhotoFilterModel::setSortMode(SortMode mode)
 {
-    if (m_sortByDate == on)
+    if (m_sortMode == mode)
         return;
-    m_sortByDate = on;
+    m_sortMode = mode;
     invalidate(); // ordering only
-    emit sortByDateChanged();
+    emit sortModeChanged();
+}
+
+void PhotoFilterModel::setSortAscending(bool on)
+{
+    if (m_sortAscending == on)
+        return;
+    m_sortAscending = on;
+    invalidate(); // ordering only
+    emit sortAscendingChanged();
 }
 
 void PhotoFilterModel::setFolderMode(bool on)
@@ -134,7 +133,7 @@ void PhotoFilterModel::setDedupe(bool on)
     emit countChanged();
 }
 
-void PhotoFilterModel::applyView(bool dedupe, bool sortByDate, bool folderMode,
+void PhotoFilterModel::applyView(bool dedupe, int sortMode, bool sortAscending, bool folderMode,
                                  const QString &folderPath, bool albumMode,
                                  const QVariantList &albumTags, bool albumMatchAll)
 {
@@ -143,9 +142,11 @@ void PhotoFilterModel::applyView(bool dedupe, bool sortByDate, bool folderMode,
     for (const QVariant &v : albumTags)
         tags.append(v.toInt());
 
+    const SortMode mode = static_cast<SortMode>(sortMode);
     bool changed = false;
     if (m_dedupe != dedupe) { m_dedupe = dedupe; emit dedupeChanged(); changed = true; }
-    if (m_sortByDate != sortByDate) { m_sortByDate = sortByDate; emit sortByDateChanged(); changed = true; }
+    if (m_sortMode != mode) { m_sortMode = mode; emit sortModeChanged(); changed = true; }
+    if (m_sortAscending != sortAscending) { m_sortAscending = sortAscending; emit sortAscendingChanged(); changed = true; }
     if (m_folderMode != folderMode) { m_folderMode = folderMode; emit folderModeChanged(); changed = true; }
     if (m_folderPath != folderPath) { m_folderPath = folderPath; emit folderPathChanged(); changed = true; }
     if (m_albumMode != albumMode) { m_albumMode = albumMode; changed = true; }
@@ -258,22 +259,9 @@ bool PhotoFilterModel::containsId(int id) const
 
 bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const
 {
-    if (m_sortByDate) {
-        // Timeline: newest first. Fall back to the name (ascending) within the
-        // same instant so the order is stable and photos without a date (0) sort
-        // together at the end.
-        const qint64 lt = sourceModel()->data(left, PhotoModel::DateTakenRole).toLongLong();
-        const qint64 rt = sourceModel()->data(right, PhotoModel::DateTakenRole).toLongLong();
-        if (lt != rt)
-            return lt > rt;
-        const QString ln = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
-        const QString rn = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
-        return m_collator.compare(ln, rn) < 0;
-    }
-
     if (m_folderFirst) {
-        // Compare the containing folder first, so files group by folder; within a
-        // folder (or when the paths lack a separator) fall through to the name.
+        // Flat-view "group by folder": compare the containing folder first (always
+        // ascending), then order within a folder by the chosen sort below.
         const QString lp = sourceModel()->data(left, PhotoModel::FilePathRole).toString();
         const QString rp = sourceModel()->data(right, PhotoModel::FilePathRole).toString();
         const QString ld = lp.left(lp.lastIndexOf(QLatin1Char('/')));
@@ -283,9 +271,39 @@ bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &righ
             return dirCmp < 0;
     }
 
+    // Primary key for the active sort, computed in an ascending sense (negative =
+    // left orders first). m_sortAscending flips it; the file name is always the
+    // ascending tiebreak so equal keys keep a stable order.
+    int cmp = 0;
+    switch (m_sortMode) {
+    case SortByDate: {
+        // Ascending = oldest first. Photos without a date (0) share the smallest
+        // key, so they group together (at the start ascending, the end descending).
+        const qint64 lt = sourceModel()->data(left, PhotoModel::DateTakenRole).toLongLong();
+        const qint64 rt = sourceModel()->data(right, PhotoModel::DateTakenRole).toLongLong();
+        cmp = lt < rt ? -1 : lt > rt ? 1 : 0;
+        break;
+    }
+    case SortByTagCount: {
+        // Ascending = fewest tags first.
+        const int lc = sourceModel()->data(left, PhotoModel::TagCountRole).toInt();
+        const int rc = sourceModel()->data(right, PhotoModel::TagCountRole).toInt();
+        cmp = lc < rc ? -1 : lc > rc ? 1 : 0;
+        break;
+    }
+    case SortByName:
+        break; // the name comparison below is the key
+    }
+
     const QString ln = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
     const QString rn = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
-    return m_collator.compare(ln, rn) < 0;
+    const int nameCmp = m_collator.compare(ln, rn);
+    if (m_sortMode == SortByName)
+        cmp = nameCmp;
+    else if (cmp == 0)
+        return nameCmp < 0; // stable tiebreak, always ascending
+
+    return m_sortAscending ? cmp < 0 : cmp > 0;
 }
 
 bool PhotoFilterModel::passesFolderGate(const QString &path) const
@@ -390,15 +408,6 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
             if (!any)
                 return false;
         }
-    }
-
-    // Tagged / untagged restriction.
-    if (m_tagPresence != AnyTags) {
-        const bool hasTags = !sourceModel()->data(idx, PhotoModel::TagIdsRole).toList().isEmpty();
-        if (m_tagPresence == TaggedOnly && !hasTags)
-            return false;
-        if (m_tagPresence == UntaggedOnly && hasTags)
-            return false;
     }
 
     // Text search: match the file name or any tag name. The model pre-folds both

@@ -30,6 +30,7 @@ public:
         IsDuplicateRole, // true for a non-representative duplicate (see Photo)
         FavoriteRole,  // true when the photo is in the hidden Favorites album
         SearchFoldRole, // pre-folded name+tags blob for the gallery search filter
+        TagCountRole,   // number of user-visible tags, for the tag-count sort
     };
 
     explicit PhotoModel(QObject *parent = nullptr);
