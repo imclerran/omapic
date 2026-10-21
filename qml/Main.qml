@@ -2190,6 +2190,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 tagModel: library.tags
+                aliases: library.tagAliases // match a tag by its aliases in the search
                 accent: win.accent
             }
         }
