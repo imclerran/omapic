@@ -17,9 +17,9 @@ Item {
     id: root
 
     property var tags: []                 // candidates: [{ name, colorSlot, categoryName }]
-    // Tag aliases: [{ aliasName, tagName, colorSlot }]. Offered as "alias → tag"
-    // hint rows that fill the canonical tag name on selection, so typing an alias
-    // resolves here too. Empty disables alias suggestions.
+    // Tag aliases: [{ aliasName, tagName, colorSlot }]. Typing an alias surfaces
+    // its canonical tag as a match (shown as the tag itself) and fills it on
+    // selection, so an alias resolves here too. Empty disables alias matching.
     property var aliases: []
     property string placeholderText: ""
     property var categoryColorFn: null    // function(colorSlot) -> color, optional
@@ -65,16 +65,16 @@ Item {
                     seen[ln] = true
                 }
             }
-            // Alias hints resolve to their canonical tag: shown as "alias → tag",
-            // they fill the canonical name on pick. An exact alias match is
-            // surfaced + pre-highlighted just like an exact tag.
+            // A typed alias matches its canonical tag: the row shows the canonical
+            // tag (indistinguishable from a direct match) and fills it on pick. An
+            // exact alias match is surfaced + pre-highlighted just like an exact tag.
             let exactAlias = null
             for (let i = 0; i < root.aliases.length; ++i) {
                 const a = root.aliases[i]
                 const af = TextMatch.fold(a.aliasName)
                 const cn = TextMatch.fold(a.tagName)
-                const hint = { name: a.tagName, colorSlot: a.colorSlot,
-                               categoryName: "", aliasFrom: a.aliasName }
+                // Shown as the canonical tag itself — the alias just matches it.
+                const hint = { name: a.tagName, colorSlot: a.colorSlot, categoryName: "" }
                 if (af === q) {
                     if (!exact) exactAlias = hint
                 } else if (af.indexOf(q) !== -1 && out.length < 8 && !seen[cn]) {
@@ -153,10 +153,7 @@ Item {
                         }
                         Label {
                             Layout.fillWidth: true
-                            // Alias rows read "alias → tag"; plain tags show the name.
-                            text: sg.modelData.aliasFrom
-                                  ? (sg.modelData.aliasFrom + " → " + sg.modelData.name)
-                                  : sg.modelData.name
+                            text: sg.modelData.name
                             elide: Text.ElideRight
                             // Track the highlight so the name stays readable (see
                             // the suggestion-contrast fix on the detail panel).

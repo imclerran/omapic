@@ -412,9 +412,8 @@ Rectangle {
                             seen[ln] = true
                         }
                     }
-                    // Alias hints resolve to their canonical tag: shown as "alias →
-                    // tag", they fill the canonical name on pick, so typing an alias
-                    // here applies the canonical tag.
+                    // A typed alias matches its canonical tag: the row shows the
+                    // canonical tag (like a direct match) and applies it on pick.
                     const aliases = root.aliasList
                     var exactAlias = null
                     for (var j = 0; j < aliases.length; ++j) {
@@ -423,8 +422,8 @@ Rectangle {
                             continue // canonical already on the photo
                         const af = TextMatch.fold(aliases[j].aliasName)
                         const cf = TextMatch.fold(cn)
-                        const hint = { name: cn, colorSlot: aliases[j].colorSlot,
-                                       categoryName: "", aliasFrom: aliases[j].aliasName }
+                        // Shown as the canonical tag itself — the alias just matches it.
+                        const hint = { name: cn, colorSlot: aliases[j].colorSlot, categoryName: "" }
                         if (af === q) {
                             if (!exact) exactAlias = hint
                         } else if (af.indexOf(q) !== -1 && matches.length < 8 && !seen[cf]) {
@@ -513,10 +512,7 @@ Rectangle {
                                 }
                                 Label {
                                     Layout.fillWidth: true
-                                    // Alias rows read "alias → tag"; plain tags show the name.
-                                    text: suggestion.modelData.aliasFrom
-                                          ? (suggestion.modelData.aliasFrom + " → " + suggestion.modelData.name)
-                                          : suggestion.modelData.name
+                                    text: suggestion.modelData.name
                                     elide: Text.ElideRight
                                     // Custom contentItem loses the delegate's
                                     // automatic highlight recoloring, so track it
