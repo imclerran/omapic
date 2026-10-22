@@ -95,9 +95,11 @@ struct ImplicationInfo {
     int antecedentId = -1;
     QString antecedentName;
     int antecedentColorSlot = -1;
+    QString antecedentCategoryName;
     int consequentId = -1;
     QString consequentName;
     int consequentColorSlot = -1;
+    QString consequentCategoryName; // empty when uncategorized
 };
 
 // A tag alias: an alternate name that resolves to a canonical tag. Aliases never

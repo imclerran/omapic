@@ -469,9 +469,11 @@ QVariantList Library::tagImplications() const
             {QStringLiteral("antecedentId"), i.antecedentId},
             {QStringLiteral("antecedentName"), i.antecedentName},
             {QStringLiteral("antecedentColorSlot"), i.antecedentColorSlot},
+            {QStringLiteral("antecedentCategoryName"), i.antecedentCategoryName},
             {QStringLiteral("consequentId"), i.consequentId},
             {QStringLiteral("consequentName"), i.consequentName},
             {QStringLiteral("consequentColorSlot"), i.consequentColorSlot},
+            {QStringLiteral("consequentCategoryName"), i.consequentCategoryName},
         });
     }
     return out;

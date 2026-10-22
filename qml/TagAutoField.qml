@@ -21,6 +21,10 @@ Item {
     // its canonical tag as a match (shown as the tag itself) and fills it on
     // selection, so an alias resolves here too. Empty disables alias matching.
     property var aliases: []
+    // Tag implications: [{ antecedentName, consequentName, consequentColorSlot,
+    // consequentCategoryName }]. Drives the highlighted-entry info panel. Empty
+    // disables it.
+    property var implications: []
     property string placeholderText: ""
     property var categoryColorFn: null    // function(colorSlot) -> color, optional
     property alias text: field.text
@@ -125,6 +129,7 @@ Item {
             closePolicy: Popup.CloseOnPressOutsideParent | Popup.CloseOnEscape
 
             contentItem: ListView {
+                id: sugList
                 implicitHeight: Math.min(field.suggestions.length, 8) * 32
                 model: field.suggestions
                 clip: true
@@ -134,9 +139,12 @@ Item {
                     id: sg
                     required property int index
                     required property var modelData
+                    readonly property bool nameTruncated: sgName.truncated
                     width: ListView.view.width
                     height: 32
                     highlighted: index === field.highlighted
+                    hoverEnabled: true
+                    onHoveredChanged: if (hovered) field.highlighted = index
                     onClicked: field.pick(sg.modelData.name)
 
                     contentItem: RowLayout {
@@ -148,6 +156,7 @@ Item {
                             color: root.swatchColor(sg.modelData.colorSlot)
                         }
                         Label {
+                            id: sgName
                             Layout.fillWidth: true
                             text: sg.modelData.name
                             elide: Text.ElideRight
@@ -164,6 +173,21 @@ Item {
                     }
                 }
             }
+        }
+
+        // Detail for the highlighted suggestion (full name, aliases, implications),
+        // to the right of the dropdown — helps tell similar tag names apart.
+        TagInfoPopover {
+            parent: field
+            preferredY: pop.y
+            x: pop.width + 6
+            aliases: root.aliases
+            implications: root.implications
+            categoryColorFn: root.categoryColorFn
+            active: pop.visible && field.highlighted >= 0
+                    && field.highlighted < field.suggestions.length
+            tagName: active ? field.suggestions[field.highlighted].name : ""
+            nameTruncated: sugList.currentItem ? sugList.currentItem.nameTruncated : false
         }
     }
 }

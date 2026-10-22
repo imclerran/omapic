@@ -24,6 +24,7 @@ qt_add_qml_module(omapic
         qml/DetailPanel.qml
         qml/WheelScroller.qml
         qml/TagAutoField.qml
+        qml/TagInfoPopover.qml
         qml/SlideshowView.qml
         qml/PhotoViewer.qml
         qml/Viewer.qml

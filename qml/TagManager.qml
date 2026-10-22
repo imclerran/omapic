@@ -1010,6 +1010,7 @@ Dialog {
                         placeholderText: qsTr("this tag…")
                         tags: root.allTags
                         aliases: root.aliases
+                        implications: root.implications
                         categoryColorFn: root.categoryColor
                         onAccepted: conField.focusInput()
                     }
@@ -1020,6 +1021,7 @@ Dialog {
                         placeholderText: qsTr("that tag…")
                         tags: root.allTags
                         aliases: root.aliases
+                        implications: root.implications
                         categoryColorFn: root.categoryColor
                         onAccepted: parent.submit()
                     }

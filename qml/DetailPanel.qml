@@ -28,6 +28,9 @@ Rectangle {
     // Tag aliases, cached per change, so the add-a-tag autocomplete can offer
     // "alias → tag" hint rows (and the typed alias resolves to its canonical tag).
     readonly property var aliasList: root.library ? root.library.tagAliases : []
+    // Tag implications, cached per change, for the highlighted-entry info panel
+    // ("applying this also applies …").
+    readonly property var implicationList: root.library ? root.library.tagImplications : []
 
     // Tab focus cycle (routed by Main): forward from / back to the add-a-tag field.
     signal tabForward()
@@ -163,6 +166,7 @@ Rectangle {
             font.bold: true
             font.pixelSize: 15
         }
+
 
         // File name (single selection). Shrinks to fit rather than clipping when
         // a long name would overflow two lines.
@@ -480,6 +484,7 @@ Rectangle {
                     closePolicy: Popup.CloseOnPressOutsideParent | Popup.CloseOnEscape
 
                     contentItem: ListView {
+                        id: suggestionList
                         implicitHeight: Math.min(tagInput.suggestions.length, 8) * 32
                         model: tagInput.suggestions
                         clip: true
@@ -489,9 +494,16 @@ Rectangle {
                             id: suggestion
                             required property int index
                             required property var modelData
+                            // Whether this row's name is cut off, so the info panel
+                            // knows to surface the full name.
+                            readonly property bool nameTruncated: nameLabel.truncated
                             width: ListView.view.width
                             height: 32
                             highlighted: index === tagInput.highlighted
+                            hoverEnabled: true
+                            // Hovering a row highlights it too, so the mouse drives
+                            // the selection and its info panel, not just the keyboard.
+                            onHoveredChanged: if (hovered) tagInput.highlighted = index
                             onClicked: tagInput.commit(modelData.name)
 
                             contentItem: RowLayout {
@@ -507,6 +519,7 @@ Rectangle {
                                            : "transparent"
                                 }
                                 Label {
+                                    id: nameLabel
                                     Layout.fillWidth: true
                                     text: suggestion.modelData.name
                                     elide: Text.ElideRight
@@ -528,6 +541,27 @@ Rectangle {
                         }
                     }
                 }
+
+                // Detail for the highlighted suggestion — the full name, aliases,
+                // and the tags it will also apply — shown to the LEFT of the
+                // dropdown (the detail panel hugs the window's right edge). Appears
+                // only when there's something the row can't show.
+                TagInfoPopover {
+                    id: tagInfoPopover
+                    parent: tagInput
+                    preferredY: suggestionPopup.y
+                    // To the right of the dropdown (the detail panel is docked left,
+                    // so the gallery — and the room — is on that side).
+                    x: suggestionPopup.width + 6
+                    categoryColorFn: root.categoryColor
+                    aliases: root.aliasList
+                    implications: root.implicationList
+                    active: suggestionPopup.visible && tagInput.highlighted >= 0
+                            && tagInput.highlighted < tagInput.suggestions.length
+                    tagName: active ? tagInput.suggestions[tagInput.highlighted].name : ""
+                    nameTruncated: suggestionList.currentItem
+                                   ? suggestionList.currentItem.nameTruncated : false
+                }
             }
             Button {
                 text: qsTr("Add")
@@ -535,5 +569,6 @@ Rectangle {
                 onClicked: tagInput.commit(tagInput.text)
             }
         }
+
     }
 }
