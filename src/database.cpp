@@ -1866,7 +1866,7 @@ QVector<ImplicationInfo> Database::implications()
         "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1), "
         "active_tags AS (SELECT DISTINCT pt.tag_id FROM photo_tags pt "
         "  WHERE pt.photo_id IN (SELECT id FROM active_photos)) "
-        "SELECT a.id, a.name, ca.color_slot, c.id, c.name, cc.color_slot "
+        "SELECT a.id, a.name, ca.color_slot, c.id, c.name, cc.color_slot, ca.name, cc.name "
         "FROM tag_implications i "
         "JOIN tags a ON a.id = i.antecedent_id "
         "JOIN tags c ON c.id = i.consequent_id "
@@ -1888,6 +1888,8 @@ QVector<ImplicationInfo> Database::implications()
         info.consequentId = q.value(3).toInt();
         info.consequentName = q.value(4).toString();
         info.consequentColorSlot = q.value(5).isNull() ? -1 : q.value(5).toInt();
+        info.antecedentCategoryName = q.value(6).toString(); // empty when uncategorized
+        info.consequentCategoryName = q.value(7).toString();
         out.append(info);
     }
     return out;
