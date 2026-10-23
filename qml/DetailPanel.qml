@@ -509,15 +509,15 @@ Rectangle {
 
                             contentItem: RowLayout {
                                 spacing: 8
-                                // Category swatch; kept (transparent) for
-                                // uncategorized tags so names stay aligned.
+                                // Category swatch — the category's color, or the
+                                // neutral grey for an uncategorized tag.
                                 Rectangle {
                                     width: 10
                                     height: 10
                                     radius: 5
                                     color: suggestion.modelData.colorSlot >= 0
                                            ? root.categoryColor(suggestion.modelData.colorSlot)
-                                           : "transparent"
+                                           : sys.mid
                                 }
                                 Label {
                                     id: nameLabel
