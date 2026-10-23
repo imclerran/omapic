@@ -2125,7 +2125,10 @@ ApplicationWindow {
                 onUndoRequested: win.triageUndo()
                 onNextRequested: win.triageNext()
                 onPreviousRequested: triage.previous()
-                onExitRequested: win.exitTriage()
+                // Esc asks first (the "Exit Triage" button exits straight away),
+                // unless the queue's already been worked through — then there's
+                // nothing to confirm, matching the "done" screen's Esc hint.
+                onExitRequested: triage.finished ? win.exitTriage() : triageExitConfirm.open()
             }
         }
 
@@ -2910,6 +2913,36 @@ ApplicationWindow {
             width: parent.width
             wrapMode: Text.WordWrap
             text: qsTr("Move this photo to the Trash and drop it from the library?\n\nYou won't be asked again this session. Ctrl+Z restores it.")
+        }
+    }
+
+    // Esc in triage asks before leaving, so a reflexive keypress doesn't drop the
+    // session: click "Exit" to leave, or "Keep triaging" / Esc to stay. The
+    // "Exit Triage" button bypasses this (an explicit click).
+    Dialog {
+        id: triageExitConfirm
+        title: qsTr("Exit Triage")
+        anchors.centerIn: parent
+        modal: true
+        width: 400
+        onAccepted: win.exitTriage()
+        // On "Keep triaging" (still in triage) hand the keyboard back to the field;
+        // on "Exit", exitTriage has already moved focus to the gallery.
+        onClosed: if (win.triageActive) Qt.callLater(function () { triageSidebar.focusTagInput() })
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Keep triaging")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+            Button {
+                text: qsTr("Exit")
+                DialogButtonBox.buttonRole: DialogButtonBox.YesRole
+            }
+        }
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: qsTr("Exit triage and return to the gallery?")
         }
     }
 

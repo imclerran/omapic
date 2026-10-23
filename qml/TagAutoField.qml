@@ -141,7 +141,15 @@ Item {
         Keys.onDownPressed: if (suggestions.length > 0)
                                 highlighted = Math.min(highlighted + 1, suggestions.length - 1)
         Keys.onUpPressed: highlighted = Math.max(highlighted - 1, -1)
-        Keys.onEscapePressed: { pop.close(); root.escapePressed() }
+        // Escape first dismisses the open suggestion dropdown; only a second
+        // Escape (with the dropdown already closed) is forwarded as escapePressed,
+        // so a host that uses it to leave a mode doesn't exit mid-autocomplete.
+        Keys.onEscapePressed: {
+            const wasOpen = pop.visible
+            pop.close()
+            if (!wasOpen)
+                root.escapePressed()
+        }
         Keys.onReturnPressed: (event) => field.commit(event)
         Keys.onEnterPressed: (event) => field.commit(event)
         // Runs before the text input handles the key (and only for keys the
