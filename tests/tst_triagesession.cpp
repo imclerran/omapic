@@ -43,8 +43,8 @@ private slots:
     void progressAndPositionTrackTheWalk();
 
     // Recent tags
-    void recentTagsNewestFirstDedupedCaseInsensitively();
-    void recentTagsCappedAtNine();
+    void recentTagsKeepStableOrderAndAppend();
+    void recentTagsEvictLeastRecentlyUsedIntoItsSlot();
 
     // Undo stack
     void undoStackIsLifoAndEmptyPopIsEmptyMap();
@@ -255,33 +255,61 @@ void TestTriageSession::progressAndPositionTrackTheWalk()
 
 // --- Recent tags --------------------------------------------------------------
 
-void TestTriageSession::recentTagsNewestFirstDedupedCaseInsensitively()
+void TestTriageSession::recentTagsKeepStableOrderAndAppend()
 {
     m_session->begin(toVariants({1}), QString(), {});
     m_session->recordTag(QStringLiteral("beach"));
     m_session->recordTag(QStringLiteral("sunset"));
     m_session->recordTag(QStringLiteral("family"));
+    // New tags append in the order first used — the Ctrl-numbers are 1=beach,
+    // 2=sunset, 3=family and stay that way.
     QCOMPARE(m_session->recentTags(),
-             (QStringList{QStringLiteral("family"), QStringLiteral("sunset"), QStringLiteral("beach")}));
+             (QStringList{QStringLiteral("beach"), QStringLiteral("sunset"), QStringLiteral("family")}));
 
-    // Re-applying a tag moves it to the front instead of listing it twice, even
-    // with different casing; blanks are ignored.
+    // Re-applying a tag (even with different casing) does NOT move it — its slot
+    // and number hold still, so a queued Ctrl+1/2/3 keeps hitting the same tags.
+    // Blanks are ignored.
     m_session->recordTag(QStringLiteral("Beach"));
     m_session->recordTag(QStringLiteral("   "));
     QCOMPARE(m_session->recentTags(),
-             (QStringList{QStringLiteral("Beach"), QStringLiteral("family"), QStringLiteral("sunset")}));
+             (QStringList{QStringLiteral("beach"), QStringLiteral("sunset"), QStringLiteral("family")}));
+
+    // A genuinely new tag still appends at the end.
+    m_session->recordTag(QStringLiteral("hike"));
+    QCOMPARE(m_session->recentTags(),
+             (QStringList{QStringLiteral("beach"), QStringLiteral("sunset"),
+                          QStringLiteral("family"), QStringLiteral("hike")}));
 }
 
-void TestTriageSession::recentTagsCappedAtNine()
+void TestTriageSession::recentTagsEvictLeastRecentlyUsedIntoItsSlot()
 {
     QCOMPARE(TriageSession::kRecentCap, 9); // Ctrl+1–9
     m_session->begin(toVariants({1}), QString(), {});
-    for (int i = 1; i <= 12; ++i)
-        m_session->recordTag(QStringLiteral("t%1").arg(i));
-    const QStringList recent = m_session->recentTags();
-    QCOMPARE(recent.size(), 9);
-    QCOMPARE(recent.first(), QStringLiteral("t12")); // newest first …
-    QCOMPARE(recent.last(), QStringLiteral("t4"));   // … the oldest three fell off
+    for (int i = 1; i <= 9; ++i)
+        m_session->recordTag(QStringLiteral("t%1").arg(i)); // fills slots 1..9 in order
+
+    QStringList expected;
+    for (int i = 1; i <= 9; ++i)
+        expected << QStringLiteral("t%1").arg(i);
+    QCOMPARE(m_session->recentTags(), expected);
+
+    // Re-apply t2, so t1 is now the least-recently-used tag (t2's recency jumps
+    // ahead of it) — without moving anything.
+    m_session->recordTag(QStringLiteral("t2"));
+    QCOMPARE(m_session->recentTags(), expected); // order unchanged
+
+    // A 10th distinct tag evicts the LRU (t1) and takes its slot, so every other
+    // tag keeps its number; only slot 1 changes meaning.
+    m_session->recordTag(QStringLiteral("t10"));
+    expected[0] = QStringLiteral("t10");
+    QCOMPARE(m_session->recentTags(), expected);
+    QCOMPARE(m_session->recentTags().size(), 9);
+
+    // The next distinct tag evicts the new LRU. t3 is now oldest (t2 was bumped,
+    // t1 is gone, t10 is newest), so t11 lands in t3's slot (index 2).
+    m_session->recordTag(QStringLiteral("t11"));
+    expected[2] = QStringLiteral("t11");
+    QCOMPARE(m_session->recentTags(), expected);
 }
 
 // --- Undo stack ---------------------------------------------------------------

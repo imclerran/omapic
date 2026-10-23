@@ -85,6 +85,8 @@ void TriageSession::begin(const QVariantList &queue, const QString &description,
     m_index = 0;
     pullFromQueue(); // the first photo is current right away
     m_recent.clear();
+    m_recentUsed.clear();
+    m_recentSeq = 0;
     m_undo.clear();
     m_description = description;
     m_galleryState = galleryState;
@@ -105,6 +107,8 @@ void TriageSession::end()
     m_queue.clear();
     m_index = 0;
     m_recent.clear();
+    m_recentUsed.clear();
+    m_recentSeq = 0;
     m_undo.clear();
     m_description.clear();
     m_galleryState.clear();
@@ -145,13 +149,37 @@ void TriageSession::recordTag(const QString &name)
     const QString trimmed = name.trimmed();
     if (trimmed.isEmpty())
         return;
-    // Same tag again moves to the front rather than appearing twice.
-    for (int i = m_recent.size() - 1; i >= 0; --i)
-        if (m_recent.at(i).compare(trimmed, Qt::CaseInsensitive) == 0)
-            m_recent.removeAt(i);
-    m_recent.prepend(trimmed);
-    while (m_recent.size() > kRecentCap)
-        m_recent.removeLast();
+    const qint64 seq = ++m_recentSeq;
+
+    // Already in the list: keep its slot (so the Ctrl-numbers never shift under
+    // the user's fingers) and just mark it used, so a tag you keep applying isn't
+    // the one evicted later. Nothing visible changes, so no signal.
+    for (const QString &existing : m_recent) {
+        if (existing.compare(trimmed, Qt::CaseInsensitive) == 0) {
+            m_recentUsed[existing.toLower()] = seq;
+            return;
+        }
+    }
+
+    if (m_recent.size() < kRecentCap) {
+        // Room left: a new tag takes the next free slot (appends at the end).
+        m_recent.append(trimmed);
+    } else {
+        // Full: evict the least-recently-used tag and drop the newcomer into its
+        // slot, so every other tag keeps its number — only the freed slot changes.
+        int victim = 0;
+        qint64 oldest = m_recentUsed.value(m_recent.at(0).toLower(), 0);
+        for (int i = 1; i < m_recent.size(); ++i) {
+            const qint64 used = m_recentUsed.value(m_recent.at(i).toLower(), 0);
+            if (used < oldest) {
+                oldest = used;
+                victim = i;
+            }
+        }
+        m_recentUsed.remove(m_recent.at(victim).toLower());
+        m_recent[victim] = trimmed;
+    }
+    m_recentUsed[trimmed.toLower()] = seq;
     emit recentTagsChanged();
 }
 

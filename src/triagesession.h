@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QQmlEngine>
@@ -43,7 +44,11 @@ class TriageSession : public QObject {
     Q_PROPERTY(bool finished READ finished NOTIFY positionChanged)
     Q_PROPERTY(bool hasPrevious READ hasPrevious NOTIFY positionChanged)
     Q_PROPERTY(bool hasNext READ hasNext NOTIFY positionChanged)
-    // The last tags applied this session, newest first, at most kRecentCap.
+    // The tags applied this session, in a stable slot order (index + 1 is the
+    // Ctrl-number), at most kRecentCap. A tag keeps its slot for its whole life
+    // in the list, so applying one never renumbers the others; new tags append,
+    // and once the list is full the least-recently-used tag is evicted and the
+    // newcomer takes its freed slot (so only that one number changes).
     Q_PROPERTY(QStringList recentTags READ recentTags NOTIFY recentTagsChanged)
     Q_PROPERTY(int undoCount READ undoCount NOTIFY undoStackChanged)
     // Caller-supplied text naming what the queue holds, for the header.
@@ -101,8 +106,11 @@ public:
     // Step back through the history. Returns false at the first photo.
     Q_INVOKABLE bool previous();
 
-    // Note a tag applied by the user: it moves to the front of the recent list
-    // (deduplicated case-insensitively), which is trimmed to kRecentCap.
+    // Note a tag applied by the user. A tag already in the list keeps its slot
+    // (so numbering never shifts while tagging) and is just marked used, so it
+    // won't be the one evicted; a new tag appends to the next free slot, or — once
+    // the list is full — replaces the least-recently-used tag in its slot. Matched
+    // case-insensitively.
     Q_INVOKABLE void recordTag(const QString &name);
 
     // The undo stack. Steps are opaque maps the gallery builds; popUndo returns an
@@ -134,7 +142,11 @@ private:
     QList<int> m_history;
     int m_index = 0;
     QList<int> m_queue;
-    QStringList m_recent;
+    QStringList m_recent; // slot order; index + 1 is the Ctrl-number
+    // Last-used sequence per recent tag (folded name), for least-recently-used
+    // eviction only — it never affects the display order.
+    QHash<QString, qint64> m_recentUsed;
+    qint64 m_recentSeq = 0;
     QList<QVariantMap> m_undo;
     QString m_description;
     QVariantMap m_galleryState;
