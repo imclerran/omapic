@@ -131,16 +131,17 @@ Rectangle {
         loops: MediaPlayer.Infinite
     }
 
-    // File name, then dimensions · size · taken, bottom-left. Each part hides
-    // when unknown; the box hides when there's nothing to show.
+    // File name, then the full path, then dimensions · size · taken, bottom-left.
+    // Each part hides when unknown; the box hides when there's nothing to show.
     Rectangle {
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 12
-        visible: root.photoId >= 0 && (nameLabel.text !== "" || metaLabel.text !== "")
+        visible: root.photoId >= 0
+                 && (nameLabel.text !== "" || pathLabel.text !== "" || metaLabel.text !== "")
         radius: 4
         color: Qt.alpha(sys.window, 0.85)
-        width: Math.max(nameLabel.implicitWidth, metaLabel.implicitWidth) + 16
+        width: Math.max(nameLabel.implicitWidth, pathLabel.width, metaLabel.implicitWidth) + 16
         height: metaColumn.implicitHeight + 8
         Column {
             id: metaColumn
@@ -154,6 +155,17 @@ Rectangle {
                 color: sys.text
                 text: root.info.fileName || ""
                 visible: text !== ""
+            }
+            Label {
+                id: pathLabel
+                font.pixelSize: 11
+                color: sys.placeholderText
+                text: root.info.path || ""
+                visible: text !== ""
+                // Keep a long path from stretching the box across the photo: cap
+                // the width and elide the middle, so both ends stay readable.
+                elide: Text.ElideMiddle
+                width: Math.min(implicitWidth, root.width * 0.6)
             }
             Label {
                 id: metaLabel
