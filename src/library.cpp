@@ -1045,21 +1045,172 @@ bool Library::showPathInFileManager(const QString &path)
 
 void Library::addTag(int photoId, const QString &name)
 {
+    applyTagCore(photoId, name);
+}
+
+TagApplyRecord Library::applyTagCore(int photoId, const QString &name)
+{
     const QString trimmed = name.trimmed();
     if (photoId < 0 || trimmed.isEmpty())
-        return;
+        return {};
     const int tagId = m_db.ensureTag(trimmed);
     if (tagId < 0)
-        return;
-    const QString hash = m_db.photoHash(photoId);
-    m_db.linkTagToContent(photoId, tagId); // every copy of this content, not just the visible one
-    m_db.rememberContentTag(hash, tagId);
-    m_db.applyImplications(hash, tagId);   // and any tags this one implies
+        return {};
+    // Links every copy of this content (not just the visible one), archives the
+    // tag, and applies any tags this one implies — recording what was new.
+    const TagApplyRecord rec = m_db.applyTagRecorded(photoId, tagId);
     m_db.enqueueSidecarDirty({photoId});
     applyTags(photoId);
     refreshTags();
     emit photoChanged(photoId);
     scheduleSidecarFlush();
+    return rec;
+}
+
+QVariantMap Library::addTagRecorded(int photoId, const QString &name)
+{
+    const TagApplyRecord rec = applyTagCore(photoId, name);
+    if (rec.tagId < 0)
+        return {};
+    QVariantList links;
+    for (const QPair<int, int> &l : rec.photoLinks)
+        links.append(QVariantList{l.first, l.second});
+    QVariantList content;
+    for (int t : rec.contentLinks)
+        content.append(t);
+    return QVariantMap{
+        {QStringLiteral("photoId"), rec.photoId},
+        {QStringLiteral("tagId"), rec.tagId},
+        {QStringLiteral("tagName"), m_db.tagName(rec.tagId)},
+        {QStringLiteral("hash"), rec.hash},
+        {QStringLiteral("photoLinks"), links},
+        {QStringLiteral("contentLinks"), content},
+        {QStringLiteral("changed"), rec.changedAnything()},
+    };
+}
+
+void Library::revertTagApply(const QVariantMap &record)
+{
+    TagApplyRecord rec;
+    rec.photoId = record.value(QStringLiteral("photoId"), -1).toInt();
+    rec.tagId = record.value(QStringLiteral("tagId"), -1).toInt();
+    rec.hash = record.value(QStringLiteral("hash")).toString();
+    for (const QVariant &v : record.value(QStringLiteral("photoLinks")).toList()) {
+        const QVariantList pair = v.toList();
+        if (pair.size() == 2)
+            rec.photoLinks.append(qMakePair(pair.at(0).toInt(), pair.at(1).toInt()));
+    }
+    for (const QVariant &v : record.value(QStringLiteral("contentLinks")).toList())
+        rec.contentLinks.append(v.toInt());
+    if (rec.photoId < 0 || !rec.changedAnything())
+        return;
+
+    m_db.revertTagApply(rec);
+    // Every photo the apply touched (duplicates of the same content included)
+    // gets its model row and sidecar refreshed.
+    QList<int> touched{rec.photoId};
+    for (const QPair<int, int> &l : rec.photoLinks)
+        if (!touched.contains(l.first))
+            touched.append(l.first);
+    m_db.enqueueSidecarDirty(touched);
+    for (int pid : touched) {
+        applyTags(pid);
+        emit photoChanged(pid);
+    }
+    refreshTags();
+    scheduleSidecarFlush();
+}
+
+void Library::relinkTag(int photoId, int tagId)
+{
+    if (photoId < 0 || tagId < 0)
+        return;
+    m_db.linkTagToContent(photoId, tagId); // every copy of this content
+    m_db.rememberContentTag(m_db.photoHash(photoId), tagId);
+    m_db.enqueueSidecarDirty({photoId});
+    applyTags(photoId);
+    refreshTags();
+    emit photoChanged(photoId);
+    scheduleSidecarFlush();
+}
+
+bool Library::isFavorite(int photoId) const
+{
+    return m_photos->photoById(photoId).favorite;
+}
+
+QVariantMap Library::trashPhoto(int photoId)
+{
+    const Photo p = m_photos->photoById(photoId);
+    if (p.id < 0)
+        return {};
+    // Snapshot the row before it goes, so the undo can re-insert it as it was.
+    const PhotoRowSnapshot row = m_db.photoRow(photoId);
+
+    // Trash rather than unlink, exactly as deleteFromDisk: recoverable from the
+    // file manager — and from here. QFile reports where the file landed.
+    QString trashPath;
+    QFile f(p.path);
+    if (f.exists()) {
+        if (!f.moveToTrash())
+            return QVariantMap{{QStringLiteral("ok"), false}};
+        trashPath = f.fileName();
+    }
+    m_db.deletePhoto(photoId); // the content_tags archive (keyed by hash) survives
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    emit foldersChanged();
+    return QVariantMap{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("id"), photoId},
+        {QStringLiteral("fileName"), p.fileName},
+        {QStringLiteral("path"), row.path},
+        {QStringLiteral("trashPath"), trashPath},
+        {QStringLiteral("hash"), row.hash},
+        {QStringLiteral("takenAt"), row.takenAt},
+        {QStringLiteral("mtime"), row.mtime},
+        {QStringLiteral("size"), row.size},
+    };
+}
+
+int Library::restoreTrashedPhoto(const QVariantMap &record)
+{
+    PhotoRowSnapshot row;
+    row.path = record.value(QStringLiteral("path")).toString();
+    row.hash = record.value(QStringLiteral("hash")).toString();
+    row.takenAt = record.value(QStringLiteral("takenAt")).toLongLong();
+    row.mtime = record.value(QStringLiteral("mtime")).toLongLong();
+    row.size = record.value(QStringLiteral("size")).toLongLong();
+    const QString trashPath = record.value(QStringLiteral("trashPath")).toString();
+    if (row.path.isEmpty())
+        return -1;
+
+    // Put the file back first; a row without its file would just vanish again on
+    // the next rescan. (An empty trashPath means the file was already gone when
+    // it was trashed — nothing to move, the row alone comes back.)
+    if (!trashPath.isEmpty()) {
+        if (!QFile::exists(trashPath) || QFile::exists(row.path))
+            return -1; // emptied from the Trash, or something now sits at the old path
+        if (!QFile::rename(trashPath, row.path))
+            return -1;
+        // Best effort: drop the freedesktop Trash's companion record
+        // (<Trash>/info/<name>.trashinfo) so the file manager's Trash view doesn't
+        // list a ghost. Layouts that don't match are simply left alone.
+        const QFileInfo ti(trashPath);
+        QDir filesDir = ti.dir();
+        if (filesDir.dirName() == QLatin1String("files") && filesDir.cdUp())
+            QFile::remove(filesDir.filePath(QStringLiteral("info/") + ti.fileName()
+                                            + QStringLiteral(".trashinfo")));
+    }
+
+    const int id = m_db.restorePhotoRow(row); // new id; tags reattach via the archive
+    if (id < 0)
+        return -1;
+    m_db.enqueueSidecarDirty({id});
+    m_photos->setPhotos(m_db.loadPhotos());
+    refreshTags();
+    emit foldersChanged();
+    return id;
 }
 
 void Library::removeTag(int photoId, int tagId)
@@ -1476,6 +1627,9 @@ QVariantMap Library::photoInfo(int photoId) const
     info[QStringLiteral("id")] = p.id;
     info[QStringLiteral("fileName")] = p.fileName;
     info[QStringLiteral("path")] = p.path;
+    info[QStringLiteral("url")] = QUrl::fromLocalFile(p.path).toString();
+    info[QStringLiteral("isVideo")] = p.isVideo;
+    info[QStringLiteral("favorite")] = p.favorite;
     info[QStringLiteral("tags")] = tags;
 
     // Dimensions and a few EXIF fields, read from the file on demand (empty

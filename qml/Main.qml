@@ -71,6 +71,27 @@ ApplicationWindow {
     // from and persisted to gallerySettings (see below). The header switch sets it.
     property string viewMode: "timeline"
 
+    // --- Triage mode -------------------------------------------------------------
+    // Tag photos one at a time without leaving the keyboard. While active, the
+    // header, left column, central view and footer each swap to a triage
+    // counterpart (StackLayouts keyed on this one flag); the hidden gallery
+    // regions neither paint nor receive keys. The session object holds the queue,
+    // history, recent tags and undo stack shared by those regions; the actions
+    // themselves go through the Library (see triageApply & co. below), so
+    // implications, aliases and sidecar export behave exactly as they do in the
+    // detail panel. The gallery's selection and scroll position are captured at
+    // entry and restored on exit.
+    readonly property bool triageActive: triage.active
+    TriageSession { id: triage }
+
+    // Ctrl+T enters triage from the keyboard (the header button and the photo
+    // context menu are the other two entry points; all three share one rule).
+    Shortcut {
+        sequence: "Ctrl+T"
+        enabled: !win.triageActive && library.fatalError === ""
+        onActivated: win.enterTriage()
+    }
+
     // Display label for a view mode (the compact switcher's current-view button).
     function viewLabel(mode) {
         return mode === "timeline" ? qsTr("Timeline")
@@ -171,8 +192,9 @@ ApplicationWindow {
     // button. Disabled at the root (nothing to climb to).
     Shortcut {
         sequence: "Alt+Up"
-        enabled: (win.viewMode === "folder" && win.currentFolder !== "")
-                 || (win.viewMode === "albums" && win.currentAlbum > 0)
+        enabled: !win.triageActive
+                 && ((win.viewMode === "folder" && win.currentFolder !== "")
+                     || (win.viewMode === "albums" && win.currentAlbum > 0))
         onActivated: win.viewMode === "folder" ? win.fvGoUp() : win.leaveAlbum()
     }
 
@@ -1122,6 +1144,183 @@ ApplicationWindow {
         }
     }
 
+    // --- Triage -----------------------------------------------------------------
+
+    // The vertical scroll position of whichever gallery view is showing, and its
+    // inverse. Used to hand the gallery back exactly where triage found it.
+    function galleryScrollY() {
+        if (win.viewMode === "timeline") return timelineView.scrollY()
+        if (win.viewMode === "folder") return folderView.scrollY()
+        if (win.viewMode === "albums") return albumView.scrollY()
+        return grid.contentY
+    }
+    function setGalleryScrollY(y) {
+        if (win.viewMode === "timeline") timelineView.setScrollY(y)
+        else if (win.viewMode === "folder") folderView.setScrollY(y)
+        else if (win.viewMode === "albums") albumView.setScrollY(y)
+        else grid.contentY = y
+    }
+    // Set it now and once more after the views have relaid out (the timeline
+    // rebuilds its rows when shown, and a model reset snaps a grid to the top) —
+    // the same two-step the other scroll guards use.
+    function restoreGalleryScroll(y) {
+        win.setGalleryScrollY(y)
+        Qt.callLater(function () { win.setGalleryScrollY(y) })
+    }
+
+    // What the current view is scoped to, for the triage header's description.
+    function triageScopeLabel() {
+        const search = library.filtered.searchText
+        if (search.length > 0)
+            return qsTr("“%1”").arg(search)
+        if (win.viewMode === "folder" && win.currentFolder !== "") {
+            const slash = win.currentFolder.lastIndexOf('/')
+            return win.currentFolder.substring(slash + 1) || win.currentFolder
+        }
+        if (win.viewMode === "albums" && win.currentAlbum > 0)
+            return win.currentAlbumName
+        return win.viewLabel(win.viewMode)
+    }
+
+    // Start triage over the current view. One rule for both entry points (the
+    // header button and the context-menu item), applied by TriageSession.buildQueue:
+    // nothing selected → the view's untagged photos; exactly one selected → every
+    // photo in the view; two or more → the selected photos. Always in the view's
+    // current sort order.
+    function enterTriage() {
+        if (win.triageActive)
+            return
+        const ids = triage.buildQueue(library.filtered, win.selectedIds)
+        if (ids.length === 0) {
+            win.toast(win.selectedIds.length === 0 ? qsTr("No untagged photos in this view")
+                                                   : qsTr("Nothing to triage"))
+            return
+        }
+        const scope = win.triageScopeLabel()
+        const desc = win.selectedIds.length >= 2 ? qsTr("%n selected photo(s)", "", ids.length)
+                   : win.selectedIds.length === 1 ? qsTr("all in %1").arg(scope)
+                                                  : qsTr("untagged in %1").arg(scope)
+        // Everything to put back on exit, kept with the session.
+        triage.begin(ids, desc, {
+            selectedIds: win.selectedIds.slice(),
+            anchorIndex: win.anchorIndex,
+            cursorIndex: win.cursorIndex,
+            scrollY: win.galleryScrollY(),
+        })
+        // The regions have swapped (triage.active); focus the field once they've
+        // settled so typing works immediately.
+        Qt.callLater(function () { triageSidebar.focusTagInput() })
+    }
+
+    // Leave triage, restoring the gallery's selection and scroll position from
+    // when it was entered (minus any photo trashed meanwhile).
+    function exitTriage() {
+        if (!win.triageActive)
+            return
+        const st = triage.galleryState
+        triage.end() // the regions swap back
+        const ids = (st.selectedIds || []).filter(function (id) { return library.filtered.containsId(id) })
+        win.selectedIds = ids
+        win.anchorIndex = ids.length > 0 ? st.anchorIndex : -1
+        win.cursorIndex = ids.length > 0 ? st.cursorIndex : -1
+        win.restoreGalleryScroll(st.scrollY || 0)
+        win.focusGalleryView()
+    }
+
+    // Enter on an empty field: advance; once the queue is exhausted, leave.
+    function triageNext() {
+        if (triage.finished)
+            win.exitTriage()
+        else
+            triage.next()
+    }
+
+    // Each triage action is one undo step, pushed as an opaque map the matching
+    // branch of triageUndo knows how to reverse. Advancing is not a step (Ctrl+←
+    // is its inverse).
+    function triageApply(name) {
+        const id = triage.currentId
+        if (id < 0 || !name || name.trim().length === 0)
+            return
+        // Same entry point as the detail panel, plus a record of exactly which
+        // links (the tag and any implied tags that weren't already there) it
+        // inserted, so the undo removes only those.
+        const rec = library.addTagRecorded(id, name)
+        if (!rec || rec.tagId === undefined)
+            return
+        triage.recordTag(rec.tagName) // canonical name — an alias resolves to its tag
+        if (rec.changed)
+            triage.pushUndo({ kind: "apply", photoId: id, tagName: rec.tagName, record: rec })
+    }
+    function triageRemoveTag(tagId, tagName) {
+        const id = triage.currentId
+        if (id < 0 || tagId < 0)
+            return
+        library.removeTag(id, tagId)
+        triage.pushUndo({ kind: "remove", photoId: id, tagId: tagId, tagName: tagName })
+    }
+    function triageToggleFavorite() {
+        const id = triage.currentId
+        if (id < 0)
+            return
+        const on = !library.isFavorite(id)
+        library.toggleFavorite(id)
+        triage.pushUndo({ kind: "favorite", photoId: id, on: on })
+    }
+    // Trash asks once per session, then just does it.
+    function triageTrash() {
+        if (triage.currentId < 0)
+            return
+        if (!triage.trashConfirmed) {
+            triageTrashConfirm.open()
+            return
+        }
+        win.triageDoTrash()
+    }
+    function triageDoTrash() {
+        const id = triage.currentId
+        if (id < 0)
+            return
+        const rec = library.trashPhoto(id)
+        if (!rec || rec.ok !== true) {
+            win.toast(qsTr("Couldn't move the file to the Trash"))
+            return
+        }
+        triage.removeCurrent() // gone from the session; what followed is current
+        triage.pushUndo({ kind: "trash", record: rec, fileName: rec.fileName })
+    }
+    function triageUndo() {
+        const step = triage.popUndo()
+        if (!step || step.kind === undefined)
+            return
+        switch (step.kind) {
+        case "apply":
+            library.revertTagApply(step.record)
+            win.toast(qsTr("Removed “%1”").arg(step.tagName))
+            break
+        case "remove":
+            library.relinkTag(step.photoId, step.tagId)
+            win.toast(qsTr("Restored “%1”").arg(step.tagName))
+            break
+        case "favorite":
+            library.setFavorite([step.photoId], !step.on)
+            win.toast(step.on ? qsTr("Removed from Favorites") : qsTr("Added back to Favorites"))
+            break
+        case "trash": {
+            // Back out of the Trash and into the library under a new id, which
+            // takes the current photo's place so it can be looked at again.
+            const newId = library.restoreTrashedPhoto(step.record)
+            if (newId < 0) {
+                win.toast(qsTr("Couldn't restore “%1” from the Trash").arg(step.fileName))
+                break
+            }
+            triage.insertCurrent(newId)
+            win.toast(qsTr("Restored “%1” from the Trash").arg(step.fileName))
+            break
+        }
+        }
+    }
+
     Library {
         id: library
     }
@@ -1306,6 +1505,9 @@ ApplicationWindow {
             // Renaming or deleting a tag refreshes the photo model, which would
             // drop the gallery's scroll; keep it in place across the mutation.
             galleryScrollGuard: win.withPreservedGalleryScroll
+            // Opened from triage's "Manage Tags": hand the keyboard back to the
+            // add-tag field once this modal dialog closes.
+            onClosed: if (win.triageActive) Qt.callLater(function () { triageSidebar.focusTagInput() })
         }
     }
     function openTagManager() {
@@ -1326,7 +1528,9 @@ ApplicationWindow {
             win.refreshAlbumEntries()
             // A single image delete/remove keeps its scroll position; only broader
             // changes (folders added/removed, rescan, orphan cleanup) re-anchor.
-            if (!win.preservingGalleryScroll)
+            // Triage trashes photos while the gallery is hidden; its scroll is
+            // restored on exit, so leave it alone meanwhile.
+            if (!win.preservingGalleryScroll && !win.triageActive)
                 win.scrollGalleryToTop()
         }
         // Album membership/counts changed: rebuild the album tiles (only does work
@@ -1369,400 +1573,491 @@ ApplicationWindow {
 
     // Status bar: photo/selection count always, plus a progress bar for
     // non-blocking background jobs (bulk tagging). Blocking jobs use the overlay.
-    footer: ToolBar {
-        id: statusBar
+    // Keyed on the triage flag, the footer instead shows triage's thin progress bar.
+    footer: StackLayout {
+        currentIndex: win.triageActive ? 1 : 0
 
-        // Keep the status bar slim: the ToolButton's default padding would
-        // otherwise dictate a much taller bar.
-        topPadding: 2
-        bottomPadding: 2
+        ToolBar {
+            id: statusBar
 
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: 12
+            // Keep the status bar slim: the ToolButton's default padding would
+            // otherwise dictate a much taller bar.
+            topPadding: 2
+            bottomPadding: 2
 
-            Label {
-                text: win.selectedIds.length > 0
-                      ? qsTr("%1 photos · %2 selected").arg(library.filtered.count).arg(win.selectedIds.length)
-                      : qsTr("%1 photos").arg(library.filtered.count)
-                color: palette.placeholderText
-            }
-
-            Item { Layout.fillWidth: true }
-
-            Label {
-                visible: library.busy && !library.busyModal
-                text: library.statusText
-                elide: Text.ElideRight
-            }
-            ProgressBar {
-                visible: library.busy && !library.busyModal
-                // Compact fixed width so it reads as a status element rather than
-                // stretching across the bar.
-                Layout.preferredWidth: 100
-                indeterminate: library.progress < 0
-                from: 0; to: 1
-                value: library.progress < 0 ? 0 : library.progress
-            }
-
-            // Sort controls for the flat / folder / album grids: a mode picker and a
-            // direction toggle, kept tight together (spacing 2) while the row's own
-            // 12px gap separates them from the neighbors. Hidden in the timeline,
-            // which is always chronological. The choice is persisted.
             RowLayout {
-                spacing: 2
-                visible: win.viewMode !== "timeline"
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                spacing: 12
 
+                Label {
+                    text: win.selectedIds.length > 0
+                          ? qsTr("%1 photos · %2 selected").arg(library.filtered.count).arg(win.selectedIds.length)
+                          : qsTr("%1 photos").arg(library.filtered.count)
+                    color: palette.placeholderText
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Label {
+                    visible: library.busy && !library.busyModal
+                    text: library.statusText
+                    elide: Text.ElideRight
+                }
+                ProgressBar {
+                    visible: library.busy && !library.busyModal
+                    // Compact fixed width so it reads as a status element rather than
+                    // stretching across the bar.
+                    Layout.preferredWidth: 100
+                    indeterminate: library.progress < 0
+                    from: 0; to: 1
+                    value: library.progress < 0 ? 0 : library.progress
+                }
+
+                // Sort controls for the flat / folder / album grids: a mode picker and a
+                // direction toggle, kept tight together (spacing 2) while the row's own
+                // 12px gap separates them from the neighbors. Hidden in the timeline,
+                // which is always chronological. The choice is persisted.
+                RowLayout {
+                    spacing: 2
+                    visible: win.viewMode !== "timeline"
+
+                    ToolButton {
+                        id: sortButton
+                        text: (gallerySettings.sortMode === PhotoFilterModel.SortByDate ? qsTr("Sort: Date")
+                               : gallerySettings.sortMode === PhotoFilterModel.SortByTagCount ? qsTr("Sort: Tags")
+                               : qsTr("Sort: Name")) + "  ▾"
+                        font.pixelSize: 12
+                        topPadding: 3
+                        bottomPadding: 3
+                        leftPadding: 10
+                        rightPadding: 10
+                        Layout.preferredHeight: 24
+                        onClicked: sortMenu.open()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("How photos are ordered in this view")
+
+                        Menu {
+                            id: sortMenu
+                            y: -height // open upward out of the status bar
+                            ButtonGroup { id: sortGroup }
+                            // Sync the radio state from the setting each time it opens, so
+                            // nothing clobbers the checked binding on click.
+                            onOpened: {
+                                sortByName.checked = gallerySettings.sortMode === PhotoFilterModel.SortByName
+                                sortByDateItem.checked = gallerySettings.sortMode === PhotoFilterModel.SortByDate
+                                sortByTags.checked = gallerySettings.sortMode === PhotoFilterModel.SortByTagCount
+                            }
+                            MenuItem {
+                                id: sortByName
+                                text: qsTr("Name")
+                                checkable: true
+                                ButtonGroup.group: sortGroup
+                                onTriggered: win.setSortMode(PhotoFilterModel.SortByName)
+                            }
+                            MenuItem {
+                                id: sortByDateItem
+                                text: qsTr("Date")
+                                checkable: true
+                                ButtonGroup.group: sortGroup
+                                onTriggered: win.setSortMode(PhotoFilterModel.SortByDate)
+                            }
+                            MenuItem {
+                                id: sortByTags
+                                text: qsTr("Tag count")
+                                checkable: true
+                                ButtonGroup.group: sortGroup
+                                onTriggered: win.setSortMode(PhotoFilterModel.SortByTagCount)
+                            }
+                        }
+                    }
+
+                    // Ascending / descending toggle for the sort above. The glyph points
+                    // the way the values run (↑ ascending, ↓ descending); the tooltip
+                    // spells out what that means for the current mode.
+                    ToolButton {
+                        id: sortDirButton
+                        text: gallerySettings.sortAscending ? "↑" : "↓"
+                        font.pixelSize: 13
+                        topPadding: 3
+                        bottomPadding: 3
+                        leftPadding: 8
+                        rightPadding: 8
+                        Layout.preferredHeight: 24
+                        onClicked: win.toggleSortDirection()
+                        ToolTip.visible: hovered
+                        ToolTip.text: {
+                            const asc = gallerySettings.sortAscending
+                            switch (gallerySettings.sortMode) {
+                            case PhotoFilterModel.SortByDate:
+                                return asc ? qsTr("Oldest first") : qsTr("Newest first")
+                            case PhotoFilterModel.SortByTagCount:
+                                return asc ? qsTr("Fewest tags first") : qsTr("Most tags first")
+                            default:
+                                return asc ? qsTr("A → Z") : qsTr("Z → A")
+                            }
+                        }
+                    }
+                }
+
+                // Toggle thumbnails between cropped-to-square and whole-image (fit).
                 ToolButton {
-                    id: sortButton
-                    text: (gallerySettings.sortMode === PhotoFilterModel.SortByDate ? qsTr("Sort: Date")
-                           : gallerySettings.sortMode === PhotoFilterModel.SortByTagCount ? qsTr("Sort: Tags")
-                           : qsTr("Sort: Name")) + "  ▾"
+                    id: cropFitButton
+                    readonly property string cropLabel: qsTr("◼ Crop")
+                    readonly property string fitLabel: qsTr("▭  Fit")
+                    text: gallerySettings.cropThumbs ? cropLabel : fitLabel
+                    // Plain toggle: flip the mode on click. Not `checkable`, so it
+                    // never sticks in a highlighted state — same look in both modes.
+                    onClicked: gallerySettings.cropThumbs = !gallerySettings.cropThumbs
+                    // Compact: trim the default padding so it doesn't inflate the bar.
                     font.pixelSize: 12
                     topPadding: 3
                     bottomPadding: 3
                     leftPadding: 10
                     rightPadding: 10
-                    Layout.preferredHeight: 24
-                    onClicked: sortMenu.open()
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("How photos are ordered in this view")
-
-                    Menu {
-                        id: sortMenu
-                        y: -height // open upward out of the status bar
-                        ButtonGroup { id: sortGroup }
-                        // Sync the radio state from the setting each time it opens, so
-                        // nothing clobbers the checked binding on click.
-                        onOpened: {
-                            sortByName.checked = gallerySettings.sortMode === PhotoFilterModel.SortByName
-                            sortByDateItem.checked = gallerySettings.sortMode === PhotoFilterModel.SortByDate
-                            sortByTags.checked = gallerySettings.sortMode === PhotoFilterModel.SortByTagCount
-                        }
-                        MenuItem {
-                            id: sortByName
-                            text: qsTr("Name")
-                            checkable: true
-                            ButtonGroup.group: sortGroup
-                            onTriggered: win.setSortMode(PhotoFilterModel.SortByName)
-                        }
-                        MenuItem {
-                            id: sortByDateItem
-                            text: qsTr("Date")
-                            checkable: true
-                            ButtonGroup.group: sortGroup
-                            onTriggered: win.setSortMode(PhotoFilterModel.SortByDate)
-                        }
-                        MenuItem {
-                            id: sortByTags
-                            text: qsTr("Tag count")
-                            checkable: true
-                            ButtonGroup.group: sortGroup
-                            onTriggered: win.setSortMode(PhotoFilterModel.SortByTagCount)
-                        }
+                    // Size to the wider of the two labels so the button width stays
+                    // constant when the text swaps — measured by pixel width (not
+                    // character count: the ◼/▭ glyphs render at different widths), so
+                    // it never clips and tracks the font/theme, not a magic number.
+                    TextMetrics {
+                        id: cropMetrics
+                        font: cropFitButton.font
+                        text: cropFitButton.cropLabel
                     }
-                }
-
-                // Ascending / descending toggle for the sort above. The glyph points
-                // the way the values run (↑ ascending, ↓ descending); the tooltip
-                // spells out what that means for the current mode.
-                ToolButton {
-                    id: sortDirButton
-                    text: gallerySettings.sortAscending ? "↑" : "↓"
-                    font.pixelSize: 13
-                    topPadding: 3
-                    bottomPadding: 3
-                    leftPadding: 8
-                    rightPadding: 8
-                    Layout.preferredHeight: 24
-                    onClicked: win.toggleSortDirection()
-                    ToolTip.visible: hovered
-                    ToolTip.text: {
-                        const asc = gallerySettings.sortAscending
-                        switch (gallerySettings.sortMode) {
-                        case PhotoFilterModel.SortByDate:
-                            return asc ? qsTr("Oldest first") : qsTr("Newest first")
-                        case PhotoFilterModel.SortByTagCount:
-                            return asc ? qsTr("Fewest tags first") : qsTr("Most tags first")
-                        default:
-                            return asc ? qsTr("A → Z") : qsTr("Z → A")
-                        }
+                    TextMetrics {
+                        id: fitMetrics
+                        font: cropFitButton.font
+                        text: cropFitButton.fitLabel
                     }
+                    Layout.preferredWidth: Math.ceil(Math.max(cropMetrics.advanceWidth,
+                                                              fitMetrics.advanceWidth))
+                                           + leftPadding + rightPadding
+                    Layout.preferredHeight: 24
+                    ToolTip.visible: hovered
+                    ToolTip.text: gallerySettings.cropThumbs
+                                  ? qsTr("Crop thumbnails to squares")
+                                  : qsTr("Fit whole image in thumbnail")
+                }
+
+                // Thumbnail size control: drag to pick xs / sm / md / lg / xl. Flanked
+                // by small and large glyphs so the direction reads at a glance.
+                Label {
+                    text: "▪"
+                    color: palette.placeholderText
+                    font.pixelSize: 11
+                }
+                Slider {
+                    id: thumbSizeSlider
+                    Layout.preferredWidth: 90
+                    Layout.preferredHeight: 24
+                    from: 0
+                    to: win.thumbSizes.length - 1
+                    stepSize: 1
+                    snapMode: Slider.SnapAlways
+                    value: gallerySettings.thumbIndex
+                    onMoved: gallerySettings.thumbIndex = Math.round(value)
+
+                    ToolTip.visible: hovered || pressed
+                    ToolTip.text: ["Extra small", "Small", "Medium", "Large", "Extra large"][win.thumbIndex]
+                }
+                Label {
+                    text: "◼"
+                    color: palette.placeholderText
+                    font.pixelSize: 16
                 }
             }
+        }
 
-            // Toggle thumbnails between cropped-to-square and whole-image (fit).
-            ToolButton {
-                id: cropFitButton
-                readonly property string cropLabel: qsTr("◼ Crop")
-                readonly property string fitLabel: qsTr("▭  Fit")
-                text: gallerySettings.cropThumbs ? cropLabel : fitLabel
-                // Plain toggle: flip the mode on click. Not `checkable`, so it
-                // never sticks in a highlighted state — same look in both modes.
-                onClicked: gallerySettings.cropThumbs = !gallerySettings.cropThumbs
-                // Compact: trim the default padding so it doesn't inflate the bar.
-                font.pixelSize: 12
-                topPadding: 3
-                bottomPadding: 3
-                leftPadding: 10
-                rightPadding: 10
-                // Size to the wider of the two labels so the button width stays
-                // constant when the text swaps — measured by pixel width (not
-                // character count: the ◼/▭ glyphs render at different widths), so
-                // it never clips and tracks the font/theme, not a magic number.
-                TextMetrics {
-                    id: cropMetrics
-                    font: cropFitButton.font
-                    text: cropFitButton.cropLabel
+        // Triage: a thin bar across the footer — the share of the queue already
+        // stepped past. Same height as the status bar, so the layout holds still.
+        Item {
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                height: 6
+                radius: 3
+                color: palette.alternateBase
+                Rectangle {
+                    width: parent.width * triage.progress
+                    height: parent.height
+                    radius: 3
+                    color: win.accent
+                    Behavior on width { NumberAnimation { duration: 150 } }
                 }
-                TextMetrics {
-                    id: fitMetrics
-                    font: cropFitButton.font
-                    text: cropFitButton.fitLabel
-                }
-                Layout.preferredWidth: Math.ceil(Math.max(cropMetrics.advanceWidth,
-                                                          fitMetrics.advanceWidth))
-                                       + leftPadding + rightPadding
-                Layout.preferredHeight: 24
-                ToolTip.visible: hovered
-                ToolTip.text: gallerySettings.cropThumbs
-                              ? qsTr("Crop thumbnails to squares")
-                              : qsTr("Fit whole image in thumbnail")
-            }
-
-            // Thumbnail size control: drag to pick xs / sm / md / lg / xl. Flanked
-            // by small and large glyphs so the direction reads at a glance.
-            Label {
-                text: "▪"
-                color: palette.placeholderText
-                font.pixelSize: 11
-            }
-            Slider {
-                id: thumbSizeSlider
-                Layout.preferredWidth: 90
-                Layout.preferredHeight: 24
-                from: 0
-                to: win.thumbSizes.length - 1
-                stepSize: 1
-                snapMode: Slider.SnapAlways
-                value: gallerySettings.thumbIndex
-                onMoved: gallerySettings.thumbIndex = Math.round(value)
-
-                ToolTip.visible: hovered || pressed
-                ToolTip.text: ["Extra small", "Small", "Medium", "Large", "Extra large"][win.thumbIndex]
-            }
-            Label {
-                text: "◼"
-                color: palette.placeholderText
-                font.pixelSize: 16
             }
         }
     }
 
-    header: ToolBar {
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
+    // Header, keyed on the triage flag: the gallery toolbar, or the triage title
+    // bar ("Triage · what · N of M" + Exit).
+    header: StackLayout {
+        currentIndex: win.triageActive ? 1 : 0
 
-            ToolButton {
-                text: qsTr("Manage ▾")
-                onClicked: manageMenu.open()
+        ToolBar {
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
 
-                Menu {
-                    id: manageMenu
-                    y: parent.height
-                    MenuItem {
-                        text: qsTr("Settings…")
-                        onTriggered: win.openSettings(0)
-                    }
-                    MenuItem {
-                        text: qsTr("Tags…")
-                        onTriggered: win.openTagManager()
-                    }
-                }
-            }
-
-            ToolButton {
-                text: qsTr("Import…")
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Add a folder of photos to the library")
-                onClicked: importDialog.open()
-            }
-
-            // Equal flex spacers on either side center the view-mode switch in the
-            // gap between the Import button and the search box.
-            Item { Layout.fillWidth: true }
-
-            // View mode: switch the central area between the flat grid, a
-            // capture-month timeline, a navigable folder tree, and albums. Exactly
-            // one is active; the choice is persisted in gallerySettings. A plain
-            // Row of segmented buttons when there's room; a single current-view
-            // button that opens a vertical bar popup when the window is narrow.
-            ButtonGroup { id: viewModeGroup; exclusive: true }
-            Row {
-                id: viewModeRow
-                spacing: 0
-                visible: !win.compactViews
-                // Equal-width segments: every button takes the width of the widest
-                // label, so the bar reads as even segments regardless of text.
-                readonly property real btnW: Math.max(vbTimeline.implicitWidth, vbFolder.implicitWidth,
-                                                      vbFlat.implicitWidth, vbAlbums.implicitWidth)
                 ToolButton {
-                    id: vbTimeline
-                    width: viewModeRow.btnW
-                    text: qsTr("Timeline")
-                    checkable: true
-                    ButtonGroup.group: viewModeGroup
-                    checked: win.viewMode === "timeline"
-                    onClicked: win.viewMode = "timeline"
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Grouped by the month each photo was taken")
-                }
-                ToolButton {
-                    id: vbFolder
-                    width: viewModeRow.btnW
-                    text: qsTr("Folders")
-                    checkable: true
-                    ButtonGroup.group: viewModeGroup
-                    checked: win.viewMode === "folder"
-                    onClicked: win.viewMode = "folder"
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Browse your library folders")
-                }
-                ToolButton {
-                    id: vbFlat
-                    width: viewModeRow.btnW
-                    text: qsTr("Flat")
-                    checkable: true
-                    ButtonGroup.group: viewModeGroup
-                    checked: win.viewMode === "ungrouped"
-                    onClicked: win.viewMode = "ungrouped"
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("All photos in one grid")
-                }
-                ToolButton {
-                    id: vbAlbums
-                    width: viewModeRow.btnW
-                    text: qsTr("Albums")
-                    checkable: true
-                    ButtonGroup.group: viewModeGroup
-                    checked: win.viewMode === "albums"
-                    onClicked: win.viewMode = "albums"
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Your albums and favorites")
-                }
-            }
+                    text: qsTr("Manage ▾")
+                    onClicked: manageMenu.open()
 
-            // Narrow: the current view's name + caret, opening a vertical bar. Width
-            // comes from the wide bar's widest segment (which keeps a valid implicit
-            // width even while that Row is hidden) plus room for the caret — not from
-            // the popup's own content, which has no size until it first opens. The
-            // popup matches this width and the label is centered, so the current-view
-            // label lines up with the centered dropdown labels below it.
-            ToolButton {
-                id: compactViewButton
-                visible: win.compactViews
-                // Sized to the widest view label via TextMetrics — reliable
-                // regardless of layout/visibility. As a direct RowLayout child the
-                // width must come from Layout.preferredWidth (a plain `width` is
-                // overridden by the layout). The popup and its buttons share it.
-                Layout.preferredWidth: Math.max(tmViewA.width, tmViewB.width, tmViewC.width, tmViewD.width) + 48
-                onClicked: viewModePopup.open()
-
-                TextMetrics { id: tmViewA; font: compactViewButton.font; text: win.viewLabel("timeline") }
-                TextMetrics { id: tmViewB; font: compactViewButton.font; text: win.viewLabel("folder") }
-                TextMetrics { id: tmViewC; font: compactViewButton.font; text: win.viewLabel("ungrouped") }
-                TextMetrics { id: tmViewD; font: compactViewButton.font; text: win.viewLabel("albums") }
-
-                contentItem: Item {
-                    implicitHeight: compactLabel.implicitHeight
-                    Label {
-                        id: compactLabel
-                        anchors.centerIn: parent
-                        text: win.viewLabel(win.viewMode)
-                    }
-                    Label {
-                        anchors.right: parent.right
-                        anchors.rightMargin: 6
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "▾"
-                    }
-                }
-
-                Popup {
-                    id: viewModePopup
-                    y: parent.height
-                    x: 0
-                    padding: 0
-                    width: compactViewButton.width
-                    // A vertical segmented bar: same four checkable buttons stacked,
-                    // each filling the full width so the column is an even bar.
-                    ButtonGroup { id: viewModePopupGroup; exclusive: true }
-                    contentItem: Column {
-                        spacing: 0
-                        component VBtn: ToolButton {
-                            required property string mode
-                            width: viewModePopup.width
-                            checkable: true
-                            ButtonGroup.group: viewModePopupGroup
-                            text: win.viewLabel(mode)
-                            checked: win.viewMode === mode
-                            onClicked: { win.viewMode = mode; viewModePopup.close() }
+                    Menu {
+                        id: manageMenu
+                        y: parent.height
+                        MenuItem {
+                            text: qsTr("Settings…")
+                            onTriggered: win.openSettings(0)
                         }
-                        VBtn { mode: "timeline" }
-                        VBtn { mode: "folder" }
-                        VBtn { mode: "ungrouped" }
-                        VBtn { mode: "albums" }
+                        MenuItem {
+                            text: qsTr("Tags…")
+                            onTriggered: win.openTagManager()
+                        }
                     }
                 }
-            }
 
-            Item { Layout.fillWidth: true }
+                ToolButton {
+                    text: qsTr("Import…")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Add a folder of photos to the library")
+                    onClicked: importDialog.open()
+                }
 
-            TextField {
-                id: gallerySearch
-                Layout.preferredWidth: 220
-                placeholderText: qsTr("Search name or tags…")
-                // Combines (AND) with the tag filter from the sidebar. Debounced so
-                // a burst of keystrokes re-filters the (possibly huge) model once,
-                // after a short pause, rather than on every key — keeping typing
-                // responsive on a large library.
-                onTextChanged: searchDebounce.restart()
-                Timer {
-                    id: searchDebounce
-                    interval: 180
-                    onTriggered: {
-                        library.filtered.searchText = gallerySearch.text
-                        win.scrollGalleryToTop()
+                // Equal flex spacers on either side center the view-mode switch in the
+                // gap between the Import button and the search box.
+                Item { Layout.fillWidth: true }
+
+                // View mode: switch the central area between the flat grid, a
+                // capture-month timeline, a navigable folder tree, and albums. Exactly
+                // one is active; the choice is persisted in gallerySettings. A plain
+                // Row of segmented buttons when there's room; a single current-view
+                // button that opens a vertical bar popup when the window is narrow.
+                ButtonGroup { id: viewModeGroup; exclusive: true }
+                Row {
+                    id: viewModeRow
+                    spacing: 0
+                    visible: !win.compactViews
+                    // Equal-width segments: every button takes the width of the widest
+                    // label, so the bar reads as even segments regardless of text.
+                    readonly property real btnW: Math.max(vbTimeline.implicitWidth, vbFolder.implicitWidth,
+                                                          vbFlat.implicitWidth, vbAlbums.implicitWidth)
+                    ToolButton {
+                        id: vbTimeline
+                        width: viewModeRow.btnW
+                        text: qsTr("Timeline")
+                        checkable: true
+                        ButtonGroup.group: viewModeGroup
+                        checked: win.viewMode === "timeline"
+                        onClicked: win.viewMode = "timeline"
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Grouped by the month each photo was taken")
+                    }
+                    ToolButton {
+                        id: vbFolder
+                        width: viewModeRow.btnW
+                        text: qsTr("Folders")
+                        checkable: true
+                        ButtonGroup.group: viewModeGroup
+                        checked: win.viewMode === "folder"
+                        onClicked: win.viewMode = "folder"
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Browse your library folders")
+                    }
+                    ToolButton {
+                        id: vbFlat
+                        width: viewModeRow.btnW
+                        text: qsTr("Flat")
+                        checkable: true
+                        ButtonGroup.group: viewModeGroup
+                        checked: win.viewMode === "ungrouped"
+                        onClicked: win.viewMode = "ungrouped"
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("All photos in one grid")
+                    }
+                    ToolButton {
+                        id: vbAlbums
+                        width: viewModeRow.btnW
+                        text: qsTr("Albums")
+                        checkable: true
+                        ButtonGroup.group: viewModeGroup
+                        checked: win.viewMode === "albums"
+                        onClicked: win.viewMode = "albums"
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Your albums and favorites")
                     }
                 }
-                Keys.onEscapePressed: text = ""
-                // Tab cycle: main search → add-a-tag (wrap); Shift+Tab → gallery.
-                Keys.onTabPressed: (event) => { win.tabStepTo(0, true); event.accepted = true }
-                Keys.onBacktabPressed: (event) => { win.tabStepTo(2, false); event.accepted = true }
-                ClearButton { field: gallerySearch }
-            }
 
-            ToolButton {
-                // In folder/album view the selection may include tiles as well as photos.
-                readonly property int selCount: win.selectedIds.length
-                    + (win.viewMode === "folder" ? win.selectedFolders.length : 0)
-                    + (win.viewMode === "albums" ? win.selectedAlbums.length : 0)
-                text: selCount > 1 ? qsTr("▶  Slideshow (%1)").arg(selCount)
-                                   : qsTr("▶  Slideshow")
-                enabled: library.filtered.count > 0
-                         || (win.viewMode === "folder" && win.folderEntries.length > 0)
-                         || (win.viewMode === "albums" && win.albumEntries.length > 0)
-                onClicked: win.slideshowFromFocus(true)
+                // Narrow: the current view's name + caret, opening a vertical bar. Width
+                // comes from the wide bar's widest segment (which keeps a valid implicit
+                // width even while that Row is hidden) plus room for the caret — not from
+                // the popup's own content, which has no size until it first opens. The
+                // popup matches this width and the label is centered, so the current-view
+                // label lines up with the centered dropdown labels below it.
+                ToolButton {
+                    id: compactViewButton
+                    visible: win.compactViews
+                    // Sized to the widest view label via TextMetrics — reliable
+                    // regardless of layout/visibility. As a direct RowLayout child the
+                    // width must come from Layout.preferredWidth (a plain `width` is
+                    // overridden by the layout). The popup and its buttons share it.
+                    Layout.preferredWidth: Math.max(tmViewA.width, tmViewB.width, tmViewC.width, tmViewD.width) + 48
+                    onClicked: viewModePopup.open()
+
+                    TextMetrics { id: tmViewA; font: compactViewButton.font; text: win.viewLabel("timeline") }
+                    TextMetrics { id: tmViewB; font: compactViewButton.font; text: win.viewLabel("folder") }
+                    TextMetrics { id: tmViewC; font: compactViewButton.font; text: win.viewLabel("ungrouped") }
+                    TextMetrics { id: tmViewD; font: compactViewButton.font; text: win.viewLabel("albums") }
+
+                    contentItem: Item {
+                        implicitHeight: compactLabel.implicitHeight
+                        Label {
+                            id: compactLabel
+                            anchors.centerIn: parent
+                            text: win.viewLabel(win.viewMode)
+                        }
+                        Label {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 6
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "▾"
+                        }
+                    }
+
+                    Popup {
+                        id: viewModePopup
+                        y: parent.height
+                        x: 0
+                        padding: 0
+                        width: compactViewButton.width
+                        // A vertical segmented bar: same four checkable buttons stacked,
+                        // each filling the full width so the column is an even bar.
+                        ButtonGroup { id: viewModePopupGroup; exclusive: true }
+                        contentItem: Column {
+                            spacing: 0
+                            component VBtn: ToolButton {
+                                required property string mode
+                                width: viewModePopup.width
+                                checkable: true
+                                ButtonGroup.group: viewModePopupGroup
+                                text: win.viewLabel(mode)
+                                checked: win.viewMode === mode
+                                onClicked: { win.viewMode = mode; viewModePopup.close() }
+                            }
+                            VBtn { mode: "timeline" }
+                            VBtn { mode: "folder" }
+                            VBtn { mode: "ungrouped" }
+                            VBtn { mode: "albums" }
+                        }
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                TextField {
+                    id: gallerySearch
+                    Layout.preferredWidth: 220
+                    placeholderText: qsTr("Search name or tags…")
+                    // Combines (AND) with the tag filter from the sidebar. Debounced so
+                    // a burst of keystrokes re-filters the (possibly huge) model once,
+                    // after a short pause, rather than on every key — keeping typing
+                    // responsive on a large library.
+                    onTextChanged: searchDebounce.restart()
+                    Timer {
+                        id: searchDebounce
+                        interval: 180
+                        onTriggered: {
+                            library.filtered.searchText = gallerySearch.text
+                            win.scrollGalleryToTop()
+                        }
+                    }
+                    Keys.onEscapePressed: text = ""
+                    // Tab cycle: main search → add-a-tag (wrap); Shift+Tab → gallery.
+                    Keys.onTabPressed: (event) => { win.tabStepTo(0, true); event.accepted = true }
+                    Keys.onBacktabPressed: (event) => { win.tabStepTo(2, false); event.accepted = true }
+                    ClearButton { field: gallerySearch }
+                }
+
+                ToolButton {
+                    text: qsTr("Triage")
+                    enabled: library.filtered.count > 0
+                    ToolTip.visible: hovered
+                    ToolTip.text: (win.selectedIds.length >= 2
+                                   ? qsTr("Tag the %n selected photo(s) one at a time", "", win.selectedIds.length)
+                                   : win.selectedIds.length === 1
+                                     ? qsTr("Tag every photo in this view, one at a time")
+                                     : qsTr("Tag this view's untagged photos, one at a time")) + "  (Ctrl+T)"
+                    onClicked: win.enterTriage()
+                }
+                ToolButton {
+                    // In folder/album view the selection may include tiles as well as photos.
+                    readonly property int selCount: win.selectedIds.length
+                        + (win.viewMode === "folder" ? win.selectedFolders.length : 0)
+                        + (win.viewMode === "albums" ? win.selectedAlbums.length : 0)
+                    text: selCount > 1 ? qsTr("▶  Slideshow (%1)").arg(selCount)
+                                       : qsTr("▶  Slideshow")
+                    enabled: library.filtered.count > 0
+                             || (win.viewMode === "folder" && win.folderEntries.length > 0)
+                             || (win.viewMode === "albums" && win.albumEntries.length > 0)
+                    onClicked: win.slideshowFromFocus(true)
+                }
+                ToolButton {
+                    text: qsTr("⚙")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Settings")
+                    onClicked: win.openSettings(2) // Slideshow tab
+                }
             }
-            ToolButton {
-                text: qsTr("⚙")
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Settings")
-                onClicked: win.openSettings(2) // Slideshow tab
+        }
+
+        ToolBar {
+            // Anchored (not a RowLayout) so the triage text sits at the true bar
+            // center regardless of the two buttons' widths. Manage Tags opens the
+            // same tag manager as the gallery's "Manage ▸ Tags…".
+            Item {
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+
+                ToolButton {
+                    id: triageManageButton
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("Manage Tags")
+                    focusPolicy: Qt.NoFocus // the add-tag field keeps the keyboard
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Rename, recolor, and organize your tags")
+                    onClicked: win.openTagManager()
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    // Clamp symmetrically so a long description elides instead of
+                    // overlapping the buttons, while staying centered in the bar.
+                    width: Math.min(implicitWidth,
+                                    parent.width - 2 * (16 + Math.max(triageManageButton.width,
+                                                                      triageExitButton.width)))
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    font.bold: true
+                    text: qsTr("Triage · %1 · %2 of %3").arg(triage.description)
+                                                      .arg(triage.position).arg(triage.total)
+                }
+
+                ToolButton {
+                    id: triageExitButton
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("Exit Triage")
+                    focusPolicy: Qt.NoFocus // the add-tag field keeps the keyboard
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Back to the gallery  (Esc)")
+                    onClicked: win.exitTriage()
+                }
             }
         }
     }
@@ -1771,39 +2066,62 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        SplitView {
-            orientation: Qt.Vertical
+        // The left column, keyed on the triage flag: the detail panel + tag filter,
+        // or the triage sidebar.
+        StackLayout {
             Layout.preferredWidth: 300
+            Layout.fillWidth: false // a nested layout fills by default; keep the column fixed
             Layout.fillHeight: true
+            currentIndex: win.triageActive ? 1 : 0
 
-            DetailPanel {
-                id: detailPanel
-                SplitView.preferredHeight: 340
-                SplitView.minimumHeight: 160
-                library: library
-                selectedIds: win.selectedIds
-                accent: win.accent
-                // Keep the gallery from jumping when a tag edit reloads the model.
-                tagScrollGuard: win.withPreservedGalleryScrollTagging
-                // Tab cycle: add-a-tag → tag filter; Shift+Tab → main search.
-                onTabForward: win.tabStepTo(1, true)
-                onTabBackward: win.tabStepTo(3, false)
+            SplitView {
+                orientation: Qt.Vertical
+
+                DetailPanel {
+                    id: detailPanel
+                    SplitView.preferredHeight: 340
+                    SplitView.minimumHeight: 160
+                    library: library
+                    selectedIds: win.selectedIds
+                    accent: win.accent
+                    // Keep the gallery from jumping when a tag edit reloads the model.
+                    tagScrollGuard: win.withPreservedGalleryScrollTagging
+                    // Tab cycle: add-a-tag → tag filter; Shift+Tab → main search.
+                    onTabForward: win.tabStepTo(1, true)
+                    onTabBackward: win.tabStepTo(3, false)
+                }
+
+                TagSidebar {
+                    id: tagSidebar
+                    SplitView.fillHeight: true
+                    SplitView.minimumHeight: 120
+                    tagModel: library.tags
+                    aliases: library.tagAliases // match a tag by its aliases in the filter
+                    accent: win.accent
+                    // Keep the library's filter mode in sync so the sidebar can
+                    // narrow its tags to the current match set when this is on.
+                    onMatchAllChanged: { library.setMatchAll(matchAll); win.scrollGalleryToTop() }
+                    Component.onCompleted: library.setMatchAll(matchAll)
+                    // Tab cycle: tag filter → gallery; Shift+Tab → add-a-tag.
+                    onTabForward: win.tabStepTo(2, true)
+                    onTabBackward: win.tabStepTo(0, false)
+                }
             }
 
-            TagSidebar {
-                id: tagSidebar
-                SplitView.fillHeight: true
-                SplitView.minimumHeight: 120
-                tagModel: library.tags
-                aliases: library.tagAliases // match a tag by its aliases in the filter
+            TriageSidebar {
+                id: triageSidebar
+                library: library
+                session: triage
                 accent: win.accent
-                // Keep the library's filter mode in sync so the sidebar can
-                // narrow its tags to the current match set when this is on.
-                onMatchAllChanged: { library.setMatchAll(matchAll); win.scrollGalleryToTop() }
-                Component.onCompleted: library.setMatchAll(matchAll)
-                // Tab cycle: tag filter → gallery; Shift+Tab → add-a-tag.
-                onTabForward: win.tabStepTo(2, true)
-                onTabBackward: win.tabStepTo(0, false)
+                photoId: triage.currentId
+                onApplyTagRequested: (name) => win.triageApply(name)
+                onRemoveTagRequested: (tagId, tagName) => win.triageRemoveTag(tagId, tagName)
+                onFavoriteToggleRequested: win.triageToggleFavorite()
+                onTrashRequested: win.triageTrash()
+                onUndoRequested: win.triageUndo()
+                onNextRequested: win.triageNext()
+                onPreviousRequested: triage.previous()
+                onExitRequested: win.exitTriage()
             }
         }
 
@@ -1812,191 +2130,210 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: palette.base
 
-            GridView {
-                id: grid
+            // The central region, keyed on the triage flag: the gallery (its four
+            // views stacked, exactly one shown) or the triage view. A hidden page
+            // neither paints nor gets key events.
+            StackLayout {
                 anchors.fill: parent
-                visible: win.viewMode === "ungrouped"
-                clip: true
-                cellWidth: win.cellSize
-                cellHeight: win.cellSize
-                model: library.filtered
-                boundsBehavior: Flickable.StopAtBounds
+                currentIndex: win.triageActive ? 1 : 0
 
-                // Arrow-key navigation (our own, not GridView's currentIndex).
-                focus: true
-                keyNavigationEnabled: false
-                // Ctrl+A selects the whole gallery. Handled here (not window-wide)
-                // so text fields keep their own Ctrl+A for selecting text.
-                Keys.onPressed: (event) => {
-                    if (event.key === Qt.Key_A && (event.modifiers & Qt.ControlModifier)) {
-                        win.selectAll()
-                        event.accepted = true
+                Item {
+                    GridView {
+                        id: grid
+                        anchors.fill: parent
+                        visible: win.viewMode === "ungrouped"
+                        clip: true
+                        cellWidth: win.cellSize
+                        cellHeight: win.cellSize
+                        model: library.filtered
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        // Arrow-key navigation (our own, not GridView's currentIndex).
+                        focus: true
+                        keyNavigationEnabled: false
+                        // Ctrl+A selects the whole gallery. Handled here (not window-wide)
+                        // so text fields keep their own Ctrl+A for selecting text.
+                        Keys.onPressed: (event) => {
+                            if (event.key === Qt.Key_A && (event.modifiers & Qt.ControlModifier)) {
+                                win.selectAll()
+                                event.accepted = true
+                            }
+                        }
+                        Keys.onLeftPressed: (event) => { win.navigate("left", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+                        Keys.onRightPressed: (event) => { win.navigate("right", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+                        Keys.onUpPressed: (event) => { win.navigate("up", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+                        Keys.onDownPressed: (event) => { win.navigate("down", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
+                        Keys.onSpacePressed: (event) => { win.slideshowFromFocus(true); event.accepted = true }
+                        Keys.onReturnPressed: (event) => { win.openViewerFromFocus(); event.accepted = true }
+                        Keys.onEnterPressed: (event) => { win.openViewerFromFocus(); event.accepted = true }
+                        // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                        Keys.onTabPressed: (event) => { win.tabStepTo(3, true); event.accepted = true }
+                        Keys.onBacktabPressed: (event) => { win.tabStepTo(1, false); event.accepted = true }
+
+                        // Keep delegates alive and recycle them so fast scrolling
+                        // doesn't thrash delegate creation / image decoding.
+                        reuseItems: true
+                        cacheBuffer: 1200
+
+                        // Longer glide for touch flicks.
+                        flickDeceleration: 2500
+                        maximumFlickVelocity: 6000
+
+                        ScrollBar.vertical: ScrollBar {}
+
+                        delegate: PhotoDelegate {
+                            width: grid.cellWidth
+                            height: grid.cellHeight
+                            accent: win.accent
+                            crop: gallerySettings.cropThumbs
+                            filePath: model.filePath
+                            isVideo: model.isVideo === true
+                            tagCount: model.tags.length
+                            favorite: model.favorite === true
+                            selected: win.selectedIds.indexOf(model.id) !== -1
+                            onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
+                            onDoubleClicked: win.openViewer(model.id)
+                            onRightClicked: win.openPhotoMenu(index, model.id, model.fileName, model.isVideo === true)
+                            onFavoriteToggled: library.toggleFavorite(model.id)
+                        }
+                    }
+
+                    // Momentum/fast wheel + trackpad scrolling. Sits above the grid and
+                    // consumes only wheel events; button clicks fall through to delegates.
+                    // One row per mouse-wheel notch (step: cellHeight).
+                    WheelScroller {
+                        flickable: grid
+                        step: grid.cellHeight
+                        visible: grid.visible
+                    }
+
+                    // Clicking empty gallery space (the right remainder left by column
+                    // wrapping, or below the last row) clears the selection. Sits above
+                    // the grid and hit-tests each press: presses on a photo cell fall
+                    // through to its delegate (so selection and drag-flicking still
+                    // work), only empty-space presses are handled here.
+                    MouseArea {
+                        anchors.fill: parent
+                        visible: grid.visible
+                        enabled: grid.visible
+                        acceptedButtons: Qt.LeftButton
+                        onPressed: (mouse) => {
+                            const idx = grid.indexAt(grid.contentX + mouse.x, grid.contentY + mouse.y)
+                            // Keep the press only when it missed every photo; otherwise
+                            // let it reach the GridView and the delegate beneath.
+                            mouse.accepted = (idx === -1)
+                        }
+                        onClicked: win.clearSelection()
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: grid.visible && grid.count === 0
+                        text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === "")
+                              ? qsTr("Import a folder to get started.")
+                              : qsTr("No photos match the current filters.")
+                        color: palette.placeholderText
+                    }
+
+                    // Folder browser: folders (2x2 cover mosaics) and the current folder's
+                    // photos in one photo-style grid. Photos share library.filtered (the
+                    // folderMode/folderPath bindings restrict it to the current folder), so
+                    // selection/slideshow route through the same win helpers.
+                    FolderView {
+                        id: folderView
+                        anchors.fill: parent
+                        visible: win.viewMode === "folder"
+                        library: library
+                        entries: win.folderEntries
+                        currentFolder: win.currentFolder
+                        searching: library.filtered.searchText.length > 0
+                        accent: win.accent
+                        crop: gallerySettings.cropThumbs
+                        cellSize: win.cellSize
+                        selectedIds: win.selectedIds
+                        selectedFolders: win.selectedFolders
+                        onGoUp: win.fvGoUp()
+                        onEnterFolder: (path) => win.fvEnterFolder(path)
+                        onCellClicked: (gridIndex, modifiers) => win.fvClick(gridIndex, modifiers)
+                        onCellDoubleClicked: (gridIndex) => win.fvDoubleClick(gridIndex)
+                        onCellRightClicked: (gridIndex) => win.fvRightClick(gridIndex)
+                        onSelectAllRequested: win.fvSelectAll()
+                        onCursorMove: (dir, extend) => win.fvNavigate(dir, extend)
+                        onSlideshowRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
+                        // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                        onTabForward: win.tabStepTo(3, true)
+                        onTabBackward: win.tabStepTo(1, false)
+                    }
+
+                    // Capture-month timeline. Shares library.filtered (sorted by date in
+                    // this mode) and routes selection/slideshow back through the same win
+                    // helpers the grid uses, so selection is consistent across views.
+                    TimelineView {
+                        id: timelineView
+                        anchors.fill: parent
+                        visible: win.viewMode === "timeline"
+                        library: library
+                        accent: win.accent
+                        crop: gallerySettings.cropThumbs
+                        cellSize: win.cellSize
+                        selectedIds: win.selectedIds
+                        cursorIndex: win.cursorIndex
+                        anchorIndex: win.anchorIndex
+                        emptyFiltered: library.tags.selectedTagIds.length === 0
+                                       && gallerySearch.text.trim() === ""
+                        onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
+                        onPhotoDoubleClicked: (id) => win.openViewer(id)
+                        onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)
+                        onSelectAllRequested: win.selectAll()
+                        onMoveCursorRequested: (target, extend) => win.moveCursorTo(target, extend)
+                        onSlideshowFromFocusRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
+                        // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                        onTabForward: win.tabStepTo(3, true)
+                        onTabBackward: win.tabStepTo(1, false)
+                    }
+
+                    // Albums: album tiles (2x2 cover mosaics) at the list level, then one
+                    // album's photos when opened. Photos share library.filtered (restricted
+                    // to the album tag) and route selection/slideshow through the same win
+                    // helpers the grid uses, so behavior matches the other views.
+                    AlbumView {
+                        id: albumView
+                        anchors.fill: parent
+                        visible: win.viewMode === "albums"
+                        library: library
+                        entries: win.albumEntries
+                        currentAlbum: win.currentAlbum
+                        currentAlbumName: win.currentAlbumName
+                        searching: library.filtered.searchText.length > 0
+                        accent: win.accent
+                        crop: gallerySettings.cropThumbs
+                        cellSize: win.cellSize
+                        selectedIds: win.selectedIds
+                        selectedAlbums: win.selectedAlbums
+                        onEnterAlbum: (id) => win.enterAlbum(id)
+                        onGoUp: win.leaveAlbum()
+                        onNewSmartAlbumRequested: { smartAlbumDialog.editId = 0; smartAlbumDialog.open() }
+                        onCellClicked: (gridIndex, modifiers) => win.avClick(gridIndex, modifiers)
+                        onCellDoubleClicked: (gridIndex) => win.avDoubleClick(gridIndex)
+                        onCellRightClicked: (gridIndex) => win.avRightClick(gridIndex)
+                        onPhotoFavoriteToggled: (id) => library.toggleFavorite(id)
+                        onSelectAllRequested: win.avSelectAll()
+                        onCursorMove: (dir, extend) => win.avNavigate(dir, extend)
+                        onSlideshowRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
+                        // Tab cycle: gallery → main search; Shift+Tab → tag filter.
+                        onTabForward: win.tabStepTo(3, true)
+                        onTabBackward: win.tabStepTo(1, false)
                     }
                 }
-                Keys.onLeftPressed: (event) => { win.navigate("left", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
-                Keys.onRightPressed: (event) => { win.navigate("right", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
-                Keys.onUpPressed: (event) => { win.navigate("up", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
-                Keys.onDownPressed: (event) => { win.navigate("down", (event.modifiers & Qt.ShiftModifier) !== 0); event.accepted = true }
-                Keys.onSpacePressed: (event) => { win.slideshowFromFocus(true); event.accepted = true }
-                Keys.onReturnPressed: (event) => { win.openViewerFromFocus(); event.accepted = true }
-                Keys.onEnterPressed: (event) => { win.openViewerFromFocus(); event.accepted = true }
-                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
-                Keys.onTabPressed: (event) => { win.tabStepTo(3, true); event.accepted = true }
-                Keys.onBacktabPressed: (event) => { win.tabStepTo(1, false); event.accepted = true }
 
-                // Keep delegates alive and recycle them so fast scrolling
-                // doesn't thrash delegate creation / image decoding.
-                reuseItems: true
-                cacheBuffer: 1200
-
-                // Longer glide for touch flicks.
-                flickDeceleration: 2500
-                maximumFlickVelocity: 6000
-
-                ScrollBar.vertical: ScrollBar {}
-
-                delegate: PhotoDelegate {
-                    width: grid.cellWidth
-                    height: grid.cellHeight
-                    accent: win.accent
-                    crop: gallerySettings.cropThumbs
-                    filePath: model.filePath
-                    isVideo: model.isVideo === true
-                    tagCount: model.tags.length
-                    favorite: model.favorite === true
-                    selected: win.selectedIds.indexOf(model.id) !== -1
-                    onClicked: (modifiers) => win.handleClick(index, model.id, modifiers)
-                    onDoubleClicked: win.openViewer(model.id)
-                    onRightClicked: win.openPhotoMenu(index, model.id, model.fileName, model.isVideo === true)
-                    onFavoriteToggled: library.toggleFavorite(model.id)
+                // Triage: the fifth central view — the current photo, fit to the
+                // area, on the window background.
+                TriageView {
+                    id: triageView
+                    library: library
+                    photoId: triage.currentId
+                    total: triage.total
                 }
-            }
-
-            // Momentum/fast wheel + trackpad scrolling. Sits above the grid and
-            // consumes only wheel events; button clicks fall through to delegates.
-            // One row per mouse-wheel notch (step: cellHeight).
-            WheelScroller {
-                flickable: grid
-                step: grid.cellHeight
-                visible: grid.visible
-            }
-
-            // Clicking empty gallery space (the right remainder left by column
-            // wrapping, or below the last row) clears the selection. Sits above
-            // the grid and hit-tests each press: presses on a photo cell fall
-            // through to its delegate (so selection and drag-flicking still
-            // work), only empty-space presses are handled here.
-            MouseArea {
-                anchors.fill: parent
-                visible: grid.visible
-                enabled: grid.visible
-                acceptedButtons: Qt.LeftButton
-                onPressed: (mouse) => {
-                    const idx = grid.indexAt(grid.contentX + mouse.x, grid.contentY + mouse.y)
-                    // Keep the press only when it missed every photo; otherwise
-                    // let it reach the GridView and the delegate beneath.
-                    mouse.accepted = (idx === -1)
-                }
-                onClicked: win.clearSelection()
-            }
-
-            Label {
-                anchors.centerIn: parent
-                visible: grid.visible && grid.count === 0
-                text: (library.tags.selectedTagIds.length === 0 && gallerySearch.text.trim() === "")
-                      ? qsTr("Import a folder to get started.")
-                      : qsTr("No photos match the current filters.")
-                color: palette.placeholderText
-            }
-
-            // Folder browser: folders (2x2 cover mosaics) and the current folder's
-            // photos in one photo-style grid. Photos share library.filtered (the
-            // folderMode/folderPath bindings restrict it to the current folder), so
-            // selection/slideshow route through the same win helpers.
-            FolderView {
-                id: folderView
-                anchors.fill: parent
-                visible: win.viewMode === "folder"
-                library: library
-                entries: win.folderEntries
-                currentFolder: win.currentFolder
-                searching: library.filtered.searchText.length > 0
-                accent: win.accent
-                crop: gallerySettings.cropThumbs
-                cellSize: win.cellSize
-                selectedIds: win.selectedIds
-                selectedFolders: win.selectedFolders
-                onGoUp: win.fvGoUp()
-                onEnterFolder: (path) => win.fvEnterFolder(path)
-                onCellClicked: (gridIndex, modifiers) => win.fvClick(gridIndex, modifiers)
-                onCellDoubleClicked: (gridIndex) => win.fvDoubleClick(gridIndex)
-                onCellRightClicked: (gridIndex) => win.fvRightClick(gridIndex)
-                onSelectAllRequested: win.fvSelectAll()
-                onCursorMove: (dir, extend) => win.fvNavigate(dir, extend)
-                onSlideshowRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
-                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
-                onTabForward: win.tabStepTo(3, true)
-                onTabBackward: win.tabStepTo(1, false)
-            }
-
-            // Capture-month timeline. Shares library.filtered (sorted by date in
-            // this mode) and routes selection/slideshow back through the same win
-            // helpers the grid uses, so selection is consistent across views.
-            TimelineView {
-                id: timelineView
-                anchors.fill: parent
-                visible: win.viewMode === "timeline"
-                library: library
-                accent: win.accent
-                crop: gallerySettings.cropThumbs
-                cellSize: win.cellSize
-                selectedIds: win.selectedIds
-                cursorIndex: win.cursorIndex
-                anchorIndex: win.anchorIndex
-                emptyFiltered: library.tags.selectedTagIds.length === 0
-                               && gallerySearch.text.trim() === ""
-                onPhotoClicked: (index, id, modifiers) => win.handleClick(index, id, modifiers)
-                onPhotoDoubleClicked: (id) => win.openViewer(id)
-                onPhotoRightClicked: (index, id, fileName, isVideo) => win.openPhotoMenu(index, id, fileName, isVideo)
-                onSelectAllRequested: win.selectAll()
-                onMoveCursorRequested: (target, extend) => win.moveCursorTo(target, extend)
-                onSlideshowFromFocusRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
-                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
-                onTabForward: win.tabStepTo(3, true)
-                onTabBackward: win.tabStepTo(1, false)
-            }
-
-            // Albums: album tiles (2x2 cover mosaics) at the list level, then one
-            // album's photos when opened. Photos share library.filtered (restricted
-            // to the album tag) and route selection/slideshow through the same win
-            // helpers the grid uses, so behavior matches the other views.
-            AlbumView {
-                id: albumView
-                anchors.fill: parent
-                visible: win.viewMode === "albums"
-                library: library
-                entries: win.albumEntries
-                currentAlbum: win.currentAlbum
-                currentAlbumName: win.currentAlbumName
-                searching: library.filtered.searchText.length > 0
-                accent: win.accent
-                crop: gallerySettings.cropThumbs
-                cellSize: win.cellSize
-                selectedIds: win.selectedIds
-                selectedAlbums: win.selectedAlbums
-                onEnterAlbum: (id) => win.enterAlbum(id)
-                onGoUp: win.leaveAlbum()
-                onNewSmartAlbumRequested: { smartAlbumDialog.editId = 0; smartAlbumDialog.open() }
-                onCellClicked: (gridIndex, modifiers) => win.avClick(gridIndex, modifiers)
-                onCellDoubleClicked: (gridIndex) => win.avDoubleClick(gridIndex)
-                onCellRightClicked: (gridIndex) => win.avRightClick(gridIndex)
-                onPhotoFavoriteToggled: (id) => library.toggleFavorite(id)
-                onSelectAllRequested: win.avSelectAll()
-                onCursorMove: (dir, extend) => win.avNavigate(dir, extend)
-                onSlideshowRequested: (play) => play ? win.slideshowFromFocus(true) : win.openViewerFromFocus()
-                // Tab cycle: gallery → main search; Shift+Tab → tag filter.
-                onTabForward: win.tabStepTo(3, true)
-                onTabBackward: win.tabStepTo(1, false)
             }
         }
     }
@@ -2374,6 +2711,12 @@ ApplicationWindow {
             text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
             onTriggered: win.openViewer(win.menuPhotoId)
         }
+        // With exactly this photo selected, triage walks the whole view from the
+        // top (the same rule as the header button).
+        MenuItem {
+            text: qsTr("Triage…")
+            onTriggered: win.enterTriage()
+        }
 
         MenuSeparator {}
         AddToAlbumMenu {}
@@ -2453,6 +2796,11 @@ ApplicationWindow {
             text: qsTr("Play slideshow")
             onTriggered: win.startSlideshow(win.menuPhotoId, true, true)
         }
+        // Triage just the selected photos.
+        MenuItem {
+            text: qsTr("Triage…")
+            onTriggered: win.enterTriage()
+        }
 
         MenuSeparator {}
         AddToAlbumMenu {}
@@ -2521,6 +2869,43 @@ ApplicationWindow {
                         .arg(win.selectedIds.length)
                   : qsTr("Remove “%1” from the library?\n\n“Remove from library only” keeps the file on disk and removes just its library entry and tags. “Delete from disk” moves the file to the Trash.")
                         .arg(win.menuPhotoName)
+        }
+    }
+
+    // Triage's first Trash of a session confirms once; the choice sticks for the
+    // rest of the session (Ctrl+Z still brings the file back).
+    Dialog {
+        id: triageTrashConfirm
+        title: qsTr("Move to Trash")
+        anchors.centerIn: parent
+        modal: true
+        width: 440
+        onAccepted: {
+            triage.trashConfirmed = true
+            win.triageDoTrash()
+        }
+        // Yes is focused on open so a second Enter (after Ctrl+Delete) confirms
+        // without reaching for the mouse; Esc / No back out.
+        onOpened: trashYes.forceActiveFocus()
+        // The modal dialog took the keyboard; hand it back to the add-tag field.
+        onClosed: Qt.callLater(function () { triageSidebar.focusTagInput() })
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("No")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+            Button {
+                id: trashYes
+                text: qsTr("Yes")
+                DialogButtonBox.buttonRole: DialogButtonBox.YesRole
+                Keys.onReturnPressed: triageTrashConfirm.accept()
+                Keys.onEnterPressed: triageTrashConfirm.accept()
+            }
+        }
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: qsTr("Move this photo to the Trash and drop it from the library?\n\nYou won't be asked again this session. Ctrl+Z restores it.")
         }
     }
 

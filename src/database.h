@@ -83,6 +83,21 @@ public:
     void unlinkTagFromContent(int photoId, int tagId);
     void deleteTag(int tagId); // delete a tag and all its photo links
 
+    // Apply `tagId` to a photo exactly as the gallery does (link every live copy
+    // of its content, archive it, materialize its implication closure), but
+    // report which photo_tags / content_tags rows the operation actually inserted,
+    // so revertTagApply can take back only those. Rows already present — the tag
+    // itself, or an implied tag another rule had already put there — are left
+    // out of the record and so survive the undo.
+    TagApplyRecord applyTagRecorded(int photoId, int tagId);
+    void revertTagApply(const TagApplyRecord &record);
+
+    // Snapshot a photo row so it can be recreated after a delete (the triage trash
+    // undo). restorePhotoRow re-inserts it (a new id) and replays the content
+    // archive onto it, so its tags come back; returns the new id, or -1.
+    PhotoRowSnapshot photoRow(int photoId);
+    int restorePhotoRow(const PhotoRowSnapshot &row);
+
     // Tags on one photo (with category info; count is unused), sorted by name.
     // Excludes reserved/system tags (album membership, favorites), so the detail
     // panel never shows them as chips.

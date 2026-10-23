@@ -64,6 +64,9 @@ Item {
     readonly property int columns: agrid ? Math.max(1, Math.floor(agrid.width / agrid.cellWidth)) : 1
 
     function toTop() { if (agrid) agrid.positionViewAtBeginning() }
+    // Scroll position, saved/restored by the window around triage mode.
+    function scrollY() { return agrid ? agrid.contentY : 0 }
+    function setScrollY(y) { if (agrid) agrid.contentY = y }
     function focusView() { if (agrid) agrid.forceActiveFocus() }
     function ensureVisible(index) { if (agrid) agrid.positionViewAtIndex(index, GridView.Contain) }
 

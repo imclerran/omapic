@@ -60,6 +60,9 @@ Item {
     readonly property int columns: fgrid ? Math.max(1, Math.floor(fgrid.width / fgrid.cellWidth)) : 1
 
     function toTop() { if (fgrid) fgrid.positionViewAtBeginning() }
+    // Scroll position, saved/restored by the window around triage mode.
+    function scrollY() { return fgrid ? fgrid.contentY : 0 }
+    function setScrollY(y) { if (fgrid) fgrid.contentY = y }
     function focusView() { fgrid.forceActiveFocus() }
     // Scroll so the given grid index (used by arrow navigation) stays on screen.
     function ensureVisible(index) { if (fgrid) fgrid.positionViewAtIndex(index, GridView.Contain) }
