@@ -1224,14 +1224,25 @@ ApplicationWindow {
     function exitTriage() {
         if (!win.triageActive)
             return
+        // Snapshot the saved gallery state into plain values *before* end(): the
+        // galleryState property reads the session's live map, so its contents go
+        // empty the moment end() clears it. (slice() copies the id array out.)
         const st = triage.galleryState
+        const savedIds = (st.selectedIds || []).slice()
+        const savedAnchor = st.anchorIndex
+        const savedCursor = st.cursorIndex
+        const savedScroll = st.scrollY || 0
         triage.end() // the regions swap back
-        const ids = (st.selectedIds || []).filter(function (id) { return library.filtered.containsId(id) })
-        win.selectedIds = ids
-        win.anchorIndex = ids.length > 0 ? st.anchorIndex : -1
-        win.cursorIndex = ids.length > 0 ? st.cursorIndex : -1
-        win.restoreGalleryScroll(st.scrollY || 0)
-        win.focusGalleryView()
+        // Deferred so the gallery's filter proxy has re-settled after the swap
+        // before containsId() is consulted.
+        Qt.callLater(function () {
+            const ids = savedIds.filter(function (id) { return library.filtered.containsId(id) })
+            win.selectedIds = ids
+            win.anchorIndex = ids.length > 0 ? savedAnchor : -1
+            win.cursorIndex = ids.length > 0 ? savedCursor : -1
+            win.restoreGalleryScroll(savedScroll)
+            win.focusGalleryView()
+        })
     }
 
     // Enter on an empty field: advance; once the queue is exhausted, leave.
