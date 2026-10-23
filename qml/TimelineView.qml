@@ -63,6 +63,10 @@ Item {
         if (list)
             list.positionViewAtBeginning()
     }
+    // The vertical scroll position, saved by the window when triage replaces this
+    // view and put back when it returns (see Main.qml's triage entry/exit).
+    function scrollY() { return list ? list.contentY : 0 }
+    function setScrollY(y) { if (list) list.contentY = y }
 
     // Give the scrolling list keyboard focus (arrow keys, Space, Enter).
     function focusView() {

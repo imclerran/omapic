@@ -103,6 +103,13 @@ private slots:
     void linkPhotoTagFailsOnMissingForeignKey();
     void coOccurringTagsEmptyWhenNoCoOccurrence();
 
+    // Triage undo primitives
+    void applyTagRecordedReportsOnlyNewRows();
+    void revertTagApplyKeepsPreexistingImpliedTags();
+    void revertTagApplyCoversEveryContentCopy();
+    void relinkAfterRemoveRestoresTheOneLink();
+    void photoRowRestoreReattachesArchivedTags();
+
 private:
     // Map a tag list to {name: count} for order-independent assertions.
     static QHash<QString, int> countsByName(const QVector<TagInfo> &tags);
@@ -1352,6 +1359,173 @@ void TestDatabase::renameTagOntoAliasNameIsRejectedByDatabase()
     QVERIFY(m_db->aliasExists(QStringLiteral("woods")));
     QCOMPARE(m_db->tagIdByName(QStringLiteral("woods")), -1); // not a tag, only an alias
     Q_UNUSED(tree);
+}
+
+// --- Triage undo primitives -------------------------------------------------
+
+void TestDatabase::applyTagRecordedReportsOnlyNewRows()
+{
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    m_db->addImplication(a, b);
+    const QString hash = QStringLiteral("HASH_REC");
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), hash);
+
+    // A fresh apply of 'a' adds a and (by implication) b, both live and archived.
+    TagApplyRecord rec = m_db->applyTagRecorded(photo, a);
+    QCOMPARE(rec.photoId, photo);
+    QCOMPARE(rec.tagId, a);
+    QCOMPARE(rec.hash, hash);
+    QVERIFY(rec.changedAnything());
+    QCOMPARE(rec.photoLinks, (QList<QPair<int, int>>{qMakePair(photo, a), qMakePair(photo, b)}));
+    QCOMPARE(rec.contentLinks, (QList<int>{a, b}));
+
+    // Applying it again changes nothing, and the record says so.
+    rec = m_db->applyTagRecorded(photo, a);
+    QVERIFY(!rec.changedAnything());
+    QVERIFY(rec.photoLinks.isEmpty());
+    QVERIFY(rec.contentLinks.isEmpty());
+
+    // Bad input is a harmless empty record.
+    QVERIFY(!m_db->applyTagRecorded(-1, a).changedAnything());
+    QVERIFY(!m_db->applyTagRecorded(photo, -1).changedAnything());
+}
+
+void TestDatabase::revertTagApplyKeepsPreexistingImpliedTags()
+{
+    // Two rules share a consequent: a → shared, c → shared.
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int c = m_db->ensureTag(QStringLiteral("c"));
+    const int shared = m_db->ensureTag(QStringLiteral("shared"));
+    m_db->addImplication(a, shared);
+    m_db->addImplication(c, shared);
+    const QString hash = QStringLiteral("HASH_UNDO");
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), hash);
+
+    // 'c' is applied first, so 'shared' is already on the photo (and archived)
+    // before 'a' arrives.
+    m_db->applyTagRecorded(photo, c);
+    QVERIFY(m_db->photoTagIds(photo).contains(shared));
+
+    const TagApplyRecord rec = m_db->applyTagRecorded(photo, a);
+    QCOMPARE(rec.photoLinks, (QList<QPair<int, int>>{qMakePair(photo, a)})); // only 'a' was new
+    QCOMPARE(rec.contentLinks, (QList<int>{a}));
+
+    // Undoing 'a' takes back just 'a': the implied 'shared' stays, as does 'c'.
+    m_db->revertTagApply(rec);
+    const QSet<int> ids = m_db->photoTagIds(photo);
+    QVERIFY(!ids.contains(a));
+    QVERIFY(ids.contains(c));
+    QVERIFY(ids.contains(shared));
+
+    // The archive is untouched for the kept tags too: a re-import still gets them.
+    const int copy = m_db->insertPhoto(QStringLiteral("/p/copy.jpg"), hash);
+    m_db->applyContentTags(copy, hash);
+    const QSet<int> copyIds = m_db->photoTagIds(copy);
+    QVERIFY(!copyIds.contains(a));
+    QVERIFY(copyIds.contains(c));
+    QVERIFY(copyIds.contains(shared));
+
+    // Contrast: on a photo that didn't have the implied tag yet, undoing the apply
+    // removes the implied tag along with it.
+    const QString hash2 = QStringLiteral("HASH_UNDO2");
+    const int photo2 = m_db->insertPhoto(QStringLiteral("/p/2.jpg"), hash2);
+    const TagApplyRecord rec2 = m_db->applyTagRecorded(photo2, a);
+    QVERIFY(m_db->photoTagIds(photo2).contains(shared));
+    m_db->revertTagApply(rec2);
+    QVERIFY(m_db->photoTagIds(photo2).isEmpty());
+    QVERIFY(!m_db->photoTagIds(photo).isEmpty()); // the other photo is unaffected
+}
+
+void TestDatabase::revertTagApplyCoversEveryContentCopy()
+{
+    // Tagging by content reaches every live copy of the hash; so does the undo.
+    const QString hash = QStringLiteral("HASH_COPIES");
+    const int p1 = m_db->insertPhoto(QStringLiteral("/a/1.jpg"), hash);
+    const int p2 = m_db->insertPhoto(QStringLiteral("/b/1.jpg"), hash);
+    const int tag = m_db->ensureTag(QStringLiteral("shared"));
+
+    const TagApplyRecord rec = m_db->applyTagRecorded(p1, tag);
+    QCOMPARE(rec.photoLinks.size(), 2);
+    QVERIFY(m_db->photoTagIds(p2).contains(tag));
+
+    m_db->revertTagApply(rec);
+    QVERIFY(!m_db->photoTagIds(p1).contains(tag));
+    QVERIFY(!m_db->photoTagIds(p2).contains(tag));
+    // And the archive row is gone, so a re-import doesn't resurrect it.
+    const int p3 = m_db->insertPhoto(QStringLiteral("/c/1.jpg"), hash);
+    m_db->applyContentTags(p3, hash);
+    QVERIFY(!m_db->photoTagIds(p3).contains(tag));
+
+    // Content without a hash degrades to the single row, like linkTagToContent.
+    const int loose = m_db->insertPhoto(QStringLiteral("/d/loose.jpg"), QString());
+    const TagApplyRecord lr = m_db->applyTagRecorded(loose, tag);
+    QCOMPARE(lr.photoLinks, (QList<QPair<int, int>>{qMakePair(loose, tag)}));
+    QVERIFY(lr.contentLinks.isEmpty());
+    m_db->revertTagApply(lr);
+    QVERIFY(!m_db->photoTagIds(loose).contains(tag));
+}
+
+void TestDatabase::relinkAfterRemoveRestoresTheOneLink()
+{
+    // Removing a tag in triage drops one link (content-wide) and its archive row;
+    // undoing it puts exactly that back — without re-running implications.
+    const int a = m_db->ensureTag(QStringLiteral("a"));
+    const int b = m_db->ensureTag(QStringLiteral("b"));
+    m_db->addImplication(a, b);
+    const QString hash = QStringLiteral("HASH_RELINK");
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), hash);
+    m_db->applyTagRecorded(photo, a); // a + b
+
+    // The remove, as Library::removeTag does it.
+    m_db->unlinkTagFromContent(photo, b);
+    m_db->forgetContentTag(hash, b);
+    QVERIFY(!m_db->photoTagIds(photo).contains(b));
+
+    // The undo, as Library::relinkTag does it.
+    m_db->linkTagToContent(photo, b);
+    m_db->rememberContentTag(hash, b);
+    QVERIFY(m_db->photoTagIds(photo).contains(b));
+    const int copy = m_db->insertPhoto(QStringLiteral("/p/copy.jpg"), hash);
+    m_db->applyContentTags(copy, hash);
+    QVERIFY(m_db->photoTagIds(copy).contains(b)); // archived again
+}
+
+void TestDatabase::photoRowRestoreReattachesArchivedTags()
+{
+    const QString hash = QStringLiteral("HASH_RESTORE");
+    const int tag = m_db->ensureTag(QStringLiteral("keep"));
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), hash, 1700000000, 1699999000, 4096);
+    m_db->applyTagRecorded(photo, tag);
+
+    // Snapshot, then delete (the triage trash): the row goes, the archive stays
+    // and the hash is remembered as orphaned.
+    const PhotoRowSnapshot row = m_db->photoRow(photo);
+    QCOMPARE(row.id, photo);
+    QCOMPARE(row.path, QStringLiteral("/p/1.jpg"));
+    QCOMPARE(row.hash, hash);
+    QCOMPARE(row.takenAt, qint64(1700000000));
+    QCOMPARE(row.mtime, qint64(1699999000));
+    QCOMPARE(row.size, qint64(4096));
+    m_db->deletePhoto(photo);
+    QCOMPARE(m_db->rememberedRemovedCount(), 1);
+    QVERIFY(m_db->photoPath(photo).isEmpty());
+
+    // Restore: a new row at the same path, with the tag back from the archive and
+    // the orphan marker cleared.
+    const int restored = m_db->restorePhotoRow(row);
+    QVERIFY(restored >= 0);
+    QCOMPARE(m_db->photoPath(restored), QStringLiteral("/p/1.jpg"));
+    QVERIFY(m_db->photoTagIds(restored).contains(tag));
+    QCOMPARE(m_db->photoHash(restored), hash);
+    QCOMPARE(m_db->rememberedRemovedCount(), 0);
+    const QVector<Photo> photos = m_db->loadPhotos();
+    QCOMPARE(photos.size(), 1);
+    QCOMPARE(photos.first().takenAt, qint64(1700000000));
+
+    // Unknown rows snapshot as empty and refuse to restore.
+    QCOMPARE(m_db->photoRow(9999).id, -1);
+    QCOMPARE(m_db->restorePhotoRow(PhotoRowSnapshot{}), -1);
 }
 
 QTEST_GUILESS_MAIN(TestDatabase)

@@ -143,6 +143,31 @@ public:
     Q_INVOKABLE void setTagFolderScope(const QString &path);
     Q_INVOKABLE void addTag(int photoId, const QString &name);
     Q_INVOKABLE void removeTag(int photoId, int tagId);
+    // --- Triage (one-photo-at-a-time tagging with undo) ---
+    // The same apply as addTag — aliases, implications, the content archive, the
+    // sidecar queue — but it hands back what it inserted, as a map the triage
+    // undo stack keeps: {photoId, tagId, tagName, hash, photoLinks: [[photoId,
+    // tagId], …], contentLinks: [tagId, …], changed}. `tagName` is the canonical
+    // name (an alias resolves to its tag). Empty map when nothing could be applied.
+    Q_INVOKABLE QVariantMap addTagRecorded(int photoId, const QString &name);
+    // Undo an addTagRecorded: remove exactly the links it inserted, leaving any
+    // tag (implied or not) that was already on the photo alone.
+    Q_INVOKABLE void revertTagApply(const QVariantMap &record);
+    // Undo a removeTag: put the one tag back on the photo (every copy of its
+    // content) and in the archive. Implications are not re-run — the remove took
+    // only this link, so only this link comes back.
+    Q_INVOKABLE void relinkTag(int photoId, int tagId);
+    // Whether the photo is in the hidden Favorites album (the triage star button).
+    Q_INVOKABLE bool isFavorite(int photoId) const;
+    // Move one photo's file to the Trash and drop its row, as deleteFromDisk does,
+    // returning what restoreTrashedPhoto needs to bring it back: {ok, id,
+    // fileName, path, trashPath, hash, takenAt, mtime, size}. ok is false (and
+    // the row kept) when the file couldn't be trashed.
+    Q_INVOKABLE QVariantMap trashPhoto(int photoId);
+    // Undo a trashPhoto: move the file back out of the Trash and re-insert its row
+    // (tags reattach via the content archive). Returns the restored photo's new
+    // id, or -1 when the file is no longer in the Trash (or can't be moved back).
+    Q_INVOKABLE int restoreTrashedPhoto(const QVariantMap &record);
     Q_INVOKABLE void addTagToPhotos(const QVariantList &photoIds, const QString &name);
     Q_INVOKABLE void removeTagFromPhotos(const QVariantList &photoIds, int tagId);
     Q_INVOKABLE void deleteTag(int tagId);
@@ -335,6 +360,10 @@ private:
     static WallpaperBackend detectWallpaperBackend(bool omarchyAvailable);
 
     void applyTags(int photoId);
+    // The shared core of addTag / addTagRecorded: resolve the name to a tag
+    // (creating it unless it's an alias), apply it with its implications, queue
+    // the sidecar, and refresh the models. Returns what was inserted.
+    TagApplyRecord applyTagCore(int photoId, const QString &name);
     void refreshTags();          // synchronous: query + apply on the GUI thread
     void refreshTagsAsync();     // query on the worker, apply via onFacetTagsReady
     void applyFacetTags(const QVector<TagInfo> &tags); // set the model + notify (GUI)

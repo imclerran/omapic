@@ -320,11 +320,12 @@ Rectangle {
                     // Partial tags (on only some of the selection) read as
                     // "unfilled" to hint they can be completed with a click.
                     // Categorized tags carry their category's color on the border
-                    // and as a light tint; uncategorized ones keep the accent.
+                    // and as a light tint; uncategorized ones keep a neutral grey
+                    // border, matching the filter sidebar and the tag-info popover.
                     color: modelData.partial ? "transparent"
                          : chip.categorized ? Qt.alpha(chip.tint, 0.18)
                          : sys.alternateBase
-                    border.color: chip.categorized ? chip.tint : root.accent
+                    border.color: chip.categorized ? chip.tint : sys.mid
 
                     // Click a partial chip to apply the tag to every selected photo.
                     // Sits below the row so the ✕ button still gets its own clicks.

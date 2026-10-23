@@ -18,6 +18,7 @@ add_library(omapic_logic STATIC
     ${CMAKE_SOURCE_DIR}/src/libraryworker.cpp
     ${CMAKE_SOURCE_DIR}/src/photomodel.cpp
     ${CMAKE_SOURCE_DIR}/src/photofiltermodel.cpp
+    ${CMAKE_SOURCE_DIR}/src/triagesession.cpp
 )
 set_target_properties(omapic_logic PROPERTIES AUTOMOC ON)
 target_include_directories(omapic_logic PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -43,3 +44,4 @@ omapic_add_test(tst_photofiltermodel)
 omapic_add_test(tst_schema)
 omapic_add_test(tst_sidecar)
 omapic_add_test(tst_import)
+omapic_add_test(tst_triagesession)

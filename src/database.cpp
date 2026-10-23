@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QSet>
 #include <QSqlQuery>
 #include <QVariant>
 
@@ -1990,6 +1991,121 @@ int Database::expandAllImplications()
             break;
     }
     return total;
+}
+
+namespace {
+// The (photo_id, tag_id) rows on every live photo sharing `hash` — or just on
+// `photoId` when the content isn't hashed yet. The before/after sets that
+// applyTagRecorded diffs to learn what it inserted.
+QSet<QPair<int, int>> contentPhotoLinks(QSqlDatabase &db, int photoId, const QString &hash)
+{
+    QSet<QPair<int, int>> out;
+    QSqlQuery q(db);
+    if (hash.isEmpty()) {
+        q.prepare(QStringLiteral("SELECT photo_id, tag_id FROM photo_tags WHERE photo_id = ?"));
+        q.addBindValue(photoId);
+    } else {
+        q.prepare(QStringLiteral(
+            "SELECT pt.photo_id, pt.tag_id FROM photo_tags pt "
+            "JOIN photos p ON p.id = pt.photo_id WHERE p.hash = ?"));
+        q.addBindValue(hash);
+    }
+    q.exec();
+    while (q.next())
+        out.insert(qMakePair(q.value(0).toInt(), q.value(1).toInt()));
+    return out;
+}
+
+QSet<int> contentArchiveTags(QSqlDatabase &db, const QString &hash)
+{
+    QSet<int> out;
+    if (hash.isEmpty())
+        return out;
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT tag_id FROM content_tags WHERE hash = ?"));
+    q.addBindValue(hash);
+    q.exec();
+    while (q.next())
+        out.insert(q.value(0).toInt());
+    return out;
+}
+}
+
+TagApplyRecord Database::applyTagRecorded(int photoId, int tagId)
+{
+    TagApplyRecord rec;
+    rec.photoId = photoId;
+    rec.tagId = tagId;
+    if (photoId < 0 || tagId < 0)
+        return rec;
+    rec.hash = photoHash(photoId);
+
+    // Diff the rows around the same three steps Library::addTag has always run,
+    // so what triage applies is byte-for-byte what the detail panel applies.
+    const QSet<QPair<int, int>> linksBefore = contentPhotoLinks(m_db, photoId, rec.hash);
+    const QSet<int> archiveBefore = contentArchiveTags(m_db, rec.hash);
+
+    linkTagToContent(photoId, tagId);
+    rememberContentTag(rec.hash, tagId);
+    applyImplications(rec.hash, tagId);
+
+    QList<QPair<int, int>> added = (contentPhotoLinks(m_db, photoId, rec.hash) - linksBefore).values();
+    std::sort(added.begin(), added.end()); // deterministic order (sets are unordered)
+    rec.photoLinks = added;
+    QList<int> archived = (contentArchiveTags(m_db, rec.hash) - archiveBefore).values();
+    std::sort(archived.begin(), archived.end());
+    rec.contentLinks = archived;
+    return rec;
+}
+
+void Database::revertTagApply(const TagApplyRecord &record)
+{
+    // Remove exactly the rows the apply inserted — nothing more. The content rows
+    // are dropped unconditionally (not via forgetContentTag's "still carried by a
+    // live photo" guard): every live carrier the apply created is unlinked here
+    // too, and any carrier that predates the apply means the row did as well, in
+    // which case it isn't in the record.
+    for (const QPair<int, int> &link : record.photoLinks)
+        unlinkPhotoTag(link.first, link.second);
+    if (record.hash.isEmpty())
+        return;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM content_tags WHERE hash = ? AND tag_id = ?"));
+    for (int tagId : record.contentLinks) {
+        q.addBindValue(record.hash);
+        q.addBindValue(tagId);
+        q.exec();
+    }
+}
+
+PhotoRowSnapshot Database::photoRow(int photoId)
+{
+    PhotoRowSnapshot row;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id, path, hash, taken_at, mtime, size FROM photos WHERE id = ?"));
+    q.addBindValue(photoId);
+    q.exec();
+    if (!q.next())
+        return row;
+    row.id = q.value(0).toInt();
+    row.path = q.value(1).toString();
+    row.hash = q.value(2).toString();
+    row.takenAt = q.value(3).toLongLong();
+    row.mtime = q.value(4).toLongLong();
+    row.size = q.value(5).toLongLong();
+    return row;
+}
+
+int Database::restorePhotoRow(const PhotoRowSnapshot &row)
+{
+    if (row.path.isEmpty())
+        return -1;
+    // insertPhoto clears the orphaned-hash marker the delete left, so the archive
+    // is no longer a retention candidate; replaying it reattaches the tags.
+    const int id = insertPhoto(row.path, row.hash, row.takenAt, row.mtime, row.size);
+    if (id >= 0)
+        applyContentTags(id, row.hash);
+    return id;
 }
 
 QVector<TagInfo> Database::photoTags(int photoId)

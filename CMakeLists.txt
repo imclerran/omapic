@@ -35,6 +35,8 @@ qt_add_qml_module(omapic
         qml/FolderMosaicCell.qml
         qml/AlbumView.qml
         qml/ClearButton.qml
+        qml/TriageSidebar.qml
+        qml/TriageView.qml
     SOURCES
         src/photo.h
         src/database.h src/database.cpp
@@ -44,6 +46,7 @@ qt_add_qml_module(omapic
         src/photometadata.h src/photometadata.cpp
         src/tagmodel.h src/tagmodel.cpp
         src/library.h src/library.cpp
+        src/triagesession.h src/triagesession.cpp
         src/libraryworker.h src/libraryworker.cpp
         src/mediascan.h src/mediascan.cpp
         src/sidecar.h src/sidecar.cpp

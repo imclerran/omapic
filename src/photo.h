@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QList>
 #include <QMetaType>
+#include <QPair>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -131,6 +132,34 @@ struct SmartAlbumInfo {
     QString name;
     bool matchAll = true;   // true = AND (carry every tag); false = OR (any tag)
     QList<int> tagIds;
+};
+
+// What one tag application changed, so it can be undone exactly. Applying a
+// tag by content links it onto every live copy of the photo's hash, archives it
+// in content_tags, and materializes the tag's implication closure the same way
+// — but only rows that weren't already there count as "added". Reverting removes
+// precisely those rows, so an implied tag that was already present (put there by
+// another tag, or by hand) survives the undo. Produced by
+// Database::applyTagRecorded, consumed by Database::revertTagApply.
+struct TagApplyRecord {
+    int photoId = -1;
+    int tagId = -1;   // the tag that was applied (alias-resolved)
+    QString hash;     // the photo's content hash ("" when not yet hashed)
+    QList<QPair<int, int>> photoLinks; // (photo_id, tag_id) rows inserted into photo_tags
+    QList<int> contentLinks;           // tag_ids inserted into content_tags for `hash`
+    bool changedAnything() const { return !photoLinks.isEmpty() || !contentLinks.isEmpty(); }
+};
+
+// The columns needed to put a deleted photo row back (triage's trash undo):
+// insertPhoto() recreates it under a new id and the content archive reattaches
+// its tags by hash. Captured by Database::photoRow before the delete.
+struct PhotoRowSnapshot {
+    int id = -1;
+    QString path;
+    QString hash;
+    qint64 takenAt = 0;
+    qint64 mtime = 0;
+    qint64 size = 0;
 };
 
 struct FolderInfo {
