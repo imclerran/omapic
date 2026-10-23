@@ -1,0 +1,35 @@
+# Local build of the current checkout — NOT for distribution.
+# Builds the committed HEAD of the local repo, so commit before building.
+# Usage:  cd packaging/local && makepkg -si
+pkgname=omapic
+pkgver=0.5.0.r18.ga5c7184
+pkgrel=1
+pkgdesc="A photo gallery with tagging, tag filtering, and slideshows (local build)"
+arch=('x86_64')
+url="https://github.com/imclerran/omapic"
+license=('GPL-3.0-or-later')
+# Don't split debug symbols into a separate omapic-debug package.
+options=('!debug')
+depends=('qt6-base' 'qt6-declarative' 'qt6-imageformats' 'qt6-wayland')
+makedepends=('cmake' 'ninja' 'git')
+source=("$pkgname::git+file://$HOME/Projects/omapic")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cmake -B build -S "$pkgname" -G Ninja \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DOMAPIC_BUILD_TESTS=OFF \
+    -Wno-dev
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "$pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

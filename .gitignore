@@ -1,5 +1,2 @@
 /build/
 *.user
-
-# Local-only packaging (personal install builds, makepkg artifacts)
-/packaging/local/
