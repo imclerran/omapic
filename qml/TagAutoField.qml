@@ -49,9 +49,13 @@ Item {
     implicitWidth: 180
     implicitHeight: field.implicitHeight
 
+    SystemPalette { id: sys }
+
+    // The dot shown beside a suggestion: the category's color, or the neutral grey
+    // for an uncategorized tag (so every row carries a dot, aligned).
     function swatchColor(slot) {
         return (root.categoryColorFn && slot !== undefined && slot >= 0)
-               ? root.categoryColorFn(slot) : "transparent"
+               ? root.categoryColorFn(slot) : sys.mid
     }
     function clear() { field.text = ""; field.suggestions = []; pop.close() }
     function focusInput() { field.forceActiveFocus() }
