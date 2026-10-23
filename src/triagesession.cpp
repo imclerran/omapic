@@ -59,31 +59,35 @@ QVariantList TriageSession::buildQueue(PhotoFilterModel *view, const QVariantLis
     for (int r = 0; r < rows; ++r) {
         const QModelIndex idx = view->index(r, 0);
         const int id = view->data(idx, PhotoModel::IdRole).toInt();
-        bool take;
-        if (selected.size() >= 2)
-            take = selected.contains(id);
-        else if (selected.size() == 1)
-            take = true;
-        else
-            take = view->data(idx, PhotoModel::TagCountRole).toInt() == 0;
-        if (take)
-            out.append(id);
+        // Two or more selected → just the selection; otherwise the whole view.
+        if (selected.size() >= 2 && !selected.contains(id))
+            continue;
+        out.append(id);
     }
     return out;
 }
 
 void TriageSession::begin(const QVariantList &queue, const QString &description,
-                          const QVariantMap &galleryState)
+                          const QVariantMap &galleryState, int startIndex)
 {
-    m_history.clear();
-    m_queue.clear();
+    QList<int> ids;
     for (const QVariant &v : queue) {
         const int id = v.toInt();
         if (id >= 0)
-            m_queue.append(id);
+            ids.append(id);
     }
-    m_index = 0;
-    pullFromQueue(); // the first photo is current right away
+    m_history.clear();
+    m_queue.clear();
+    // Open on the photo at startIndex: the ones before it seed the history (so
+    // previous() can walk back to them), the rest stay queued ahead.
+    const int start = ids.isEmpty() ? 0 : qBound(0, startIndex, ids.size() - 1);
+    for (int i = 0; i < ids.size(); ++i) {
+        if (i <= start)
+            m_history.append(ids.at(i));
+        else
+            m_queue.append(ids.at(i));
+    }
+    m_index = m_history.isEmpty() ? 0 : start;
     m_recent.clear();
     m_recentUsed.clear();
     m_recentSeq = 0;

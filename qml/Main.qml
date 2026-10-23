@@ -1182,31 +1182,38 @@ ApplicationWindow {
         return win.viewLabel(win.viewMode)
     }
 
-    // Start triage over the current view. One rule for both entry points (the
-    // header button and the context-menu item), applied by TriageSession.buildQueue:
-    // nothing selected → the view's untagged photos; exactly one selected → every
-    // photo in the view; two or more → the selected photos. Always in the view's
-    // current sort order.
+    // Start triage over the current view. One rule for every entry point (the
+    // Manage menu and the context-menu item), applied by TriageSession.buildQueue:
+    // two or more selected → the selected photos; otherwise → every photo in the
+    // view. Always in the view's current sort order. With exactly one selected,
+    // the whole view is triaged but it opens on that photo (earlier ones are a
+    // Ctrl+← away).
     function enterTriage() {
         if (win.triageActive)
             return
         const ids = triage.buildQueue(library.filtered, win.selectedIds)
         if (ids.length === 0) {
-            win.toast(win.selectedIds.length === 0 ? qsTr("No untagged photos in this view")
-                                                   : qsTr("Nothing to triage"))
+            win.toast(qsTr("Nothing to triage"))
             return
         }
         const scope = win.triageScopeLabel()
         const desc = win.selectedIds.length >= 2 ? qsTr("%n selected photo(s)", "", ids.length)
-                   : win.selectedIds.length === 1 ? qsTr("all in %1").arg(scope)
-                                                  : qsTr("untagged in %1").arg(scope)
+                                                 : qsTr("all in %1").arg(scope)
+        // One photo selected → start on it (its position in the view); otherwise
+        // start at the top.
+        let startIndex = 0
+        if (win.selectedIds.length === 1) {
+            const k = ids.indexOf(win.selectedIds[0])
+            if (k >= 0)
+                startIndex = k
+        }
         // Everything to put back on exit, kept with the session.
         triage.begin(ids, desc, {
             selectedIds: win.selectedIds.slice(),
             anchorIndex: win.anchorIndex,
             cursorIndex: win.cursorIndex,
             scrollY: win.galleryScrollY(),
-        })
+        }, startIndex)
         // The regions have swapped (triage.active); focus the field once they've
         // settled so typing works immediately.
         Qt.callLater(function () { triageSidebar.focusTagInput() })
@@ -1811,6 +1818,14 @@ ApplicationWindow {
                         id: manageMenu
                         y: parent.height
                         MenuItem {
+                            text: qsTr("Triage")
+                            // Tag the view one photo at a time (or the selection,
+                            // when two or more are selected). Also on Ctrl+T.
+                            enabled: library.filtered.count > 0
+                            onTriggered: win.enterTriage()
+                        }
+                        MenuSeparator {}
+                        MenuItem {
                             text: qsTr("Settings…")
                             onTriggered: win.openSettings(0)
                         }
@@ -1982,17 +1997,6 @@ ApplicationWindow {
                     ClearButton { field: gallerySearch }
                 }
 
-                ToolButton {
-                    text: qsTr("Triage")
-                    enabled: library.filtered.count > 0
-                    ToolTip.visible: hovered
-                    ToolTip.text: (win.selectedIds.length >= 2
-                                   ? qsTr("Tag the %n selected photo(s) one at a time", "", win.selectedIds.length)
-                                   : win.selectedIds.length === 1
-                                     ? qsTr("Tag every photo in this view, one at a time")
-                                     : qsTr("Tag this view's untagged photos, one at a time")) + "  (Ctrl+T)"
-                    onClicked: win.enterTriage()
-                }
                 ToolButton {
                     // In folder/album view the selection may include tiles as well as photos.
                     readonly property int selCount: win.selectedIds.length
@@ -2711,8 +2715,8 @@ ApplicationWindow {
             text: win.menuPhotoIsVideo ? qsTr("Play video") : qsTr("View photo")
             onTriggered: win.openViewer(win.menuPhotoId)
         }
-        // With exactly this photo selected, triage walks the whole view from the
-        // top (the same rule as the header button).
+        // With exactly this photo selected, triage walks the whole view, opening
+        // on this photo (the same rule as the Manage menu and Ctrl+T).
         MenuItem {
             text: qsTr("Triage…")
             onTriggered: win.enterTriage()

@@ -83,18 +83,21 @@ public:
     void setTrashConfirmed(bool on);
 
     // The photos a triage run covers, in the view's current order — the one rule
-    // both entry points (the header button and the context-menu item) share:
-    //   nothing selected       → the view's untagged photos
-    //   exactly one selected   → every photo in the view
+    // every entry point shares:
     //   two or more selected   → the selected photos
-    // `view` is the gallery's filtered model (current filter, folder/album scope
-    // and sort); `selectedIds` the gallery selection.
+    //   otherwise              → every photo in the view
+    // (With exactly one selected the whole view is returned; the caller opens the
+    // run on that photo via begin's startIndex.) `view` is the gallery's filtered
+    // model (current filter, folder/album scope and sort); `selectedIds` the
+    // gallery selection.
     Q_INVOKABLE QVariantList buildQueue(PhotoFilterModel *view, const QVariantList &selectedIds) const;
 
-    // Start a run over `queue` (photo ids, in order). The first photo becomes
-    // current. Clears the recent tags, the undo stack and the trash confirmation.
+    // Start a run over `queue` (photo ids, in order), opening on the photo at
+    // `startIndex` (clamped): the photos before it go into the history, reachable
+    // with previous(); the rest are queued ahead. Clears the recent tags, the undo
+    // stack and the trash confirmation.
     Q_INVOKABLE void begin(const QVariantList &queue, const QString &description,
-                           const QVariantMap &galleryState);
+                           const QVariantMap &galleryState, int startIndex = 0);
     // Finish the run: inactive, nothing current, every list cleared. The gallery
     // reads galleryState before calling this.
     Q_INVOKABLE void end();

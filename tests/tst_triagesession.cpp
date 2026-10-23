@@ -31,13 +31,14 @@ private slots:
 
     // Queue construction (one rule shared by the header button and the context
     // menu — both call buildQueue with the gallery selection).
-    void queueNothingSelectedTakesUntaggedInViewOrder();
+    void queueNothingSelectedTakesWholeView();
     void queueOneSelectedTakesWholeView();
     void queueTwoOrMoreSelectedTakesSelectionInViewOrder();
     void queueFollowsViewSortAndFilter();
 
     // History / queue navigation
     void beginMakesFirstPhotoCurrent();
+    void beginStartIndexOpensOnThatPhotoWithEarlierInHistory();
     void nextPullsFromQueueThenFinishes();
     void previousAndNextRetraceHistoryBeforeQueue();
     void progressAndPositionTrackTheWalk();
@@ -128,14 +129,17 @@ void TestTriageSession::cleanup()
 
 // --- Queue construction ------------------------------------------------------
 
-void TestTriageSession::queueNothingSelectedTakesUntaggedInViewOrder()
+void TestTriageSession::queueNothingSelectedTakesWholeView()
 {
+    // Nothing selected now triages the whole active view (not just the untagged),
+    // in view order — the tagged photos b and d are included.
     const QVariantList q = m_session->buildQueue(m_view, {});
-    QCOMPARE(toInts(q), (QList<int>{10, 30, 50})); // a, c, e — the untagged ones, by name
+    QCOMPARE(toInts(q), (QList<int>{10, 20, 30, 40, 50}));
 }
 
 void TestTriageSession::queueOneSelectedTakesWholeView()
 {
+    // One selected also takes the whole view (the caller opens on that photo).
     const QVariantList q = m_session->buildQueue(m_view, {40});
     QCOMPARE(toInts(q), (QList<int>{10, 20, 30, 40, 50})); // every photo, view order
 }
@@ -154,11 +158,13 @@ void TestTriageSession::queueFollowsViewSortAndFilter()
 {
     // Descending name order reverses the queue.
     m_view->setSortAscending(false);
-    QCOMPARE(toInts(m_session->buildQueue(m_view, {})), (QList<int>{50, 30, 10}));
+    QCOMPARE(toInts(m_session->buildQueue(m_view, {})), (QList<int>{50, 40, 30, 20, 10}));
     QCOMPARE(toInts(m_session->buildQueue(m_view, {40})), (QList<int>{50, 40, 30, 20, 10}));
+    // Two or more selected still narrows to the selection, in the (descending) view order.
+    QCOMPARE(toInts(m_session->buildQueue(m_view, {10, 40})), (QList<int>{40, 10}));
 
-    // The current filter scopes the queue: a search for "a" leaves only a.jpg in
-    // the view, so "one selected → the whole view" is just that photo.
+    // The current filter scopes the queue: a search for "a." leaves only a.jpg in
+    // the view, so the whole view is just that photo.
     m_view->setSortAscending(true);
     m_view->setSearchText(QStringLiteral("a."));
     QCOMPARE(toInts(m_session->buildQueue(m_view, {10})), (QList<int>{10}));
@@ -188,6 +194,44 @@ void TestTriageSession::beginMakesFirstPhotoCurrent()
     QVERIFY(m_session->finished());
     QCOMPARE(m_session->currentId(), -1);
     QCOMPARE(m_session->total(), 0);
+}
+
+void TestTriageSession::beginStartIndexOpensOnThatPhotoWithEarlierInHistory()
+{
+    // A one-photo selection triages the whole view but opens on that photo: begin
+    // with its index. The photos before it are behind (reachable with previous),
+    // the rest ahead; the total is still the whole set.
+    m_session->begin(toVariants({10, 20, 30, 40, 50}), QString(), {}, 2);
+    QCOMPARE(m_session->currentId(), 30);
+    QCOMPARE(m_session->position(), 3);
+    QCOMPARE(m_session->total(), 5);
+    QVERIFY(m_session->hasPrevious());
+    QVERIFY(m_session->hasNext());
+
+    // Back to the two earlier photos …
+    QVERIFY(m_session->previous());
+    QCOMPARE(m_session->currentId(), 20);
+    QVERIFY(m_session->previous());
+    QCOMPARE(m_session->currentId(), 10);
+    QVERIFY(!m_session->previous());
+    // … then forward through the start photo and on into the queued remainder.
+    QVERIFY(m_session->next());
+    QCOMPARE(m_session->currentId(), 20);
+    m_session->next();
+    m_session->next();
+    QCOMPARE(m_session->currentId(), 40);
+    QVERIFY(m_session->next());
+    QCOMPARE(m_session->currentId(), 50);
+    QCOMPARE(m_session->total(), 5);
+
+    // startIndex is clamped: past the end opens on the last photo, negative on the first.
+    m_session->begin(toVariants({10, 20, 30}), QString(), {}, 99);
+    QCOMPARE(m_session->currentId(), 30);
+    QCOMPARE(m_session->position(), 3);
+    QVERIFY(!m_session->hasNext());
+    m_session->begin(toVariants({10, 20, 30}), QString(), {}, -5);
+    QCOMPARE(m_session->currentId(), 10);
+    QVERIFY(!m_session->hasPrevious());
 }
 
 void TestTriageSession::nextPullsFromQueueThenFinishes()
