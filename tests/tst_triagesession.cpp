@@ -57,7 +57,8 @@ private slots:
 
     // Session lifecycle
     void galleryStateRoundTripsUntouched();
-    void endClearsEverything();
+    void endClearsSessionButKeepsRecentTags();
+    void recentTagsPersistAcrossRuns();
     void beginResetsTrashConfirmation();
 
 private:
@@ -455,7 +456,7 @@ void TestTriageSession::galleryStateRoundTripsUntouched()
     QCOMPARE(m_session->galleryState().value(QStringLiteral("scrollY")).toDouble(), 1234.5);
 }
 
-void TestTriageSession::endClearsEverything()
+void TestTriageSession::endClearsSessionButKeepsRecentTags()
 {
     m_session->begin(toVariants({1, 2}), QStringLiteral("desc"),
                      {{QStringLiteral("scrollY"), 10}});
@@ -469,13 +470,35 @@ void TestTriageSession::endClearsEverything()
     QCOMPARE(m_session->total(), 0);
     QCOMPARE(m_session->position(), 0);
     QCOMPARE(m_session->progress(), 0.0);
-    QVERIFY(m_session->recentTags().isEmpty());
     QCOMPARE(m_session->undoCount(), 0);
     QVERIFY(m_session->description().isEmpty());
     QVERIFY(m_session->galleryState().isEmpty());
     QVERIFY(!m_session->hasPrevious());
     QVERIFY(!m_session->hasNext());
     QVERIFY(!m_session->finished()); // inactive is not "finished"
+    // The recent tags survive the end of a run, ready for the next one.
+    QCOMPARE(m_session->recentTags(), (QStringList{QStringLiteral("x")}));
+}
+
+void TestTriageSession::recentTagsPersistAcrossRuns()
+{
+    m_session->begin(toVariants({1}), QString(), {});
+    m_session->recordTag(QStringLiteral("beach"));
+    m_session->recordTag(QStringLiteral("sunset"));
+    m_session->end();
+    // Still there after the run ends …
+    QCOMPARE(m_session->recentTags(),
+             (QStringList{QStringLiteral("beach"), QStringLiteral("sunset")}));
+
+    // … and carried into the next run, where they keep their slots and a newly
+    // applied tag appends after them (recency, for eviction, carries over too).
+    m_session->begin(toVariants({2, 3}), QString(), {});
+    QCOMPARE(m_session->recentTags(),
+             (QStringList{QStringLiteral("beach"), QStringLiteral("sunset")}));
+    m_session->recordTag(QStringLiteral("family"));
+    QCOMPARE(m_session->recentTags(),
+             (QStringList{QStringLiteral("beach"), QStringLiteral("sunset"),
+                          QStringLiteral("family")}));
 }
 
 void TestTriageSession::beginResetsTrashConfirmation()
@@ -486,8 +509,8 @@ void TestTriageSession::beginResetsTrashConfirmation()
     QVERIFY(m_session->trashConfirmed());
     m_session->begin(toVariants({2}), QString(), {}); // a new session asks again
     QVERIFY(!m_session->trashConfirmed());
-    // A fresh session also starts with no recent tags or undo steps.
-    QVERIFY(m_session->recentTags().isEmpty());
+    // A fresh session also starts with an empty undo stack (recent tags, by
+    // contrast, carry over — see recentTagsPersistAcrossRuns).
     QCOMPARE(m_session->undoCount(), 0);
 }
 

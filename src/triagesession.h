@@ -44,11 +44,13 @@ class TriageSession : public QObject {
     Q_PROPERTY(bool finished READ finished NOTIFY positionChanged)
     Q_PROPERTY(bool hasPrevious READ hasPrevious NOTIFY positionChanged)
     Q_PROPERTY(bool hasNext READ hasNext NOTIFY positionChanged)
-    // The tags applied this session, in a stable slot order (index + 1 is the
-    // Ctrl-number), at most kRecentCap. A tag keeps its slot for its whole life
-    // in the list, so applying one never renumbers the others; new tags append,
-    // and once the list is full the least-recently-used tag is evicted and the
-    // newcomer takes its freed slot (so only that one number changes).
+    // The tags applied, in a stable slot order (index + 1 is the Ctrl-number), at
+    // most kRecentCap. A tag keeps its slot for its whole life in the list, so
+    // applying one never renumbers the others; new tags append, and once the list
+    // is full the least-recently-used tag is evicted and the newcomer takes its
+    // freed slot (so only that one number changes). The list carries over between
+    // runs in the same app session (begin() keeps it). The view narrows it to
+    // tags still active for the enabled library roots before showing it.
     Q_PROPERTY(QStringList recentTags READ recentTags NOTIFY recentTagsChanged)
     Q_PROPERTY(int undoCount READ undoCount NOTIFY undoStackChanged)
     // Caller-supplied text naming what the queue holds, for the header.
@@ -94,12 +96,12 @@ public:
 
     // Start a run over `queue` (photo ids, in order), opening on the photo at
     // `startIndex` (clamped): the photos before it go into the history, reachable
-    // with previous(); the rest are queued ahead. Clears the recent tags, the undo
-    // stack and the trash confirmation.
+    // with previous(); the rest are queued ahead. Clears the undo stack and the
+    // trash confirmation; the recent tags carry over from the previous run.
     Q_INVOKABLE void begin(const QVariantList &queue, const QString &description,
                            const QVariantMap &galleryState, int startIndex = 0);
-    // Finish the run: inactive, nothing current, every list cleared. The gallery
-    // reads galleryState before calling this.
+    // Finish the run: inactive, nothing current, the session state cleared. The
+    // recent tags are kept for the next run. The gallery reads galleryState first.
     Q_INVOKABLE void end();
 
     // Move on: forward through the history, then pull the next queued photo; one

@@ -88,9 +88,8 @@ void TriageSession::begin(const QVariantList &queue, const QString &description,
             m_queue.append(ids.at(i));
     }
     m_index = m_history.isEmpty() ? 0 : start;
-    m_recent.clear();
-    m_recentUsed.clear();
-    m_recentSeq = 0;
+    // The recent tags (and their recency) deliberately carry over from the
+    // previous run, so re-entering triage keeps the tags you were just using.
     m_undo.clear();
     m_description = description;
     m_galleryState = galleryState;
@@ -110,9 +109,8 @@ void TriageSession::end()
     m_history.clear();
     m_queue.clear();
     m_index = 0;
-    m_recent.clear();
-    m_recentUsed.clear();
-    m_recentSeq = 0;
+    // The recent tags survive the end of a run (see begin()); only the session's
+    // own state is cleared here.
     m_undo.clear();
     m_description.clear();
     m_galleryState.clear();

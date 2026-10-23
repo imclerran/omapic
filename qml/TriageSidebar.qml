@@ -44,6 +44,22 @@ Rectangle {
     readonly property var implicationList: root.library ? root.library.tagImplications : []
     readonly property var appliedLower: root.chips.map(function (t) { return t.name.toLowerCase() })
     readonly property var recent: root.session ? root.session.recentTags : []
+    // Lower-cased names of the tags active for the enabled library roots (the same
+    // set the autocomplete offers), so the recent list can be narrowed to them.
+    readonly property var activeNamesLower: {
+        const s = ({})
+        const all = root.suggestionTags
+        for (let i = 0; i < all.length; ++i)
+            s[all[i].name.toLowerCase()] = true
+        return s
+    }
+    // The recent tags actually shown: only those still active for the enabled
+    // roots. Persisted tags whose photos have since left the active set (a folder
+    // disabled or removed, the tag deleted or merged) drop out. Both the chips and
+    // the Ctrl-number handler read this, so the numbering stays in step.
+    readonly property var visibleRecent: root.recent.filter(function (name) {
+        return root.activeNamesLower[name.toLowerCase()] === true
+    })
 
     SystemPalette { id: sys }
     color: sys.window
@@ -97,12 +113,12 @@ Rectangle {
         default:
             if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
                 const n = event.key - Qt.Key_1
-                // Skip a recent tag already on the photo (shown disabled), so the
-                // shortcut matches the picker — but still swallow the chord so the
-                // digit never lands in the text field.
-                if (n < root.recent.length
-                        && root.appliedLower.indexOf(root.recent[n].toLowerCase()) === -1)
-                    root.applyTagRequested(root.recent[n])
+                // Act on the visible (active) list so the number matches the chip.
+                // Skip a recent tag already on the photo (shown disabled), but still
+                // swallow the chord so the digit never lands in the text field.
+                if (n < root.visibleRecent.length
+                        && root.appliedLower.indexOf(root.visibleRecent[n].toLowerCase()) === -1)
+                    root.applyTagRequested(root.visibleRecent[n])
                 break
             }
             return // not ours: let the text input have it
@@ -245,7 +261,7 @@ Rectangle {
             spacing: 4
 
             Repeater {
-                model: root.recent
+                model: root.visibleRecent
                 delegate: TagChip {
                     id: recentChip
                     required property int index
@@ -294,7 +310,7 @@ Rectangle {
                 }
             }
             Label {
-                visible: root.recent.length === 0
+                visible: root.visibleRecent.length === 0
                 text: qsTr("Tags you apply show up here.")
                 color: sys.placeholderText
                 font.pixelSize: 12
