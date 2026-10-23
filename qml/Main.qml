@@ -2928,8 +2928,11 @@ ApplicationWindow {
     }
 
     // Esc in triage asks before leaving, so a reflexive keypress doesn't drop the
-    // session: click "Exit" to leave, or "Keep triaging" / Esc to stay. The
-    // "Exit Triage" button bypasses this (an explicit click).
+    // session. It's a one-key confirm straight from the keyboard: Enter leaves,
+    // Esc (again) stays — no tabbing to a button. Enter is caught by the focused
+    // content item (the DialogButtonBox doesn't reliably accept button focus), and
+    // the buttons take no focus so they can't swallow it; they're there for the
+    // mouse. The "Exit Triage" button bypasses this (an explicit click).
     Dialog {
         id: triageExitConfirm
         title: qsTr("Exit Triage")
@@ -2937,23 +2940,34 @@ ApplicationWindow {
         modal: true
         width: 400
         onAccepted: win.exitTriage()
+        onOpened: exitContent.forceActiveFocus()
         // On "Keep triaging" (still in triage) hand the keyboard back to the field;
         // on "Exit", exitTriage has already moved focus to the gallery.
         onClosed: if (win.triageActive) Qt.callLater(function () { triageSidebar.focusTagInput() })
         footer: DialogButtonBox {
             Button {
-                text: qsTr("Keep triaging")
+                text: qsTr("Keep triaging  (Esc)")
+                focusPolicy: Qt.NoFocus
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
             Button {
-                text: qsTr("Exit")
+                text: qsTr("Exit  (Enter)")
+                focusPolicy: Qt.NoFocus
                 DialogButtonBox.buttonRole: DialogButtonBox.YesRole
             }
         }
-        Label {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: qsTr("Exit triage and return to the gallery?")
+        contentItem: Item {
+            id: exitContent
+            focus: true
+            implicitHeight: exitMsg.implicitHeight
+            Keys.onReturnPressed: triageExitConfirm.accept()
+            Keys.onEnterPressed: triageExitConfirm.accept()
+            Label {
+                id: exitMsg
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: qsTr("Exit triage and return to the gallery?")
+            }
         }
     }
 
