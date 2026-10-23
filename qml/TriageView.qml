@@ -131,8 +131,8 @@ Rectangle {
         loops: MediaPlayer.Infinite
     }
 
-    // File name, then the full path, then dimensions · size · taken, bottom-left.
-    // Each part hides when unknown; the box hides when there's nothing to show.
+    // File name, then its containing directory, then dimensions · size · taken,
+    // bottom-left. Each part hides when unknown; the box hides when empty.
     Rectangle {
         anchors.left: parent.left
         anchors.bottom: parent.bottom
@@ -160,11 +160,17 @@ Rectangle {
                 id: pathLabel
                 font.pixelSize: 11
                 color: sys.placeholderText
-                text: root.info.path || ""
+                // Just the containing directory — the file name is shown above.
+                text: {
+                    const p = root.info.path || ""
+                    const slash = p.lastIndexOf('/')
+                    return slash > 0 ? p.substring(0, slash) : ""
+                }
                 visible: text !== ""
                 // Keep a long path from stretching the box across the photo: cap
-                // the width and elide the middle, so both ends stay readable.
-                elide: Text.ElideMiddle
+                // the width and elide the start, so the end (the deepest folders,
+                // nearest the file) stays readable.
+                elide: Text.ElideLeft
                 width: Math.min(implicitWidth, root.width * 0.6)
             }
             Label {
