@@ -12,6 +12,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "oql.h"
+
 // True when `path` names a video file we treat as playable. Keep this list in
 // sync with the scanner globs (libraryworker.cpp) and SlideshowView.qml.
 inline bool isVideoPath(const QString &path)
@@ -124,13 +126,17 @@ struct AlbumInfo {
     bool favorite = false;
 };
 
-// A smart album: a saved tag query (a set of tags + AND/OR mode) that
-// auto-populates in the Albums view. Unlike a regular album it has no stored
-// membership — a photo belongs iff its tags currently match the query.
+// A smart album: a saved OQL query (see oql.h) that auto-populates in the
+// Albums view. Unlike a regular album it has no stored membership — a photo
+// belongs iff its tags currently match the query. `query` is the stored,
+// unexpanded tree (an album:<smart album> term is a reference node, expanded at
+// evaluation time); `tagIds` is the denormalised index of every tag id the
+// query mentions, kept in smart_album_tags so tag merges and deletions can find
+// the albums they affect.
 struct SmartAlbumInfo {
     int id = -1;
     QString name;
-    bool matchAll = true;   // true = AND (carry every tag); false = OR (any tag)
+    oql::Node query;
     QList<int> tagIds;
 };
 

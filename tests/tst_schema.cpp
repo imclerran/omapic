@@ -15,6 +15,7 @@
 #include <QTemporaryDir>
 
 #include "database.h"
+#include "oql.h"
 #include "photo.h"
 
 // Exercises the schema-versioning / migration path in Database::open: an older or
@@ -39,6 +40,7 @@ private slots:
     void clearsVideoDatesForCreationTimeReread();
     void upgradesToV15AddsTagAliases();
     void normalizesQuotesAndWhitespaceInNames();
+    void upgradesToV17ConvertsSmartAlbumsToQueries();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -508,9 +510,10 @@ void TestSchema::normalizesQuotesAndWhitespaceInNames()
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v16"));
 
-    // A library whose names are already clean takes no backup for this step.
+    // A library whose names are already clean takes no backup for this step
+    // (the smart albums go too, so the v17 conversion has nothing to back up).
     {
-        execRaw(dbPath(), QStringLiteral("PRAGMA user_version = 15;"));
+        execRaw(dbPath(), QStringLiteral("DELETE FROM smart_albums; PRAGMA user_version = 15;"));
         for (const QString &f : backupFiles())
             QFile::remove(m_dir->filePath(f));
         Database db;
@@ -518,6 +521,55 @@ void TestSchema::normalizesQuotesAndWhitespaceInNames()
         QVERIFY(backupFiles().isEmpty());
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v16b"));
+}
+
+void TestSchema::upgradesToV17ConvertsSmartAlbumsToQueries()
+{
+    // Build a current database, then rewind to v16: drop the query column and
+    // seed the old (tag set + match_all) form, so the conversion genuinely runs.
+    int beach = -1, summer = -1, zoo = -1;
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v17_seed")));
+        beach = db.ensureTag(QStringLiteral("beach"));
+        summer = db.ensureTag(QStringLiteral("summer"));
+        zoo = db.ensureTag(QStringLiteral("Zoo"));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v17_seed"));
+    execRaw(dbPath(), QStringLiteral(
+        "ALTER TABLE smart_albums DROP COLUMN query;"
+        "INSERT INTO smart_albums(id, name, match_all) VALUES (1, 'All', 1);"
+        "INSERT INTO smart_albums(id, name, match_all) VALUES (2, 'Any', 0);"
+        "INSERT INTO smart_albums(id, name, match_all) VALUES (3, 'One', 1);"
+        "INSERT INTO smart_albums(id, name, match_all) VALUES (4, 'None', 1);"
+        "INSERT INTO smart_album_tags(smart_album_id, tag_id) VALUES (1, %1), (1, %2), (1, %3);"
+        "INSERT INTO smart_album_tags(smart_album_id, tag_id) VALUES (2, %1), (2, %2);"
+        "INSERT INTO smart_album_tags(smart_album_id, tag_id) VALUES (3, %2);"
+        "PRAGMA user_version = 16;").arg(zoo).arg(beach).arg(summer));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v17")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+        // all-tags -> AND, any-tag -> OR, ordered by name; one tag -> the tag.
+        QCOMPARE(db.smartAlbum(1).query,
+                 oql::Node::andOf({oql::Node::tag(beach, QStringLiteral("beach")),
+                                   oql::Node::tag(summer, QStringLiteral("summer")),
+                                   oql::Node::tag(zoo, QStringLiteral("Zoo"))}));
+        QCOMPARE(db.smartAlbum(2).query,
+                 oql::Node::orOf({oql::Node::tag(beach, QStringLiteral("beach")),
+                                  oql::Node::tag(zoo, QStringLiteral("Zoo"))}));
+        QCOMPARE(db.smartAlbum(3).query, oql::Node::tag(beach, QStringLiteral("beach")));
+        // An album whose tags were all deleted converts to an empty AND, which
+        // matches nothing — as it did before.
+        QCOMPARE(db.smartAlbum(4).query, oql::Node::andOf({}));
+        QVERIFY(!oql::matches(db.smartAlbum(4).query, {beach}, {}));
+        // The index is untouched by the conversion.
+        QCOMPARE(db.smartAlbum(1).tagIds.size(), 3);
+        // Rows were converted, so the non-additive step wrote a backup.
+        QVERIFY(!backupFiles().isEmpty());
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v17"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)

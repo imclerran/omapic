@@ -265,22 +265,33 @@ public:
     // Set the Favorites membership for many photos at once.
     Q_INVOKABLE void setFavorite(const QVariantList &photoIds, bool favorite);
 
-    // --- Smart albums (saved tag queries, shown alongside regular albums) ---
+    // --- Smart albums (saved OQL queries, shown alongside regular albums) ---
     // True when a UI-facing album id refers to a smart album (reserved high range)
     // rather than a regular album tag.
     Q_INVOKABLE bool isSmartAlbum(int albumId) const;
-    // An album's membership query as {tags: [ids], matchAll}. A regular album is a
-    // single-tag query; a smart album returns its saved set. An invalid/list-level
-    // id returns an empty tag list. Used to drive the album-view filter uniformly.
-    Q_INVOKABLE QVariantMap albumQuery(int albumId) const;
-    // A smart album's definition for the edit dialog: {id, name, tags, matchAll}.
+    // A smart album's definition for the edit dialog: {id, name, text, simple,
+    // tags, matchAll}. `text` is the query in OQL; `simple` is true when it is a
+    // plain tag set (then `tags` + `matchAll` describe it for the tag picker).
     Q_INVOKABLE QVariantMap smartAlbum(int albumId) const;
-    // Create/update a smart album. Returns the new UI id (or true) on success, or
-    // -1/false when the name is blank/duplicate or no tags are selected.
+    // Create/update a smart album from a tag set (`a b c` or `a | b | c`). Returns
+    // the new UI id (or true) on success, or -1/false when the name is
+    // blank/duplicate or no tags are selected.
     Q_INVOKABLE int createSmartAlbum(const QString &name, const QVariantList &tagIds, bool matchAll);
     Q_INVOKABLE bool updateSmartAlbum(int albumId, const QString &name,
                                       const QVariantList &tagIds, bool matchAll);
     Q_INVOKABLE void deleteSmartAlbum(int albumId);
+
+    // --- OQL (the query language; see oql.h) ---
+    // Parse query text against the library's current names. Returns {ok, canonical
+    // (the formatted reading), simple, tags, matchAll, notes: [string]} on success,
+    // or {ok: false, message, start, length, suggestions: [string]} on an error.
+    Q_INVOKABLE QVariantMap parseQuery(const QString &text) const;
+    // The OQL text of a tag set, for seeding the text editor from the picker.
+    Q_INVOKABLE QString formatTagQuery(const QVariantList &tagIds, bool matchAll) const;
+    // Create (albumId 0) or update a smart album from query text. Returns an empty
+    // string on success, else a message to show (a parse error, a duplicate name,
+    // or a query that would make the album refer to itself).
+    Q_INVOKABLE QString saveSmartAlbumQuery(int albumId, const QString &name, const QString &text);
 
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.
@@ -384,6 +395,19 @@ private:
     // Keep the filter model's album tag id set in step, for the flattened album
     // search ("photos in any album"). Called when the album set changes.
     void updateAlbumTagIds();
+    // --- OQL state ---
+    // Rebuild what evaluation needs from the database — the EvalContext and every
+    // smart album's expanded tree (album: references replaced by the referenced
+    // album's current tree, cycles reported) — and hand them to the filter model.
+    // Called whenever tags, categories, albums or smart albums change; the trees
+    // are then reused for every photo of a filter pass, never re-resolved per photo.
+    void rebuildQueryState();
+    // The membership query for a UI-facing album id: an Album leaf for a regular
+    // album, the expanded tree for a smart album, an empty (never-matching) AND
+    // for anything else.
+    oql::Node albumTree(int albumId) const;
+    // A fresh vocabulary over the library's current names.
+    oql::MapVocabulary vocabulary() const;
     // Ref-counted so overlapping worker jobs (e.g. a bulk tag started mid-import)
     // don't fight over one busy flag: the indicator stays up until every job has
     // called its matching endBusy. Pass the same `modal` to endBusy as to beginBusy.
@@ -413,6 +437,9 @@ private:
     PhotoModel *m_photos;
     PhotoFilterModel *m_filtered;
     TagModel *m_tags;
+
+    oql::EvalContext m_evalContext;
+    QHash<int, oql::Node> m_smartTrees; // smart album id -> expanded query (see rebuildQueryState)
 
     QThread m_workerThread;
     LibraryWorker *m_worker = nullptr;

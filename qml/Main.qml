@@ -1443,11 +1443,9 @@ ApplicationWindow {
     // ungrouped (flat) view collapses duplicate files.
     function applyViewFilter() {
         const albums = win.viewMode === "albums"
-        // Inside an album, gate on its membership query — a regular album is a
-        // one-tag query, a smart album its saved (tag set + AND/OR). At the list
-        // level (currentAlbum <= 0) the query is empty.
-        const q = (albums && win.currentAlbum > 0) ? library.albumQuery(win.currentAlbum)
-                                                    : { tags: [], matchAll: true }
+        // Inside an album, the filter gates on its membership query (resolved by
+        // the library from the id: a regular album's tag, or a smart album's OQL
+        // tree). At the list level (currentAlbum <= 0) there is no album.
         // Timeline is inherently chronological (newest first); the other views use
         // the chosen sort mode and direction.
         const timeline = win.viewMode === "timeline"
@@ -1459,8 +1457,7 @@ ApplicationWindow {
                                    win.viewMode === "folder",         // folderMode
                                    win.currentFolder,                 // folderPath
                                    albums,                            // albumMode
-                                   q.tags,                            // album query tags ([] = list level)
-                                   q.matchAll)                        // album query AND/OR
+                                   albums ? win.currentAlbum : 0)     // album id (0 = list level)
         // Scope the filter sidebar's tag chips to the current folder subtree while
         // browsing folders; the whole library otherwise (and at the folder root).
         library.setTagFolderScope(win.viewMode === "folder" ? win.currentFolder : "")
@@ -2604,12 +2601,18 @@ ApplicationWindow {
         }
     }
 
-    // Create / edit a smart album: a name plus a tag query (set of tags + AND/OR)
-    // that auto-populates in the Albums view. editId 0 = create, else the smart
+    // Create / edit a smart album: a name plus an OQL query that auto-populates
+    // in the Albums view. The tag picker covers the common case (a set of tags,
+    // all or any); "Edit as text" exposes the whole language for anything else —
+    // negation, grouping, is:/album:/cat:. editId 0 = create, else the smart
     // album's UI id (prefilled from the library).
     Dialog {
         id: smartAlbumDialog
         property int editId: 0
+        // True while the query is being edited as OQL text rather than picked.
+        property bool textMode: false
+        // library.parseQuery(queryField.text): {ok, canonical, …} or {ok: false, message, …}
+        property var parsed: ({ ok: false })
         title: editId > 0 ? qsTr("Edit smart album") : qsTr("New smart album")
         anchors.centerIn: parent
         modal: true
@@ -2618,29 +2621,72 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
 
         readonly property bool formValid:
-            smartNameField.text.trim().length > 0 && smartPicker.selectedIds.length > 0
+            smartNameField.text.trim().length > 0
+            && (textMode ? parsed.ok === true : smartPicker.selectedIds.length > 0)
         function syncOk() {
             const b = standardButton(Dialog.Ok)
             if (b) b.enabled = formValid
+        }
+        function reparse() { parsed = library.parseQuery(queryField.text) }
+        // Switch between the picker and the text editor. Going to text seeds it
+        // with the picked set; coming back is only possible when the text is a
+        // plain tag set the picker can show.
+        function setTextMode(on) {
+            if (on === textMode)
+                return
+            if (on) {
+                queryField.text = library.formatTagQuery(smartPicker.selectedIds, smartPicker.matchAll)
+                reparse()
+                textMode = true
+                queryField.forceActiveFocus()
+                return
+            }
+            reparse()
+            if (parsed.ok && parsed.simple) {
+                smartPicker.setSelection(parsed.tags, parsed.matchAll)
+                textMode = false
+            } else if (parsed.ok) {
+                win.toast(qsTr("This query uses more than the tag picker can show; keep editing it as text"))
+            } else {
+                win.toast(qsTr("Fix the query first (or clear it) to go back to the tag picker"))
+            }
         }
         onFormValidChanged: syncOk()
         onOpened: {
             if (editId > 0) {
                 const sa = library.smartAlbum(editId)
                 smartNameField.text = sa.name
-                smartPicker.setSelection(sa.tags, sa.matchAll)
+                queryField.text = sa.text
+                if (sa.simple) {
+                    smartPicker.setSelection(sa.tags, sa.matchAll)
+                    textMode = false
+                } else {
+                    smartPicker.clear()
+                    textMode = true
+                }
             } else {
                 smartNameField.text = ""
                 smartPicker.clear()
+                queryField.text = ""
+                textMode = false
             }
+            reparse()
             syncOk()
             smartNameField.forceActiveFocus()
         }
         onAccepted: {
             const name = smartNameField.text.trim()
-            if (name.length === 0 || smartPicker.selectedIds.length === 0)
+            if (name.length === 0)
                 return
             // Library emits albumsChanged on success, which refreshes the tiles.
+            if (textMode) {
+                const err = library.saveSmartAlbumQuery(editId, name, queryField.text)
+                if (err.length > 0)
+                    win.toast(err)
+                return
+            }
+            if (smartPicker.selectedIds.length === 0)
+                return
             if (editId > 0) {
                 if (!library.updateSmartAlbum(editId, name, smartPicker.selectedIds, smartPicker.matchAll))
                     win.toast(qsTr("Another smart album already uses that name"))
@@ -2653,21 +2699,83 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
-            TextField {
-                id: smartNameField
+            RowLayout {
                 Layout.fillWidth: true
-                placeholderText: qsTr("Smart album name")
-                // Same name rules as tags and albums (see TagAutoField).
-                validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
-                ClearButton { field: smartNameField }
+                spacing: 8
+                TextField {
+                    id: smartNameField
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Smart album name")
+                    // Same name rules as tags and albums (see TagAutoField).
+                    validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
+                    ClearButton { field: smartNameField }
+                }
+                Button {
+                    text: smartAlbumDialog.textMode ? qsTr("Use tag picker") : qsTr("Edit as text")
+                    onClicked: smartAlbumDialog.setTextMode(!smartAlbumDialog.textMode)
+                }
             }
             TagPicker {
                 id: smartPicker
+                visible: !smartAlbumDialog.textMode
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 tagModel: library.tags
                 aliases: library.tagAliases // match a tag by its aliases in the search
                 accent: win.accent
+            }
+            // The text editor: the query in OQL, with the parser's verdict below
+            // it — the canonical reading when it parses, else the error, its
+            // position, and any "did you mean" suggestions.
+            ColumnLayout {
+                visible: smartAlbumDialog.textMode
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 6
+                TextField {
+                    id: queryField
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("e.g. beach (sunset | sunrise) -people")
+                    font.family: "monospace"
+                    onTextEdited: smartAlbumDialog.reparse()
+                    onAccepted: if (smartAlbumDialog.formValid) smartAlbumDialog.accept()
+                    ClearButton { field: queryField }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: queryField.text.trim().length > 0
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    readonly property var p: smartAlbumDialog.parsed
+                    readonly property bool failed: p.ok !== true
+                    color: failed ? "#e06c75" : appPalette.text
+                    // Monospace so the caret line lines up under the query.
+                    font.family: failed && p.length > 0 ? "monospace" : Qt.application.font.family
+                    text: {
+                        const p = smartAlbumDialog.parsed
+                        if (p.ok === true)
+                            return qsTr("Reads as: %1").arg(p.canonical)
+                        let msg = p.message || ""
+                        if (p.length > 0) {
+                            // A caret line under the span, as the CLI prints it.
+                            const q = queryField.text
+                            msg += "\n" + q + "\n" + " ".repeat(p.start) + "^".repeat(Math.max(1, p.length))
+                        }
+                        if (p.suggestions && p.suggestions.length > 0)
+                            msg += "\n" + qsTr("Did you mean: %1").arg(p.suggestions.join(", "))
+                        return msg
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    color: appPalette.placeholderText
+                    text: qsTr("Space is AND, | is OR, a leading - is NOT, ( ) groups, \"…\" quotes a name. "
+                             + "Predicates: is:fav, is:untagged, album:<name>, cat:<name>. "
+                             + "NOT binds tightest, then OR, then AND.")
+                }
+                Item { Layout.fillHeight: true }
             }
         }
     }

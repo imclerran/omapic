@@ -21,7 +21,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 16;
+constexpr int kSchemaVersion = 17;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -157,6 +157,7 @@ bool Database::runMigrations(int fromVersion)
         {14, &Database::migrate_13_to_14, nullptr},
         {15, &Database::migrate_14_to_15, nullptr},
         {16, &Database::migrate_15_to_16, &Database::namesNeedNormalizing},
+        {17, &Database::migrate_16_to_17, &Database::smartAlbumsNeedConversion},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -592,6 +593,54 @@ void Database::migrate_15_to_16()
             q.addBindValue(target);
         q.addBindValue(a.first);
         q.exec();
+    }
+}
+
+bool Database::smartAlbumsNeedConversion()
+{
+    QSqlQuery q(QStringLiteral("SELECT 1 FROM smart_albums LIMIT 1"), m_db);
+    return q.next();
+}
+
+void Database::migrate_16_to_17()
+{
+    // Smart albums become OQL queries: a JSON tree of ids in the new `query`
+    // column (see oql::toJson) replaces the (tag set + match_all) pair. Each
+    // existing album converts to `a b c` or `a | b | c` over its indexed tags,
+    // ordered by name so the text reads naturally; smart_album_tags stays as the
+    // index of referenced tags. match_all is left in place but no longer read.
+    // Non-additive in meaning (the old columns stop being authoritative), so the
+    // backup gate above runs when there are rows to convert.
+    if (!hasColumn(QStringLiteral("smart_albums"), QStringLiteral("query"))) {
+        QSqlQuery add(m_db);
+        add.exec(QStringLiteral("ALTER TABLE smart_albums ADD COLUMN query TEXT"));
+    }
+    QVector<QPair<int, bool>> rows;
+    {
+        QSqlQuery q(QStringLiteral("SELECT id, match_all FROM smart_albums WHERE query IS NULL"), m_db);
+        while (q.next())
+            rows.append({q.value(0).toInt(), q.value(1).toInt() != 0});
+    }
+    for (const auto &row : rows) {
+        QVector<oql::Node> leaves;
+        QSqlQuery t(m_db);
+        t.prepare(QStringLiteral(
+            "SELECT t.id, t.name FROM smart_album_tags s JOIN tags t ON t.id = s.tag_id "
+            "WHERE s.smart_album_id = ? ORDER BY t.name COLLATE NOCASE"));
+        t.addBindValue(row.first);
+        t.exec();
+        while (t.next())
+            leaves.append(oql::Node::tag(t.value(0).toInt(), t.value(1).toString()));
+        oql::Node query;
+        if (leaves.size() == 1)
+            query = leaves.first();
+        else
+            query = row.second ? oql::Node::andOf(leaves) : oql::Node::orOf(leaves);
+        QSqlQuery up(m_db);
+        up.prepare(QStringLiteral("UPDATE smart_albums SET query = ? WHERE id = ?"));
+        up.addBindValue(QString::fromUtf8(oql::toJsonText(query)));
+        up.addBindValue(row.first);
+        up.exec();
     }
 }
 
@@ -1939,6 +1988,24 @@ void Database::deleteTag(int tagId)
     // Reserved (system) tags are permanent: deleting the Favorites tag would leave
     // favoritesTagId() dangling and drop it from the albums list. User tags and
     // regular albums are system = 0, so only Favorites is protected here.
+    {
+        QSqlQuery sys(m_db);
+        sys.prepare(QStringLiteral("SELECT system, name FROM tags WHERE id = ?"));
+        sys.addBindValue(tagId);
+        sys.exec();
+        if (!sys.next() || sys.value(0).toInt() != 0)
+            return;
+        // Smart albums that mention the tag (as a tag or as an album) keep a
+        // "missing" term with its last known name rather than silently losing it.
+        const QString stored = sys.value(1).toString();
+        const bool isAlbum = stored.startsWith(kAlbumPrefix);
+        const QString display = isAlbum ? albumDisplayName(stored) : stored;
+        rewriteSmartAlbumQueries([&](oql::Node &n) {
+            const bool a = oql::markMissing(n, oql::NodeKind::Tag, tagId, display);
+            const bool b = oql::markMissing(n, oql::NodeKind::Album, tagId, display);
+            return a || b;
+        });
+    }
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM tags WHERE id = ? AND system = 0")); // photo_tags + implications cascade
     q.addBindValue(tagId);
@@ -1976,6 +2043,8 @@ void Database::mergeTagInto(int fromTagId, int intoTagId)
     // The merge can create a self-implication (a -> a); drop any.
     QSqlQuery loop(m_db);
     loop.exec(QStringLiteral("DELETE FROM tag_implications WHERE antecedent_id = consequent_id"));
+    // Smart-album queries name the tag by id too: point them at the survivor.
+    rewriteSmartAlbumQueries([&](oql::Node &n) { return oql::replaceTagId(n, fromTagId, intoTagId); });
     QSqlQuery drop(m_db);
     drop.prepare(QStringLiteral("DELETE FROM tags WHERE id = ?"));
     drop.addBindValue(fromTagId);
@@ -2422,13 +2491,14 @@ QVector<SmartAlbumInfo> Database::smartAlbums()
 {
     QVector<SmartAlbumInfo> out;
     QSqlQuery q(m_db);
-    q.exec(QStringLiteral("SELECT id, name, match_all FROM smart_albums ORDER BY name"));
+    q.exec(QStringLiteral("SELECT id, name, query FROM smart_albums ORDER BY name"));
     QHash<int, int> idx; // smart album id -> position in out
     while (q.next()) {
         SmartAlbumInfo sa;
         sa.id = q.value(0).toInt();
         sa.name = q.value(1).toString();
-        sa.matchAll = q.value(2).toInt() != 0;
+        if (!oql::fromJsonText(q.value(2).toString().toUtf8(), sa.query))
+            sa.query = oql::Node::andOf({}); // unreadable row: matches nothing
         idx.insert(sa.id, out.size());
         out.append(sa);
     }
@@ -2449,14 +2519,15 @@ SmartAlbumInfo Database::smartAlbum(int id)
 {
     SmartAlbumInfo sa;
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("SELECT id, name, match_all FROM smart_albums WHERE id = ?"));
+    q.prepare(QStringLiteral("SELECT id, name, query FROM smart_albums WHERE id = ?"));
     q.addBindValue(id);
     q.exec();
     if (!q.next())
         return sa;
     sa.id = q.value(0).toInt();
     sa.name = q.value(1).toString();
-    sa.matchAll = q.value(2).toInt() != 0;
+    if (!oql::fromJsonText(q.value(2).toString().toUtf8(), sa.query))
+        sa.query = oql::Node::andOf({});
     QSqlQuery t(m_db);
     t.prepare(QStringLiteral("SELECT tag_id FROM smart_album_tags WHERE smart_album_id = ?"));
     t.addBindValue(id);
@@ -2466,48 +2537,45 @@ SmartAlbumInfo Database::smartAlbum(int id)
     return sa;
 }
 
-int Database::createSmartAlbum(const QString &name, const QList<int> &tagIds, bool matchAll)
+QHash<int, oql::Node> Database::smartAlbumQueries()
 {
-    const QString trimmed = sanitizeName(name);
-    if (trimmed.isEmpty() || tagIds.isEmpty())
-        return -1;
-    beginTransaction();
+    QHash<int, oql::Node> out;
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("INSERT INTO smart_albums (name, match_all) VALUES (?, ?)"));
-    q.addBindValue(trimmed);
-    q.addBindValue(matchAll ? 1 : 0);
-    if (!q.exec()) { // UNIQUE name collision, etc.
-        m_db.rollback();
-        return -1;
+    q.exec(QStringLiteral("SELECT id, query FROM smart_albums"));
+    while (q.next()) {
+        oql::Node n;
+        if (!oql::fromJsonText(q.value(1).toString().toUtf8(), n))
+            n = oql::Node::andOf({});
+        out.insert(q.value(0).toInt(), n);
     }
-    const int id = q.lastInsertId().toInt();
-    QSqlQuery link(m_db);
-    link.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO smart_album_tags (smart_album_id, tag_id) VALUES (?, ?)"));
-    for (int t : tagIds) {
-        link.addBindValue(id);
-        link.addBindValue(t);
-        link.exec();
-    }
-    commitTransaction();
-    return id;
+    return out;
 }
 
-bool Database::updateSmartAlbum(int id, const QString &name, const QList<int> &tagIds, bool matchAll)
+bool Database::smartAlbumWouldCycle(int id, const oql::Node &query)
 {
-    const QString trimmed = sanitizeName(name);
-    if (trimmed.isEmpty() || tagIds.isEmpty())
-        return false;
-    beginTransaction();
-    QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("UPDATE smart_albums SET name = ?, match_all = ? WHERE id = ?"));
-    q.addBindValue(trimmed);
-    q.addBindValue(matchAll ? 1 : 0);
-    q.addBindValue(id);
-    if (!q.exec()) { // UNIQUE name collision with another smart album
-        m_db.rollback();
-        return false;
-    }
+    const QHash<int, oql::Node> all = smartAlbumQueries();
+    return oql::wouldCycle(id, query, [&all](int sid) -> const oql::Node * {
+        auto it = all.constFind(sid);
+        return it == all.constEnd() ? nullptr : &it.value();
+    });
+}
+
+namespace {
+// An AND/OR with nothing in it is the one tree with no meaning; refuse to save it.
+bool emptyQuery(const oql::Node &q)
+{
+    return (q.kind == oql::NodeKind::And || q.kind == oql::NodeKind::Or) && q.children.isEmpty();
+}
+}
+
+void Database::writeSmartAlbumQuery(int id, const oql::Node &query)
+{
+    QSqlQuery up(m_db);
+    up.prepare(QStringLiteral("UPDATE smart_albums SET query = ? WHERE id = ?"));
+    up.addBindValue(QString::fromUtf8(oql::toJsonText(query)));
+    up.addBindValue(id);
+    up.exec();
+    // The index: every tag id the tree mentions, as a tag or as an album.
     QSqlQuery del(m_db);
     del.prepare(QStringLiteral("DELETE FROM smart_album_tags WHERE smart_album_id = ?"));
     del.addBindValue(id);
@@ -2515,21 +2583,134 @@ bool Database::updateSmartAlbum(int id, const QString &name, const QList<int> &t
     QSqlQuery link(m_db);
     link.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO smart_album_tags (smart_album_id, tag_id) VALUES (?, ?)"));
-    for (int t : tagIds) {
+    for (int t : oql::referencedIds(query, {oql::NodeKind::Tag, oql::NodeKind::Album})) {
         link.addBindValue(id);
         link.addBindValue(t);
         link.exec();
     }
+}
+
+void Database::rewriteSmartAlbumQueries(const std::function<bool(oql::Node &)> &mutate)
+{
+    if (!hasColumn(QStringLiteral("smart_albums"), QStringLiteral("query")))
+        return; // pre-v17 library mid-migration: nothing stored as a tree yet
+    QHash<int, oql::Node> all = smartAlbumQueries();
+    for (auto it = all.begin(); it != all.end(); ++it)
+        if (mutate(it.value()))
+            writeSmartAlbumQuery(it.key(), it.value());
+}
+
+int Database::createSmartAlbum(const QString &name, const oql::Node &query)
+{
+    const QString trimmed = sanitizeName(name);
+    if (trimmed.isEmpty() || emptyQuery(query))
+        return -1;
+    beginTransaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO smart_albums (name, match_all, query) VALUES (?, 1, '')"));
+    q.addBindValue(trimmed);
+    if (!q.exec()) { // UNIQUE name collision, etc.
+        m_db.rollback();
+        return -1;
+    }
+    const int id = q.lastInsertId().toInt();
+    writeSmartAlbumQuery(id, query);
+    commitTransaction();
+    return id;
+}
+
+bool Database::updateSmartAlbum(int id, const QString &name, const oql::Node &query)
+{
+    const QString trimmed = sanitizeName(name);
+    if (trimmed.isEmpty() || emptyQuery(query) || smartAlbumWouldCycle(id, query))
+        return false;
+    beginTransaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE smart_albums SET name = ? WHERE id = ?"));
+    q.addBindValue(trimmed);
+    q.addBindValue(id);
+    if (!q.exec() || q.numRowsAffected() == 0) { // UNIQUE name collision, or no such row
+        m_db.rollback();
+        return false;
+    }
+    writeSmartAlbumQuery(id, query);
     commitTransaction();
     return true;
 }
 
+int Database::createSmartAlbum(const QString &name, const QList<int> &tagIds, bool matchAll)
+{
+    if (tagIds.isEmpty())
+        return -1;
+    oql::MapVocabulary vocab;
+    fillVocabulary(vocab);
+    return createSmartAlbum(name, oql::fromTagSet(tagIds, matchAll, &vocab));
+}
+
+bool Database::updateSmartAlbum(int id, const QString &name, const QList<int> &tagIds, bool matchAll)
+{
+    if (tagIds.isEmpty())
+        return false;
+    oql::MapVocabulary vocab;
+    fillVocabulary(vocab);
+    return updateSmartAlbum(id, name, oql::fromTagSet(tagIds, matchAll, &vocab));
+}
+
 void Database::deleteSmartAlbum(int id)
 {
+    const QString name = smartAlbum(id).name;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM smart_albums WHERE id = ?")); // tags cascade
     q.addBindValue(id);
     q.exec();
+    if (!name.isEmpty())
+        rewriteSmartAlbumQueries([&](oql::Node &n) {
+            return oql::markMissing(n, oql::NodeKind::SmartAlbum, id, name);
+        });
+}
+
+void Database::fillVocabulary(oql::MapVocabulary &vocab)
+{
+    {
+        // Every tag by its stored name. Albums are tags too, under the "_album:"
+        // prefix: they go into the album table by display name instead.
+        QSqlQuery q(QStringLiteral("SELECT id, name FROM tags"), m_db);
+        while (q.next()) {
+            const int id = q.value(0).toInt();
+            const QString name = q.value(1).toString();
+            if (name.startsWith(kAlbumPrefix))
+                vocab.addAlbum(id, albumDisplayName(name));
+            else
+                vocab.addTag(id, name);
+        }
+    }
+    {
+        QSqlQuery q(QStringLiteral("SELECT alias_name, tag_id FROM tag_aliases"), m_db);
+        while (q.next())
+            vocab.addAlias(q.value(0).toString(), q.value(1).toInt());
+    }
+    {
+        QSqlQuery q(QStringLiteral("SELECT id, name FROM smart_albums"), m_db);
+        while (q.next())
+            vocab.addSmartAlbum(q.value(0).toInt(), q.value(1).toString());
+    }
+    {
+        QSqlQuery q(QStringLiteral("SELECT id, name FROM tag_categories WHERE system = 0"), m_db);
+        while (q.next())
+            vocab.addCategory(q.value(0).toInt(), q.value(1).toString());
+    }
+}
+
+oql::EvalContext Database::evalContext()
+{
+    oql::EvalContext ctx;
+    ctx.favoritesTagId = m_favoritesTagId;
+    for (int id : albumTagIds())
+        ctx.albumTagIds.insert(id);
+    QSqlQuery q(QStringLiteral("SELECT id, category_id FROM tags WHERE category_id IS NOT NULL"), m_db);
+    while (q.next())
+        ctx.tagCategory.insert(q.value(0).toInt(), q.value(1).toInt());
+    return ctx;
 }
 
 QVector<CategoryInfo> Database::loadCategories(bool activeOnly)
@@ -2653,6 +2834,11 @@ void Database::deleteCategory(int categoryId)
     guard.exec();
     if (!guard.next() || guard.value(0).toInt() != 0)
         return;
+    // Smart albums with a cat: term for it keep a "missing" term by name.
+    const QString name = categoryName(categoryId);
+    rewriteSmartAlbumQueries([&](oql::Node &n) {
+        return oql::markMissing(n, oql::NodeKind::Category, categoryId, name);
+    });
     // The FK is ON DELETE SET NULL, but clear explicitly too so the tags are
     // uncategorized even on a connection without foreign_keys enabled.
     QSqlQuery u(m_db);

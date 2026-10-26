@@ -15,6 +15,7 @@
 #include <QTemporaryFile>
 
 #include "database.h"
+#include "oql.h"
 
 // The SQLite layer holds every persistence rule in the app — tag identity,
 // content-addressed tag survival, implication closure, albums, and the
@@ -40,6 +41,12 @@ private slots:
     // Smart albums (saved queries)
     void createSmartAlbumValidatesAndRoundTrips();
     void updateAndDeleteSmartAlbum();
+    void smartAlbumStoresQueryTreeAndIndex();
+    void smartAlbumRejectsEmptyQueryAndCycles();
+    void deletingTagMarksSmartAlbumTermMissing();
+    void deletingAlbumAndCategoryMarkSmartAlbumTermsMissing();
+    void deletingSmartAlbumMarksReferencesMissing();
+    void vocabularyAndEvalContextFromLibrary();
 
     // Implications
     void listedImplicationsNeedActiveTags();
@@ -259,7 +266,9 @@ void TestDatabase::createSmartAlbumValidatesAndRoundTrips()
     const SmartAlbumInfo sa = m_db->smartAlbum(id);
     QCOMPARE(sa.id, id);
     QCOMPARE(sa.name, QStringLiteral("Trips"));
-    QVERIFY(sa.matchAll);
+    // The tag-set form is stored as the tree `beach summer`, names included.
+    QCOMPARE(sa.query, oql::Node::andOf({oql::Node::tag(t1, QStringLiteral("beach")),
+                                         oql::Node::tag(t2, QStringLiteral("summer"))}));
     QCOMPARE(QSet<int>(sa.tagIds.begin(), sa.tagIds.end()), (QSet<int>{t1, t2}));
 }
 
@@ -270,11 +279,14 @@ void TestDatabase::updateAndDeleteSmartAlbum()
     const int id = m_db->createSmartAlbum(QStringLiteral("One"), {t1, t2}, true);
     QVERIFY(id > 0);
 
-    QVERIFY(m_db->updateSmartAlbum(id, QStringLiteral("Renamed"), {t1}, false));
-    const SmartAlbumInfo sa = m_db->smartAlbum(id);
+    QVERIFY(m_db->updateSmartAlbum(id, QStringLiteral("Renamed"), {t1, t2}, false));
+    SmartAlbumInfo sa = m_db->smartAlbum(id);
     QCOMPARE(sa.name, QStringLiteral("Renamed"));
-    QVERIFY(!sa.matchAll);
-    QCOMPARE(sa.tagIds, QList<int>{t1}); // membership fully replaced
+    QCOMPARE(sa.query.kind, oql::NodeKind::Or);
+    QVERIFY(m_db->updateSmartAlbum(id, QStringLiteral("Renamed"), {t1}, false));
+    sa = m_db->smartAlbum(id);
+    QCOMPARE(sa.query, oql::Node::tag(t1, QStringLiteral("a"))); // a one-tag set is just the tag
+    QCOMPARE(sa.tagIds, QList<int>{t1}); // index fully replaced
 
     // Invalid updates are refused and leave the row untouched.
     QVERIFY(!m_db->updateSmartAlbum(id, QStringLiteral(""), {t1}, false));
@@ -282,6 +294,142 @@ void TestDatabase::updateAndDeleteSmartAlbum()
 
     m_db->deleteSmartAlbum(id);
     QVERIFY(m_db->smartAlbums().isEmpty());
+}
+
+void TestDatabase::smartAlbumStoresQueryTreeAndIndex()
+{
+    const int beach = m_db->ensureTag(QStringLiteral("beach"));
+    const int people = m_db->ensureTag(QStringLiteral("people"));
+    const int trip = m_db->createAlbum(QStringLiteral("Trip"));
+    const int place = m_db->insertCategory(QStringLiteral("Place"), 0);
+    // beach -people (album:Trip | cat:Place | is:fav)
+    const oql::Node q = oql::Node::andOf({
+        oql::Node::tag(beach, QStringLiteral("beach")),
+        oql::Node::notOf(oql::Node::tag(people, QStringLiteral("people"))),
+        oql::Node::orOf({oql::Node::album(trip, QStringLiteral("Trip")),
+                         oql::Node::category(place, QStringLiteral("Place")), oql::Node::favorite()}),
+    });
+    const int id = m_db->createSmartAlbum(QStringLiteral("Complex"), q);
+    QVERIFY(id > 0);
+    const SmartAlbumInfo sa = m_db->smartAlbum(id);
+    QCOMPARE(sa.query, q); // round-trips through JSON exactly
+    // The index holds every tag id the tree mentions, as a tag or an album.
+    QCOMPARE(QSet<int>(sa.tagIds.begin(), sa.tagIds.end()), (QSet<int>{beach, people, trip}));
+    // smartAlbumQueries() hands out the stored trees by id.
+    QCOMPARE(m_db->smartAlbumQueries().value(id), q);
+
+    // A smart-album reference is stored as a reference, never as a copy.
+    const int outer = m_db->createSmartAlbum(QStringLiteral("Outer"),
+                                             oql::Node::notOf(oql::Node::smartAlbum(id, QStringLiteral("Complex"))));
+    QVERIFY(outer > 0);
+    QCOMPARE(m_db->smartAlbum(outer).query, oql::Node::notOf(oql::Node::smartAlbum(id, QStringLiteral("Complex"))));
+    QVERIFY(m_db->smartAlbum(outer).tagIds.isEmpty());
+}
+
+void TestDatabase::smartAlbumRejectsEmptyQueryAndCycles()
+{
+    const int beach = m_db->ensureTag(QStringLiteral("beach"));
+    QCOMPARE(m_db->createSmartAlbum(QStringLiteral("Empty"), oql::Node::andOf({})), -1);
+    QCOMPARE(m_db->createSmartAlbum(QStringLiteral("Empty"), oql::Node::orOf({})), -1);
+
+    const int a = m_db->createSmartAlbum(QStringLiteral("A"), oql::Node::tag(beach));
+    const int b = m_db->createSmartAlbum(QStringLiteral("B"), oql::Node::smartAlbum(a));
+    QVERIFY(a > 0 && b > 0);
+    // A -> A directly, and A -> B -> A through the chain, are both refused.
+    QVERIFY(m_db->smartAlbumWouldCycle(a, oql::Node::smartAlbum(a)));
+    QVERIFY(!m_db->updateSmartAlbum(a, QStringLiteral("A"), oql::Node::smartAlbum(a)));
+    QVERIFY(m_db->smartAlbumWouldCycle(a, oql::Node::andOf({oql::Node::tag(beach), oql::Node::smartAlbum(b)})));
+    QVERIFY(!m_db->updateSmartAlbum(a, QStringLiteral("A"), oql::Node::smartAlbum(b)));
+    QCOMPARE(m_db->smartAlbum(a).query, oql::Node::tag(beach)); // untouched
+    // A reference that doesn't come back is fine.
+    QVERIFY(!m_db->smartAlbumWouldCycle(b, oql::Node::smartAlbum(a)));
+    QVERIFY(m_db->updateSmartAlbum(b, QStringLiteral("B"), oql::Node::notOf(oql::Node::smartAlbum(a))));
+    QCOMPARE(m_db->smartAlbum(b).query, oql::Node::notOf(oql::Node::smartAlbum(a)));
+}
+
+void TestDatabase::deletingTagMarksSmartAlbumTermMissing()
+{
+    const int beach = m_db->ensureTag(QStringLiteral("beach"));
+    const int people = m_db->ensureTag(QStringLiteral("people"));
+    const int id = m_db->createSmartAlbum(QStringLiteral("S"), {beach, people}, true);
+    QVERIFY(id > 0);
+    m_db->deleteTag(people);
+    // The term stays, as a missing node that remembers the name; the index drops it.
+    const SmartAlbumInfo sa = m_db->smartAlbum(id);
+    QCOMPARE(sa.query, oql::Node::andOf({oql::Node::tag(beach, QStringLiteral("beach")),
+                                         oql::Node::missing(QStringLiteral("people"))}));
+    QCOMPARE(sa.tagIds, QList<int>{beach});
+    // The Favorites tag can't be deleted, so nothing is rewritten for it.
+    const int fav = m_db->favoritesTagId();
+    const int id2 = m_db->createSmartAlbum(QStringLiteral("F"), oql::Node::album(fav, QStringLiteral("Favorites")));
+    m_db->deleteTag(fav);
+    QCOMPARE(m_db->smartAlbum(id2).query, oql::Node::album(fav, QStringLiteral("Favorites")));
+}
+
+void TestDatabase::deletingAlbumAndCategoryMarkSmartAlbumTermsMissing()
+{
+    const int trip = m_db->createAlbum(QStringLiteral("Trip"));
+    const int place = m_db->insertCategory(QStringLiteral("Place"), 0);
+    const int id = m_db->createSmartAlbum(QStringLiteral("S"),
+        oql::Node::orOf({oql::Node::album(trip, QStringLiteral("Trip")),
+                         oql::Node::category(place, QStringLiteral("Place"))}));
+    QVERIFY(id > 0);
+    m_db->deleteTag(trip); // how Library deletes an album
+    m_db->deleteCategory(place);
+    QCOMPARE(m_db->smartAlbum(id).query,
+             oql::Node::orOf({oql::Node::missing(QStringLiteral("Trip"), oql::NameKind::Album),
+                              oql::Node::missing(QStringLiteral("Place"), oql::NameKind::Category)}));
+}
+
+void TestDatabase::deletingSmartAlbumMarksReferencesMissing()
+{
+    const int beach = m_db->ensureTag(QStringLiteral("beach"));
+    const int inner = m_db->createSmartAlbum(QStringLiteral("Inner"), oql::Node::tag(beach));
+    const int outer = m_db->createSmartAlbum(QStringLiteral("Outer"),
+        oql::Node::andOf({oql::Node::tag(beach), oql::Node::smartAlbum(inner, QStringLiteral("Inner"))}));
+    m_db->deleteSmartAlbum(inner);
+    QCOMPARE(m_db->smartAlbums().size(), 1);
+    QCOMPARE(m_db->smartAlbum(outer).query,
+             oql::Node::andOf({oql::Node::tag(beach),
+                               oql::Node::missing(QStringLiteral("Inner"), oql::NameKind::SmartAlbum)}));
+}
+
+void TestDatabase::vocabularyAndEvalContextFromLibrary()
+{
+    const int beach = m_db->ensureTag(QStringLiteral("Beach"));
+    const int paris = m_db->ensureTag(QStringLiteral("paris"));
+    QVERIFY(m_db->createAlias(QStringLiteral("seaside"), beach));
+    const int trip = m_db->createAlbum(QStringLiteral("Trip"));
+    const int place = m_db->insertCategory(QStringLiteral("Place"), 0);
+    m_db->setTagCategory(paris, place);
+    const int smart = m_db->createSmartAlbum(QStringLiteral("Best"), oql::Node::tag(beach));
+
+    oql::MapVocabulary v;
+    m_db->fillVocabulary(v);
+    QCOMPARE(v.resolve(oql::NameKind::Tag, QStringLiteral("beach")), beach);
+    QCOMPARE(v.resolve(oql::NameKind::Tag, QStringLiteral("seaside")), beach);  // alias
+    QCOMPARE(v.name(oql::NameKind::Tag, beach), QStringLiteral("Beach"));        // display case kept
+    QCOMPARE(v.resolve(oql::NameKind::Tag, QStringLiteral("trip")), -1);         // albums aren't tags here...
+    QCOMPARE(v.resolve(oql::NameKind::Album, QStringLiteral("trip")), trip);     // ...but albums, by display name
+    QCOMPARE(v.resolve(oql::NameKind::Album, QStringLiteral("favorites")), m_db->favoritesTagId());
+    QCOMPARE(v.resolve(oql::NameKind::SmartAlbum, QStringLiteral("best")), smart);
+    QCOMPARE(v.resolve(oql::NameKind::Category, QStringLiteral("place")), place);
+    QCOMPARE(v.resolve(oql::NameKind::Category, QStringLiteral("albums")), -1);  // the system category is hidden
+    QVERIFY(v.names(oql::NameKind::Tag).contains(QStringLiteral("seaside")));
+
+    // End to end: parse against the library, evaluate against its context.
+    const oql::ParseResult r = oql::parse(QStringLiteral("seaside | cat:Place | album:Trip | is:fav"), v);
+    QVERIFY2(r.ok(), qPrintable(r.error.message));
+    const oql::EvalContext ctx = m_db->evalContext();
+    QCOMPARE(ctx.favoritesTagId, m_db->favoritesTagId());
+    QVERIFY(ctx.albumTagIds.contains(trip));
+    QVERIFY(ctx.albumTagIds.contains(m_db->favoritesTagId()));
+    QCOMPARE(ctx.tagCategory.value(paris), place);
+    QVERIFY(oql::matches(r.root, {beach}, ctx));
+    QVERIFY(oql::matches(r.root, {paris}, ctx));
+    QVERIFY(oql::matches(r.root, {trip}, ctx));
+    QVERIFY(oql::matches(r.root, {m_db->favoritesTagId()}, ctx));
+    QVERIFY(!oql::matches(r.root, {}, ctx));
 }
 
 // --- Implications -----------------------------------------------------------
@@ -1429,8 +1577,10 @@ void TestDatabase::createAliasMergesExistingTagAcrossAllTables()
     QVERIFY(q.next());
     QCOMPARE(q.value(0).toInt(), 0); // nothing left pointing at B
 
-    // smart_album_tags: the album now lists A once, not A+B.
+    // smart_album_tags: the album now lists A once, not A+B — and the stored
+    // query `forest forests` was rewritten to A and deduped down to the one tag.
     QCOMPARE(m_db->smartAlbum(sa).tagIds, QList<int>{a});
+    QCOMPARE(m_db->smartAlbum(sa).query, oql::Node::tag(a, QStringLiteral("forest")));
 
     // tag_implications: rewired to x->a, a->y, z->a; the A<->B self-loops dropped,
     // z->b folded into the existing z->a.

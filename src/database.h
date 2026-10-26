@@ -11,6 +11,9 @@
 #include <QStringList>
 #include <QVector>
 
+#include <functional>
+
+#include "oql.h"
 #include "photo.h"
 
 // Thin SQLite wrapper. Holds the persistent library; all persistence lives here
@@ -122,17 +125,39 @@ public:
     // the name is blank or already belongs to a non-album tag.
     int createAlbum(const QString &name);
 
-    // --- Smart albums (saved tag queries) ---
-    // A smart album is a stored (tag set + AND/OR) query, kept in its own tables
-    // (smart_albums / smart_album_tags), not in the tag system. Membership is
-    // evaluated live against a photo's tags, so there is nothing in photo_tags.
-    QVector<SmartAlbumInfo> smartAlbums();        // all, each with its tag ids, by name
+    // --- Smart albums (saved OQL queries) ---
+    // A smart album is a stored query tree (schema v17+: JSON in smart_albums.query,
+    // see oql::toJson), kept in its own tables, not in the tag system. Membership
+    // is evaluated live against a photo's tags, so there is nothing in photo_tags.
+    // smart_album_tags is a denormalised index of the tag ids each query mentions,
+    // so mergeTagInto / deleteTag can find the queries they must rewrite.
+    QVector<SmartAlbumInfo> smartAlbums();        // all, by name
     SmartAlbumInfo smartAlbum(int id);            // one row (for the edit dialog)
     // Create/update return the id (or true) on success, -1/false when the name is
-    // blank, the tag set is empty, or the name duplicates another smart album.
+    // blank or duplicates another smart album, the query is empty, or (update) the
+    // query would make the album reach itself through album: references.
+    int createSmartAlbum(const QString &name, const oql::Node &query);
+    bool updateSmartAlbum(int id, const QString &name, const oql::Node &query);
+    // The tag-set forms: `a b c` (matchAll) or `a | b | c`. An empty set is rejected.
     int createSmartAlbum(const QString &name, const QList<int> &tagIds, bool matchAll);
     bool updateSmartAlbum(int id, const QString &name, const QList<int> &tagIds, bool matchAll);
+    // Delete the album; any other smart album referencing it keeps a "missing"
+    // node with its last known name rather than silently losing the term.
     void deleteSmartAlbum(int id);
+    // Every smart album's stored (unexpanded) tree by id, for oql::expand /
+    // oql::wouldCycle via smartAlbumLookup.
+    QHash<int, oql::Node> smartAlbumQueries();
+    // True when saving `query` as album `id` would let it reach itself.
+    bool smartAlbumWouldCycle(int id, const oql::Node &query);
+
+    // --- OQL support ---
+    // Fill a vocabulary with every name a query can mention: tags (user-visible
+    // ones, by canonical name) and their aliases, albums (display names, Favorites
+    // included), smart albums and user categories.
+    void fillVocabulary(oql::MapVocabulary &vocab);
+    // The library facts evaluation needs: the Favorites id, every album tag id,
+    // and the tag -> category map.
+    oql::EvalContext evalContext();
 
     // --- Tag implications ("if this tag, then that tag") ---
     // Every implication with both tags' names/colors, for the manager. Sorted by
@@ -320,6 +345,12 @@ private:
     // the move creates, then delete the emptied tag row. Shared by the '|'→'/'
     // name migration and alias creation (both merge colliding tags the same way).
     void mergeTagInto(int fromTagId, int intoTagId);
+    // Store a smart album's query: the JSON tree plus the rebuilt tag index.
+    void writeSmartAlbumQuery(int id, const oql::Node &query);
+    // Load every smart album's tree, apply `mutate`, and store the ones it
+    // changed. How tag merges/deletions and album/category deletions keep the
+    // stored queries current. No-op before schema v17.
+    void rewriteSmartAlbumQueries(const std::function<bool(oql::Node &)> &mutate);
     // Resolve (creating if needed) the reserved Albums category and Favorites tag,
     // caching their ids. Idempotent; called at the end of open() on every open,
     // regardless of schema version, since the ids are per-instance in-memory.
@@ -353,6 +384,9 @@ private:
     void migrate_13_to_14(); // clear videos' mtime dates so creation_time is re-read (additive)
     void migrate_14_to_15(); // tag_aliases table (additive)
     void migrate_15_to_16(); // strip '"' / collapse whitespace in names (non-additive)
+    void migrate_16_to_17(); // smart_albums.query: JSON OQL tree replaces match_all (non-additive)
+    // True when migrate_16_to_17 has rows to convert. Gates its backup.
+    bool smartAlbumsNeedConversion();
     // True when any tag or category name contains '|' (so the rename above would
     // actually change rows). Gates the pre-migration backup.
     bool namesContainPipe();

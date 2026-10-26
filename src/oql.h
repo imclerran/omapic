@@ -5,11 +5,15 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonObject>
 #include <QList>
 #include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
+
+#include <functional>
+#include <initializer_list>
 
 // OQL — the Omapic Query Language. A small boolean language over a photo's tags
 // (and, later, its metadata) that backs smart albums, the command-line `query`
@@ -208,5 +212,60 @@ struct EvalContext {
 // node never matches; a SmartAlbum reference is treated as Missing here — it
 // must be expanded (replaced by the referenced album's tree) first.
 bool matches(const Node &root, const QSet<int> &photoTags, const EvalContext &ctx);
+
+// --- Tag sets ---------------------------------------------------------------
+
+// The tree for a plain tag set: `a b c` (matchAll) or `a | b | c`; a single tag
+// is just that tag; an empty set is an empty AND, which matches nothing. Names
+// are filled from `vocab` when one is given. This is what the sidebar's all/any
+// selection and the legacy smart-album form become.
+Node fromTagSet(const QList<int> &tagIds, bool matchAll, const Vocabulary *vocab = nullptr);
+// The inverse, when it exists: true when `root` is a single tag or a flat
+// AND/OR of tags, filling `tagIds` and `matchAll`. Anything else (negation,
+// predicates, nesting, a missing name) returns false. Lets the simple tag-set
+// editor show the queries it can represent and hand the rest to the text form.
+bool asTagSet(const Node &root, QList<int> &tagIds, bool &matchAll);
+
+// --- Persistence ------------------------------------------------------------
+
+// The stored form of a tree: JSON of ids ({"k":"tag","id":5,"n":"beach"},
+// {"k":"and","c":[…]} …). Names are recorded so a deleted id can become a
+// Missing node that still says what it was; they are never authoritative.
+QJsonObject toJson(const Node &root);
+// Parses the stored form; false (and `out` untouched) on anything malformed.
+bool fromJson(const QJsonObject &json, Node &out);
+QByteArray toJsonText(const Node &root);                // compact UTF-8
+bool fromJsonText(const QByteArray &text, Node &out);
+
+// --- Maintenance ------------------------------------------------------------
+
+// The ids of every leaf of the given kinds (Tag and Album leaves both hold tag
+// ids; SmartAlbum and Category leaves hold their own ids).
+QSet<int> referencedIds(const Node &root, std::initializer_list<NodeKind> kinds);
+// Point every Tag/Album leaf with id `from` at `to` (a tag merge), then drop
+// the exact duplicates that can leave in an AND/OR. True when anything changed.
+bool replaceTagId(Node &root, int from, int to);
+// Turn every leaf of `kind` with id `id` into a Missing node keeping `name` (a
+// deleted tag, album, category or smart album). True when anything changed.
+bool markMissing(Node &root, NodeKind kind, int id, const QString &name);
+
+// --- Smart-album references -------------------------------------------------
+
+// Looks up a smart album's stored (unexpanded) tree by id; nullptr if unknown.
+using SmartAlbumLookup = std::function<const Node *(int)>;
+
+// Replace every SmartAlbum reference with the referenced album's current tree,
+// recursively, so editing a nested album changes every album that uses it.
+// A reference to an unknown album becomes Missing. A cycle (A → B → A) is an
+// error: the reference that closes it becomes Missing and a message is added to
+// `errors` (when given). `selfId` is the id of the album `root` belongs to, so
+// a chain leading back to it counts as a cycle too (-1 for a free query).
+// Expand once per filter pass and evaluate photos against the result; never
+// per photo.
+Node expand(const Node &root, const SmartAlbumLookup &lookup, QStringList *errors = nullptr,
+            int selfId = -1);
+// True when storing `query` as smart album `albumId` would let it reach itself
+// through any chain of references (including directly).
+bool wouldCycle(int albumId, const Node &query, const SmartAlbumLookup &lookup);
 
 } // namespace oql
