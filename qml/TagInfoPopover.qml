@@ -19,6 +19,11 @@ import Omapic // TextMatch singleton (accent-/case-insensitive folding)
 // implication lists, and gates `active` on the dropdown being open with a valid
 // highlight; it also reports `nameTruncated` for the highlighted row. The panel
 // shows itself only when there is something extra to say.
+//
+// Optionally (Settings ▸ General ▸ "Show sample photos in tag suggestions") a
+// column of two thumbnails of photos carrying the tag sits to the right of the
+// text, so a tag can be told apart by what it's actually been put on. The host
+// supplies `sampleFn` only while that setting is on.
 Popup {
     id: root
 
@@ -28,6 +33,16 @@ Popup {
     property var categoryColorFn: null  // function(colorSlot) -> color, for the implied-tag chips
     property bool active: false         // dropdown open with a valid highlight
     property bool nameTruncated: false  // the highlighted row's name is elided
+    // function(tagName) -> [filePath, …]: the tag's representative photos (best
+    // first; see Library.tagSamplePaths), or null for no thumbnail column.
+    property var sampleFn: null
+
+    // Edge of each thumbnail tile (logical px); the two stack vertically.
+    readonly property int sampleSize: 96
+    // Paths to show. Re-queried as the highlight moves (tagName changes); empty
+    // when the feature is off, nothing is highlighted, or the tag is on no photo.
+    readonly property var samplePaths: (root.sampleFn && root.tagName !== "")
+                                       ? root.sampleFn(root.tagName) : []
 
     // The host's desired top (relative to `parent`, e.g. just below the dropdown).
     // The actual y is clamped so the panel isn't clipped by the window's bottom:
@@ -131,7 +146,8 @@ Popup {
     // imperatively with open()/close() — the sibling suggestion popup does the
     // same, and a bound `visible` doesn't reliably open a Popup here.
     readonly property bool wantShown: root.active && root.tagName !== ""
-                                      && (root.nameTruncated || root.hasExtra)
+                                      && (root.nameTruncated || root.hasExtra
+                                          || root.samplePaths.length > 0)
     onWantShownChanged: wantShown ? open() : close()
 
     padding: 10
@@ -150,8 +166,8 @@ Popup {
     // Size the popup to its content explicitly — a Popup does not reliably take
     // the implicit size of a Layout contentItem, and a zero-size popup shows
     // nothing (which is why the sibling suggestion popup sets its size too).
-    contentWidth: infoColumn.implicitWidth
-    contentHeight: infoColumn.implicitHeight
+    contentWidth: body.implicitWidth
+    contentHeight: body.implicitHeight
 
     background: Rectangle {
         color: sysp.window
@@ -169,99 +185,140 @@ Popup {
         }
     }
 
-    contentItem: ColumnLayout {
-        id: infoColumn
-        spacing: 8
+    // The text column on the left, the (optional) thumbnail column on the right.
+    contentItem: RowLayout {
+        id: body
+        spacing: 10
 
-        // Full tag name (resolves an elided row).
-        Label {
-            Layout.maximumWidth: 260
-            text: root.tagName
-            font.bold: true
-            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-            color: sysp.text
-        }
+        ColumnLayout {
+            id: infoColumn
+            Layout.alignment: Qt.AlignTop
+            spacing: 8
 
-        // Alternate names that resolve to this tag, inline; the "AKA:" label keeps
-        // the dim heading color, the names stay readable.
-        RowLayout {
-            visible: root.aliasNames.length > 0
-            Layout.maximumWidth: 260
-            spacing: 4
+            // Full tag name (resolves an elided row).
             Label {
-                text: qsTr("AKA:")
-                Layout.alignment: Qt.AlignTop
-                font.pixelSize: 12
-                color: sysp.placeholderText
-            }
-            Label {
-                Layout.fillWidth: true
-                text: root.aliasNames.join(", ")
+                Layout.maximumWidth: 260
+                text: root.tagName
+                font.bold: true
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                font.pixelSize: 12
                 color: sysp.text
             }
-        }
 
-        // Full-width divider before the implications (negative margins cancel the
-        // popup padding so it runs edge to edge, at the border's weight and color).
-        Rectangle {
-            visible: root.impliedTags.length > 0
-            Layout.fillWidth: true
-            Layout.leftMargin: -root.padding
-            Layout.rightMargin: -root.padding
-            implicitHeight: 1
-            color: sysp.mid
-        }
-
-        // Tags that applying this one will also add (implication closure), grouped
-        // by category under a tinted sub-heading.
-        ColumnLayout {
-            visible: root.impliedTags.length > 0
-            spacing: 6
-            Repeater {
-                model: root.impliedGroups
-                delegate: ColumnLayout {
-                    id: grp
-                    required property var modelData
+            // Alternate names that resolve to this tag, inline; the "AKA:" label keeps
+            // the dim heading color, the names stay readable.
+            RowLayout {
+                visible: root.aliasNames.length > 0
+                Layout.maximumWidth: 260
+                spacing: 4
+                Label {
+                    text: qsTr("AKA:")
+                    Layout.alignment: Qt.AlignTop
+                    font.pixelSize: 12
+                    color: sysp.placeholderText
+                }
+                Label {
                     Layout.fillWidth: true
-                    spacing: 3
+                    text: root.aliasNames.join(", ")
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    font.pixelSize: 12
+                    color: sysp.text
+                }
+            }
 
-                    // Category name, tinted with the category's color (neutral for
-                    // the uncategorized group).
-                    Label {
-                        readonly property int slot: grp.modelData.tags[0].colorSlot
-                        text: grp.modelData.category !== "" ? grp.modelData.category
-                                                            : qsTr("Uncategorized")
-                        font.pixelSize: 10
-                        font.capitalization: Font.AllUppercase
-                        color: slot >= 0 ? root.swatch(slot) : sysp.placeholderText
-                    }
-                    Flow {
-                        Layout.maximumWidth: 260
-                        Layout.preferredWidth: 260
-                        spacing: 4
-                        Repeater {
-                            model: grp.modelData.tags
-                            delegate: Rectangle {
-                                required property var modelData
-                                readonly property bool categorized: modelData.colorSlot >= 0
-                                readonly property color tint: root.swatch(modelData.colorSlot)
-                                implicitHeight: 22
-                                implicitWidth: chipText.implicitWidth + 14
-                                radius: height / 2
-                                color: categorized ? Qt.alpha(tint, 0.18) : sysp.alternateBase
-                                border.width: 1
-                                border.color: categorized ? tint : sysp.mid
-                                Label {
-                                    id: chipText
-                                    anchors.centerIn: parent
-                                    text: parent.modelData.name
-                                    font.pixelSize: 11
-                                    color: sysp.text
+            // Full-width divider before the implications (negative margins cancel the
+            // popup padding so it runs edge to edge, at the border's weight and color).
+            // With the thumbnail column up it stops at the column gap instead of
+            // running under the pictures.
+            Rectangle {
+                visible: root.impliedTags.length > 0
+                Layout.fillWidth: true
+                Layout.leftMargin: -root.padding
+                Layout.rightMargin: root.samplePaths.length > 0 ? 0 : -root.padding
+                implicitHeight: 1
+                color: sysp.mid
+            }
+
+            // Tags that applying this one will also add (implication closure), grouped
+            // by category under a tinted sub-heading.
+            ColumnLayout {
+                visible: root.impliedTags.length > 0
+                spacing: 6
+                Repeater {
+                    model: root.impliedGroups
+                    delegate: ColumnLayout {
+                        id: grp
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 3
+
+                        // Category name, tinted with the category's color (neutral for
+                        // the uncategorized group).
+                        Label {
+                            readonly property int slot: grp.modelData.tags[0].colorSlot
+                            text: grp.modelData.category !== "" ? grp.modelData.category
+                                                                : qsTr("Uncategorized")
+                            font.pixelSize: 10
+                            font.capitalization: Font.AllUppercase
+                            color: slot >= 0 ? root.swatch(slot) : sysp.placeholderText
+                        }
+                        Flow {
+                            Layout.maximumWidth: 260
+                            Layout.preferredWidth: 260
+                            spacing: 4
+                            Repeater {
+                                model: grp.modelData.tags
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    readonly property bool categorized: modelData.colorSlot >= 0
+                                    readonly property color tint: root.swatch(modelData.colorSlot)
+                                    implicitHeight: 22
+                                    implicitWidth: chipText.implicitWidth + 14
+                                    radius: height / 2
+                                    color: categorized ? Qt.alpha(tint, 0.18) : sysp.alternateBase
+                                    border.width: 1
+                                    border.color: categorized ? tint : sysp.mid
+                                    Label {
+                                        id: chipText
+                                        anchors.centerIn: parent
+                                        text: parent.modelData.name
+                                        font.pixelSize: 11
+                                        color: sysp.text
+                                    }
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Sample photos carrying the tag, stacked on the right. Each tile is a
+        // square crop served by the thumbnail provider at 2x for HiDPI (the
+        // provider snaps that onto the grid's own size ladder, so these mostly
+        // come straight from the gallery's cache).
+        ColumnLayout {
+            visible: root.samplePaths.length > 0
+            Layout.alignment: Qt.AlignTop
+            spacing: 6
+            Repeater {
+                model: root.samplePaths
+                delegate: Rectangle {
+                    id: tile
+                    required property string modelData
+                    implicitWidth: root.sampleSize
+                    implicitHeight: root.sampleSize
+                    radius: 3
+                    color: sysp.alternateBase
+                    border.width: 1
+                    border.color: sysp.mid
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        source: "image://thumbs/" + (root.sampleSize * 2) + "/"
+                                + encodeURIComponent(tile.modelData)
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        cache: true
                     }
                 }
             }

@@ -277,6 +277,26 @@ public:
     // paths. Lets the folder view show only folders holding the filtered photos.
     QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll);
 
+    // --- Tag samples (the tag-popover thumbnails) ---
+    // Up to `limit` paths of active photos carrying `tagId`, chosen so the set
+    // shows the tag at its richest and most varied: a greedy pick where each
+    // photo scores by how many of its (user-visible) tags the already-chosen
+    // photos don't cover, plus kFavoriteSampleBonus when it's a favorite. The
+    // first pick is therefore the most-tagged photo (favorites get a head start of
+    // kFavoriteSampleBonus tags); the next prefers one that adds new tags over one
+    // that repeats the first's. Ties go to the newer capture, then the lower id.
+    // Photos sharing a content hash count once.
+    QStringList tagSamplePaths(int tagId, int limit);
+    // How many tags' worth of head start a favorite gets in that scoring: a
+    // non-favorite must carry more than this many extra (new) tags to outrank one.
+    static constexpr int kFavoriteSampleBonus = 3;
+    // The two halves of tagSamplePaths. tagSampleCandidates returns the strongest
+    // `poolSize` candidates by their standalone score (tag count + the favorite
+    // bonus), newest first on ties; pickTagSamples runs the greedy selection over
+    // such a pool (dropping duplicate content first) and keeps its order for ties.
+    QVector<TagSampleCandidate> tagSampleCandidates(int tagId, int poolSize);
+    static QStringList pickTagSamples(const QVector<TagSampleCandidate> &pool, int limit);
+
     // Ids of every photo in the active (shown) set — orphans plus photos under an
     // enabled folder. Used to scope "export all" and the sidecar flush so a
     // disabled folder is never written to.

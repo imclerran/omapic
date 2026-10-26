@@ -15,6 +15,9 @@ Rectangle {
     property var library
     property var selectedIds: []
     property color accent: "#4a90d9"
+    // Sample-photo lookup for the add-a-tag info popover (null = no thumbnails);
+    // Main supplies it while the setting is on.
+    property var tagSampleFn: null
     // Optional wrapper that preserves the gallery scroll across a tag edit (a
     // large edit reloads the photo model, which would otherwise jump the grid).
     property var tagScrollGuard: null
@@ -557,6 +560,7 @@ Rectangle {
                     categoryColorFn: root.categoryColor
                     aliases: root.aliasList
                     implications: root.implicationList
+                    sampleFn: root.tagSampleFn
                     active: suggestionPopup.visible && tagInput.highlighted >= 0
                             && tagInput.highlighted < tagInput.suggestions.length
                     tagName: active ? tagInput.suggestions[tagInput.highlighted].name : ""

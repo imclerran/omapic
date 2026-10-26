@@ -162,6 +162,19 @@ struct PhotoRowSnapshot {
     qint64 size = 0;
 };
 
+// One photo carrying a tag, as a candidate for that tag's sample thumbnails
+// (see Database::tagSampleCandidates / pickTagSamples). tagIds holds its
+// user-visible tags other than the sampled tag itself, which every candidate
+// shares and so says nothing about how the photos differ.
+struct TagSampleCandidate {
+    int id = -1;
+    QString path;
+    QString hash;       // content hash ("" when not yet hashed), to drop duplicate copies
+    qint64 takenAt = 0; // capture time, 0 = unknown
+    bool favorite = false;
+    QSet<int> tagIds;
+};
+
 struct FolderInfo {
     int id = -1;
     QString path;

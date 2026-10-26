@@ -1684,6 +1684,14 @@ QVariantList Library::tagSuggestions() const
     return out;
 }
 
+QStringList Library::tagSamplePaths(const QString &name, int limit) const
+{
+    const int tagId = m_db.resolveTagName(name);
+    if (tagId < 0)
+        return {};
+    return m_db.tagSamplePaths(tagId, limit);
+}
+
 QVariantList Library::categories() const
 {
     // Hide categories whose tags are all in hidden/removed folders, mirroring how
