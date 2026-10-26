@@ -67,9 +67,11 @@ Item {
         id: field
         anchors.fill: parent
         placeholderText: root.placeholderText
-        // '|' is the XMP sidecar hierarchy separator, so it can't be part of a
-        // tag name; reject it on entry (the backend also strips it as a safety net).
-        validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
+        // The name rules, enforced on entry (the backend sanitizes as a safety
+        // net): no '|' (the XMP sidecar hierarchy separator), no '"' (the query
+        // language's quote, which has no escape), and no leading or doubled
+        // whitespace (names are trimmed and single-spaced).
+        validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
 
         property var suggestions: []
         property int highlighted: -1

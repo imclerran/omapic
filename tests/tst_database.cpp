@@ -60,6 +60,7 @@ private slots:
     void activePhotoIdsExcludeDisabledFolders();
     void retentionPrunesOrphansOlderThanCutoff();
     void nameInputStripsPipe();
+    void nameInputReplacesQuotesAndCollapsesWhitespace();
 
     // Folders / active set
     void orphanPhotosAreActive();
@@ -645,6 +646,37 @@ void TestDatabase::activePhotoIdsExcludeDisabledFolders()
 }
 
 // --- Folders / active set ---------------------------------------------------
+
+void TestDatabase::nameInputReplacesQuotesAndCollapsesWhitespace()
+{
+    // '"' can't be quoted in a query, so it becomes a typographic quote (opening
+    // at the start / after whitespace or '(', closing elsewhere); whitespace runs
+    // collapse and the ends are trimmed. Applies to tags, categories, albums,
+    // smart albums and aliases alike.
+    const int tag = m_db->ensureTag(QStringLiteral("  \"say\"   (\"hi\")\t there  "));
+    QCOMPARE(m_db->tagName(tag), QString::fromUtf8("\u201csay\u201d (\u201chi\u201d) there"));
+    // The same raw text resolves to the same tag again (no duplicate).
+    QCOMPARE(m_db->ensureTag(QStringLiteral("\"say\" (\"hi\") there")), tag);
+    m_db->renameTag(tag, QStringLiteral("a\"b"));
+    QCOMPARE(m_db->tagName(tag), QString::fromUtf8("a\u201db"));
+
+    const int cat = m_db->insertCategory(QStringLiteral(" Place   \"x\" "), 0);
+    QVERIFY(cat > 0);
+    QCOMPARE(m_db->categoryName(cat), QString::fromUtf8("Place \u201cx\u201d"));
+
+    const int album = m_db->createAlbum(QStringLiteral("\"Trip\"  2019"));
+    QVERIFY(album > 0);
+    QCOMPARE(m_db->albumTags().last().name, QString::fromUtf8("\u201cTrip\u201d 2019"));
+
+    const int smart = m_db->createSmartAlbum(QStringLiteral("Best  \"of\""), {tag}, true);
+    QVERIFY(smart > 0);
+    QCOMPARE(m_db->smartAlbum(smart).name, QString::fromUtf8("Best \u201cof\u201d"));
+
+    QVERIFY(m_db->createAlias(QStringLiteral("the   \"one\""), tag));
+    QCOMPARE(m_db->loadAliases().first().aliasName, QString::fromUtf8("the \u201cone\u201d"));
+    QCOMPARE(m_db->resolveTagName(QStringLiteral("the \"one\"")), -1); // raw text isn't the alias
+    QCOMPARE(m_db->resolveTagName(QString::fromUtf8("the \u201cone\u201d")), tag);
+}
 
 void TestDatabase::orphanPhotosAreActive()
 {

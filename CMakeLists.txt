@@ -9,6 +9,19 @@ find_package(exiv2 REQUIRED) # EXIF/metadata for the details pane
 
 qt_standard_project_setup(REQUIRES 6.5)
 
+# The core library: the pure-logic layer with no GUI or QML dependency — text
+# folding, the SQLite library, and the OQL query engine. The app, the tests and
+# the command-line tool all link it, so the query language reads the same
+# everywhere and can be exercised without a display.
+add_library(omapic-core STATIC
+    src/photo.h
+    src/textfold.h src/textfold.cpp
+    src/database.h src/database.cpp
+    src/oql.h src/oqlsyntax.h src/oql.cpp src/oqlparser.cpp
+)
+target_include_directories(omapic-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(omapic-core PUBLIC Qt6::Core Qt6::Sql)
+
 qt_add_executable(omapic
     src/main.cpp
 )
@@ -38,11 +51,9 @@ qt_add_qml_module(omapic
         qml/TriageSidebar.qml
         qml/TriageView.qml
     SOURCES
-        src/photo.h
-        src/database.h src/database.cpp
         src/photomodel.h src/photomodel.cpp
         src/photofiltermodel.h src/photofiltermodel.cpp
-        src/textfold.h src/textfold.cpp
+        src/textmatch.h
         src/photometadata.h src/photometadata.cpp
         src/tagmodel.h src/tagmodel.cpp
         src/library.h src/library.cpp
@@ -57,7 +68,7 @@ qt_add_qml_module(omapic
 
 target_include_directories(omapic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(omapic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia Qt6::Concurrent Qt6::DBus Exiv2::exiv2lib)
+target_link_libraries(omapic PRIVATE omapic-core Qt6::Quick Qt6::QuickControls2 Qt6::Sql Qt6::Gui Qt6::Multimedia Qt6::Concurrent Qt6::DBus Exiv2::exiv2lib)
 
 # Unit tests for the logic layer. On by default; configure with
 # -DOMAPIC_BUILD_TESTS=OFF to skip them (e.g. in the packaging build). Run with
