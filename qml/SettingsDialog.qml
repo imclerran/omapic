@@ -200,6 +200,14 @@ Dialog {
                 }
 
                 Switch {
+                    text: qsTr("Show sample photos in tag suggestions")
+                    checked: root.gallerySettings ? root.gallerySettings.tagPopoverThumbs : false
+                    onToggled: if (root.gallerySettings) root.gallerySettings.tagPopoverThumbs = checked
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Add two thumbnails of photos carrying the highlighted tag to its info panel: the most-tagged (favorites get a head start), then one adding tags the first lacks")
+                }
+
+                Switch {
                     text: qsTr("Write tags to XMP sidecars automatically")
                     checked: root.gallerySettings ? root.gallerySettings.writeSidecars : false
                     onToggled: if (root.gallerySettings) root.gallerySettings.writeSidecars = checked

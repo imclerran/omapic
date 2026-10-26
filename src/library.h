@@ -202,6 +202,12 @@ public:
     // Tags relevant to the active set as {name, colorSlot, categoryName}, for the
     // color-coded autocomplete.
     Q_INVOKABLE QVariantList tagSuggestions() const;
+    // Up to `limit` file paths of photos carrying the tag `name` (an alias resolves
+    // to its canonical tag), chosen to show the tag at its richest and most
+    // varied: the most-tagged photo first (favorites get a head start), then
+    // photos adding tags the earlier picks lack. See Database::tagSamplePaths.
+    // Feeds the optional thumbnails on the tag-info popover.
+    Q_INVOKABLE QStringList tagSamplePaths(const QString &name, int limit) const;
 
     // --- Tag categories ---
     // Create a category, auto-picking the first palette slot no other category

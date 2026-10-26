@@ -33,6 +33,13 @@ ApplicationWindow {
     readonly property int thumbIndex: Math.max(0, Math.min(thumbSizes.length - 1, gallerySettings.thumbIndex))
     readonly property int cellSize: thumbSizes[thumbIndex]
 
+    // Sample photos for the tag-info popover (the autocomplete's side panel): the
+    // two best photos carrying a tag (most-tagged and most varied, favorites
+    // boosted). Hosts get the lookup only while the setting is on; null leaves
+    // the popover text-only.
+    function tagSamples(name) { return library.tagSamplePaths(name, 2) }
+    readonly property var tagSampleFn: gallerySettings.tagPopoverThumbs ? win.tagSamples : null
+
     // Below this window width the four-view segmented bar can't share the toolbar
     // with the other controls, so it collapses to a single current-view button
     // that opens a vertical bar popup. Tunable.
@@ -1381,6 +1388,9 @@ ApplicationWindow {
         property bool writeSidecars: false
         // How long to keep a removed file's tags, in days (0 = forever).
         property int tagRetentionDays: 0
+        // Show two sample photos beside a highlighted tag suggestion. Off by
+        // default: it adds a lookup per highlight and widens the panel.
+        property bool tagPopoverThumbs: false
     }
 
     // Keep the gallery sort order in step with the saved setting (also applies it
@@ -1520,6 +1530,7 @@ ApplicationWindow {
         sourceComponent: TagManager {
             library: library
             accent: win.accent
+            tagSampleFn: win.tagSampleFn
             // Renaming or deleting a tag refreshes the photo model, which would
             // drop the gallery's scroll; keep it in place across the mutation.
             galleryScrollGuard: win.withPreservedGalleryScroll
@@ -2099,6 +2110,7 @@ ApplicationWindow {
                     library: library
                     selectedIds: win.selectedIds
                     accent: win.accent
+                    tagSampleFn: win.tagSampleFn
                     // Keep the gallery from jumping when a tag edit reloads the model.
                     tagScrollGuard: win.withPreservedGalleryScrollTagging
                     // Tab cycle: add-a-tag → tag filter; Shift+Tab → main search.
@@ -2128,6 +2140,7 @@ ApplicationWindow {
                 library: library
                 session: triage
                 accent: win.accent
+                tagSampleFn: win.tagSampleFn
                 photoId: triage.currentId
                 onApplyTagRequested: (name) => win.triageApply(name)
                 onRemoveTagRequested: (tagId, tagName) => win.triageRemoveTag(tagId, tagName)

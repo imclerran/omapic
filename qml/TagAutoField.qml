@@ -25,6 +25,9 @@ Item {
     // consequentCategoryName }]. Drives the highlighted-entry info panel. Empty
     // disables it.
     property var implications: []
+    // function(tagName) -> [filePath, …] for the info panel's sample thumbnails
+    // (see TagInfoPopover.sampleFn); null (the default) shows none.
+    property var sampleFn: null
     // Lower-cased names to leave out of the suggestions (tags already on the
     // photo, say). Empty excludes nothing.
     property var excludeNames: []
@@ -227,6 +230,7 @@ Item {
             aliases: root.aliases
             implications: root.implications
             categoryColorFn: root.categoryColorFn
+            sampleFn: root.sampleFn
             active: pop.visible && field.highlighted >= 0
                     && field.highlighted < field.suggestions.length
             tagName: active ? field.suggestions[field.highlighted].name : ""

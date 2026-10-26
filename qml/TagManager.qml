@@ -13,6 +13,9 @@ Dialog {
 
     property var library
     property color accent: "#4a90d9"
+    // Sample-photo lookup for the tag pickers' info popover (null = no
+    // thumbnails); Main supplies it while the setting is on.
+    property var tagSampleFn: null
 
     // Optional callback(fn) supplied by the parent that runs fn while keeping the
     // main picture gallery's scroll position — tag edits reset the photo model.
@@ -1012,6 +1015,7 @@ Dialog {
                         aliases: root.aliases
                         implications: root.implications
                         categoryColorFn: root.categoryColor
+                        sampleFn: root.tagSampleFn
                         onAccepted: conField.focusInput()
                     }
                     Label { text: qsTr("also add") }
@@ -1023,6 +1027,7 @@ Dialog {
                         aliases: root.aliases
                         implications: root.implications
                         categoryColorFn: root.categoryColor
+                        sampleFn: root.tagSampleFn
                         onAccepted: parent.submit()
                     }
                     Button {
@@ -1221,6 +1226,7 @@ Dialog {
                         placeholderText: qsTr("this tag…")
                         tags: root.allTags
                         categoryColorFn: root.categoryColor
+                        sampleFn: root.tagSampleFn
                         onTextChanged: aliasesTab.confirmPending = false
                         onAccepted: aliasField.forceActiveFocus()
                     }

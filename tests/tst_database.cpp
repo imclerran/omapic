@@ -71,6 +71,8 @@ private slots:
     void loadTagsListsActiveTagsWithTotalCount();
     void activeTagsCountsOverActiveSetOnly();
     void activeTagsFolderScopeRestrictsToSubtree();
+    void tagSamplePathsScoreCandidatesOverActiveSet();
+    void pickTagSamplesGreedyCoverageWithFavoriteBonus();
     void coOccurringTagsNarrowsBySelection();
     void loadFoldersCountsSubtreePhotos();
     void loadCategoriesActiveOnlyAndSystemExclusion();
@@ -783,6 +785,119 @@ void TestDatabase::activeTagsFolderScopeRestrictsToSubtree()
     // separator in the scope match keeps the sibling folder out.
     QVERIFY(!scoped.contains(QStringLiteral("sib")));
     QVERIFY(!scoped.contains(QStringLiteral("out")));
+}
+
+void TestDatabase::tagSamplePathsScoreCandidatesOverActiveSet()
+{
+    // The query half: candidates come from the active set only, carry the right
+    // favorite flag and non-system tag set (the sampled tag itself left out), and
+    // rank by tag count + the favorite bonus, newest first on ties.
+    const int dog = m_db->ensureTag(QStringLiteral("dog"));
+    const int park = m_db->ensureTag(QStringLiteral("park"));
+    const int ball = m_db->ensureTag(QStringLiteral("ball"));
+    const int album = m_db->createAlbum(QStringLiteral("Trip"));
+    QVERIFY(album > 0);
+
+    // A favorite with only the sampled tag: 0 tags + bonus 3.
+    const int fav = m_db->insertPhoto(QStringLiteral("/p/fav.jpg"), QString(), 10);
+    m_db->linkPhotoTag(fav, dog);
+    m_db->linkPhotoTag(fav, m_db->favoritesTagId());
+    // Two other tags (score 2), plus a byte-identical copy tagged the same way.
+    const int rich = m_db->insertPhoto(QStringLiteral("/p/rich.jpg"), QStringLiteral("h-rich"), 20);
+    const int dup = m_db->insertPhoto(QStringLiteral("/p/rich-copy.jpg"), QStringLiteral("h-rich"), 20);
+    for (int id : {rich, dup}) {
+        m_db->linkPhotoTag(id, dog);
+        m_db->linkPhotoTag(id, park);
+        m_db->linkPhotoTag(id, ball);
+    }
+    // One other tag each (score 1): the newer capture ranks first.
+    const int newer = m_db->insertPhoto(QStringLiteral("/p/newer.jpg"), QString(), 300);
+    const int older = m_db->insertPhoto(QStringLiteral("/p/older.jpg"), QString(), 200);
+    for (int id : {newer, older}) {
+        m_db->linkPhotoTag(id, dog);
+        m_db->linkPhotoTag(id, park);
+    }
+    // Album membership is a hidden system tag: it counts for nothing (score 0),
+    // so the newest photo of all still ranks last.
+    const int inAlbum = m_db->insertPhoto(QStringLiteral("/p/album.jpg"), QString(), 900);
+    m_db->linkPhotoTag(inAlbum, dog);
+    m_db->linkPhotoTag(inAlbum, album);
+    // Not a dog photo (even as a favorite): never a candidate for "dog".
+    const int other = m_db->insertPhoto(QStringLiteral("/p/other.jpg"), QString(), 999);
+    m_db->linkPhotoTag(other, park);
+    m_db->linkPhotoTag(other, m_db->favoritesTagId());
+
+    const QVector<TagSampleCandidate> pool = m_db->tagSampleCandidates(dog, 10);
+    QStringList order;
+    for (const TagSampleCandidate &c : pool)
+        order.append(c.path);
+    QCOMPARE(order, (QStringList{QStringLiteral("/p/fav.jpg"), QStringLiteral("/p/rich.jpg"),
+                                 QStringLiteral("/p/rich-copy.jpg"), QStringLiteral("/p/newer.jpg"),
+                                 QStringLiteral("/p/older.jpg"), QStringLiteral("/p/album.jpg")}));
+    QVERIFY(pool[0].favorite);
+    QVERIFY(pool[0].tagIds.isEmpty());          // "dog" itself and Favorites are left out
+    QCOMPARE(pool[1].tagIds, (QSet<int>{park, ball}));
+    QCOMPARE(pool[1].hash, QStringLiteral("h-rich"));
+    QVERIFY(!pool[5].favorite);
+    QVERIFY(pool[5].tagIds.isEmpty());          // the album tag doesn't count
+    // The pool size caps the ranking, keeping the top.
+    QCOMPARE(m_db->tagSampleCandidates(dog, 2).size(), 2);
+
+    // End to end: the favorite's head start wins the first slot, the two-tag photo
+    // adds the most new tags for the second, and the duplicate copy never shows.
+    QCOMPARE(m_db->tagSamplePaths(dog, 2),
+             (QStringList{QStringLiteral("/p/fav.jpg"), QStringLiteral("/p/rich.jpg")}));
+    QCOMPARE(m_db->tagSamplePaths(dog, 10).size(), 5);
+    QVERIFY(!m_db->tagSamplePaths(dog, 10).contains(QStringLiteral("/p/rich-copy.jpg")));
+    // Degenerate requests.
+    QVERIFY(m_db->tagSamplePaths(dog, 0).isEmpty());
+    QVERIFY(m_db->tagSamplePaths(-1, 2).isEmpty());
+
+    // Only active photos qualify: hide the folder and the samples go with it.
+    const int folder = m_db->insertFolder(QStringLiteral("/p"));
+    QCOMPARE(m_db->tagSamplePaths(dog, 2).size(), 2);
+    m_db->setFolderEnabled(folder, false);
+    QVERIFY(m_db->tagSamplePaths(dog, 2).isEmpty());
+}
+
+void TestDatabase::pickTagSamplesGreedyCoverageWithFavoriteBonus()
+{
+    // The selection half, on a hand-built pool already in standalone-score order
+    // (tag count + 3 for a favorite; ties newest first).
+    auto cand = [](int id, const char *path, bool favorite, QSet<int> tags,
+                   const char *hash = "") {
+        TagSampleCandidate c;
+        c.id = id;
+        c.path = QString::fromLatin1(path);
+        c.hash = QString::fromLatin1(hash);
+        c.favorite = favorite;
+        c.tagIds = std::move(tags);
+        return c;
+    };
+    const QVector<TagSampleCandidate> pool{
+        cand(1, "rich", false, {1, 2, 3, 4, 5}, "h"),      // 5: beats the favorite's 0 + 3
+        cand(2, "rich-copy", false, {1, 2, 3, 4, 5}, "h"), // same content as rich: skipped
+        cand(3, "varied", false, {6, 7, 8, 9}),            // 4, all new after rich
+        cand(4, "fav", true, {1}),                         // 1 + 3 = 4, nothing new after rich
+        cand(5, "similar", false, {1, 2, 3, 6}),           // 4, mostly repeats rich
+        cand(6, "small", false, {7, 8}),                   // 2
+    };
+
+    // Favorites weigh in rather than winning outright: the five-tag photo takes
+    // the first slot over the one-tag favorite.
+    QCOMPARE(Database::pickTagSamples(pool, 1), QStringList{QStringLiteral("rich")});
+    // Second slot: "varied" adds four tags rich lacks (4) and beats the favorite
+    // (0 new + 3) and the look-alike (1 new), despite equal standalone scores.
+    QCOMPARE(Database::pickTagSamples(pool, 2),
+             (QStringList{QStringLiteral("rich"), QStringLiteral("varied")}));
+    // With 1-9 covered, the favorite's bonus is all that's left to score; the two
+    // remaining non-favorites tie at zero and keep pool order.
+    QCOMPARE(Database::pickTagSamples(pool, 10),
+             (QStringList{QStringLiteral("rich"), QStringLiteral("varied"),
+                          QStringLiteral("fav"), QStringLiteral("similar"),
+                          QStringLiteral("small")}));
+    QVERIFY(Database::pickTagSamples(pool, 0).isEmpty());
+    QVERIFY(Database::pickTagSamples({}, 2).isEmpty());
 }
 
 void TestDatabase::coOccurringTagsNarrowsBySelection()

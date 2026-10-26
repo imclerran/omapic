@@ -873,6 +873,122 @@ QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matc
     return paths;
 }
 
+QVector<TagSampleCandidate> Database::tagSampleCandidates(int tagId, int poolSize)
+{
+    QVector<TagSampleCandidate> pool;
+    if (tagId < 0 || poolSize <= 0)
+        return pool;
+
+    // Every active photo carrying the tag, with its favorite flag and its other
+    // user-visible tags (as a packed id list), ranked by standalone score: the
+    // count of those tags plus the favorite bonus, then newest capture, then id
+    // for a stable order. A richly tagged photo is likelier to be a well-chosen,
+    // representative one. Only the top of that ranking is handed back — the
+    // greedy picker (pickTagSamples) can't do better than a candidate's own score,
+    // so a small pool loses nothing worth showing.
+    QSqlQuery q(m_db);
+    q.setForwardOnly(true);
+    q.prepare(QStringLiteral(
+                  "WITH cand AS ("
+                  "  SELECT p.id AS id, p.path AS path, p.hash AS hash, "
+                  "    COALESCE(p.taken_at, 0) AS taken, "
+                  "    EXISTS (SELECT 1 FROM photo_tags fv "
+                  "      WHERE fv.photo_id = p.id AND fv.tag_id = ?) AS fav, "
+                  "    (SELECT COUNT(*) FROM photo_tags c JOIN tags t ON t.id = c.tag_id "
+                  "      WHERE c.photo_id = p.id AND c.tag_id <> ? AND %2) AS n, "
+                  "    (SELECT group_concat(c.tag_id) FROM photo_tags c JOIN tags t ON t.id = c.tag_id "
+                  "      WHERE c.photo_id = p.id AND c.tag_id <> ? AND %2) AS tag_ids "
+                  "  FROM photos p "
+                  "  WHERE %1 AND EXISTS (SELECT 1 FROM photo_tags pt "
+                  "    WHERE pt.photo_id = p.id AND pt.tag_id = ?)) "
+                  "SELECT id, path, hash, taken, fav, tag_ids FROM cand "
+                  "ORDER BY n + fav * ? DESC, taken DESC, id LIMIT ?")
+                  .arg(activeClause(QStringLiteral("p")),
+                       nonSystemTagClause(QStringLiteral("t"))));
+    q.addBindValue(m_favoritesTagId);
+    q.addBindValue(tagId);
+    q.addBindValue(tagId);
+    q.addBindValue(tagId);
+    q.addBindValue(kFavoriteSampleBonus);
+    q.addBindValue(poolSize);
+    q.exec();
+
+    while (q.next()) {
+        TagSampleCandidate c;
+        c.id = q.value(0).toInt();
+        c.path = q.value(1).toString();
+        c.hash = q.value(2).toString();
+        c.takenAt = q.value(3).toLongLong();
+        c.favorite = q.value(4).toInt() != 0;
+        const QString packed = q.value(5).toString();
+        if (!packed.isEmpty()) {
+            for (QStringView part : QStringView(packed).split(QLatin1Char(',')))
+                c.tagIds.insert(part.toInt());
+        }
+        pool.append(c);
+    }
+    return pool;
+}
+
+QStringList Database::pickTagSamples(const QVector<TagSampleCandidate> &pool, int limit)
+{
+    // Duplicate copies of one image (same content hash) carry the same tags, so
+    // only the first by pool order competes; the rest would merely repeat it.
+    QVector<const TagSampleCandidate *> cands;
+    QSet<QString> seenHashes;
+    for (const TagSampleCandidate &c : pool) {
+        if (!c.hash.isEmpty()) {
+            if (seenHashes.contains(c.hash))
+                continue;
+            seenHashes.insert(c.hash);
+        }
+        cands.append(&c);
+    }
+
+    // Greedy coverage: each round takes the candidate that adds the most tags
+    // not yet covered by the picks so far (plus the favorite bonus), so the set
+    // as a whole shows as many of the tag's companions as it can. The pool is
+    // already in standalone-score order (then newest, then id), and only a
+    // strictly better score displaces the earlier candidate, so ties fall back
+    // to exactly that order.
+    QStringList out;
+    QSet<int> covered;
+    QVector<bool> used(cands.size(), false);
+    while (out.size() < limit) {
+        int best = -1;
+        int bestScore = -1;
+        for (int i = 0; i < cands.size(); ++i) {
+            if (used[i])
+                continue;
+            int score = cands[i]->favorite ? kFavoriteSampleBonus : 0;
+            for (int t : cands[i]->tagIds) {
+                if (!covered.contains(t))
+                    ++score;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = i;
+            }
+        }
+        if (best < 0)
+            break;
+        used[best] = true;
+        out.append(cands[best]->path);
+        covered.unite(cands[best]->tagIds);
+    }
+    return out;
+}
+
+QStringList Database::tagSamplePaths(int tagId, int limit)
+{
+    if (tagId < 0 || limit <= 0)
+        return {};
+    // A pool a good deal larger than the request gives the diversity pass real
+    // alternatives to the top-scoring photos (and spare rows for duplicates).
+    constexpr int kPoolSize = 24;
+    return pickTagSamples(tagSampleCandidates(tagId, qMax(kPoolSize, limit)), limit);
+}
+
 QList<int> Database::activePhotoIds()
 {
     QList<int> ids;

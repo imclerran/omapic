@@ -22,6 +22,9 @@ Rectangle {
     property var library
     property var session         // the TriageSession
     property color accent: "#4a90d9"
+    // Sample-photo lookup for the add-a-tag info popover (null = no thumbnails);
+    // Main supplies it while the setting is on.
+    property var tagSampleFn: null
     // The photo being triaged (-1 once the queue is exhausted).
     property int photoId: -1
 
@@ -174,6 +177,7 @@ Rectangle {
             implications: root.implicationList
             excludeNames: root.appliedLower
             categoryColorFn: root.categoryColor
+            sampleFn: root.tagSampleFn
             commitOnPick: true
             // Enter: a highlighted suggestion was picked, or a name was typed →
             // apply and stay; an empty field → advance.
