@@ -2619,7 +2619,8 @@ ApplicationWindow {
         anchors.centerIn: parent
         modal: true
         width: Math.min(640, win.width - 48)
-        height: Math.min(420, win.height - 48)
+        // Height follows the content: the chip row grows as chips wrap, and the
+        // footer sits right under it.
         standardButtons: mode === "advanced" ? Dialog.Close : (Dialog.Ok | Dialog.Cancel)
 
         readonly property bool formValid: builder.valid && smartNameField.text.trim().length > 0
@@ -2663,8 +2664,7 @@ ApplicationWindow {
                 win.toast(err)
         }
 
-        ColumnLayout {
-            anchors.fill: parent
+        contentItem: ColumnLayout {
             spacing: 8
             TextField {
                 id: smartNameField
@@ -2698,7 +2698,6 @@ ApplicationWindow {
                          + "Type ( for a group, - for NOT, | for OR, is: / album: / cat: for predicates. "
                          + "NOT binds tightest, then OR, then AND.")
             }
-            Item { Layout.fillHeight: true }
             RowLayout {
                 visible: smartAlbumDialog.mode === "advanced"
                 Layout.fillWidth: true
