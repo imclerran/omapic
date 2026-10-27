@@ -8,6 +8,9 @@
 #include "textfold.h"
 
 #include <QChar>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonValue>
 
 namespace oql {
 
@@ -359,6 +362,338 @@ bool matches(const Node &n, const QSet<int> &photoTags, const EvalContext &ctx)
         return false;
     }
     return false;
+}
+
+// --- Tag sets -------------------------------------------------------------------
+
+Node fromTagSet(const QList<int> &tagIds, bool matchAll, const Vocabulary *vocab)
+{
+    QVector<Node> leaves;
+    for (int id : tagIds)
+        leaves.append(Node::tag(id, vocab ? vocab->name(NameKind::Tag, id) : QString()));
+    if (leaves.size() == 1)
+        return leaves.first();
+    return matchAll ? Node::andOf(leaves) : Node::orOf(leaves);
+}
+
+bool asTagSet(const Node &root, QList<int> &tagIds, bool &matchAll)
+{
+    if (root.kind == NodeKind::Tag) {
+        tagIds = {root.id};
+        matchAll = true;
+        return true;
+    }
+    if (root.kind != NodeKind::And && root.kind != NodeKind::Or)
+        return false;
+    QList<int> ids;
+    for (const Node &c : root.children) {
+        if (c.kind != NodeKind::Tag)
+            return false;
+        ids.append(c.id);
+    }
+    tagIds = ids;
+    matchAll = root.kind == NodeKind::And;
+    return true;
+}
+
+// --- Persistence ----------------------------------------------------------------
+
+namespace {
+
+const char *kindKey(NodeKind k)
+{
+    switch (k) {
+    case NodeKind::Tag: return "tag";
+    case NodeKind::Album: return "album";
+    case NodeKind::SmartAlbum: return "smart";
+    case NodeKind::Category: return "cat";
+    case NodeKind::Favorite: return "fav";
+    case NodeKind::Untagged: return "untagged";
+    case NodeKind::Missing: return "missing";
+    case NodeKind::Not: return "not";
+    case NodeKind::And: return "and";
+    case NodeKind::Or: return "or";
+    }
+    return "";
+}
+
+bool kindFromKey(const QString &key, NodeKind &out)
+{
+    static const NodeKind all[] = {NodeKind::Tag, NodeKind::Album, NodeKind::SmartAlbum,
+                                   NodeKind::Category, NodeKind::Favorite, NodeKind::Untagged,
+                                   NodeKind::Missing, NodeKind::Not, NodeKind::And, NodeKind::Or};
+    for (NodeKind k : all) {
+        if (key == QLatin1String(kindKey(k))) {
+            out = k;
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *nameKindKey(NameKind k)
+{
+    switch (k) {
+    case NameKind::Tag: return "tag";
+    case NameKind::Album: return "album";
+    case NameKind::SmartAlbum: return "smart";
+    case NameKind::Category: return "cat";
+    }
+    return "tag";
+}
+
+NameKind nameKindFromKey(const QString &key)
+{
+    if (key == QLatin1String("album")) return NameKind::Album;
+    if (key == QLatin1String("smart")) return NameKind::SmartAlbum;
+    if (key == QLatin1String("cat")) return NameKind::Category;
+    return NameKind::Tag;
+}
+
+} // namespace
+
+QJsonObject toJson(const Node &n)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("k"), QLatin1String(kindKey(n.kind)));
+    switch (n.kind) {
+    case NodeKind::Tag:
+    case NodeKind::Album:
+    case NodeKind::SmartAlbum:
+    case NodeKind::Category:
+        o.insert(QStringLiteral("id"), n.id);
+        if (!n.name.isEmpty())
+            o.insert(QStringLiteral("n"), n.name);
+        break;
+    case NodeKind::Missing:
+        o.insert(QStringLiteral("n"), n.name);
+        o.insert(QStringLiteral("was"), QLatin1String(nameKindKey(n.was)));
+        break;
+    case NodeKind::Favorite:
+    case NodeKind::Untagged:
+        break;
+    case NodeKind::Not:
+    case NodeKind::And:
+    case NodeKind::Or: {
+        QJsonArray c;
+        for (const Node &child : n.children)
+            c.append(toJson(child));
+        o.insert(QStringLiteral("c"), c);
+        break;
+    }
+    }
+    return o;
+}
+
+bool fromJson(const QJsonObject &o, Node &out)
+{
+    Node n;
+    if (!kindFromKey(o.value(QStringLiteral("k")).toString(), n.kind))
+        return false;
+    switch (n.kind) {
+    case NodeKind::Tag:
+    case NodeKind::Album:
+    case NodeKind::SmartAlbum:
+    case NodeKind::Category: {
+        const QJsonValue id = o.value(QStringLiteral("id"));
+        if (!id.isDouble())
+            return false;
+        n.id = id.toInt();
+        n.name = o.value(QStringLiteral("n")).toString();
+        break;
+    }
+    case NodeKind::Missing:
+        n.name = o.value(QStringLiteral("n")).toString();
+        n.was = nameKindFromKey(o.value(QStringLiteral("was")).toString());
+        break;
+    case NodeKind::Favorite:
+    case NodeKind::Untagged:
+        break;
+    case NodeKind::Not:
+    case NodeKind::And:
+    case NodeKind::Or: {
+        const QJsonValue c = o.value(QStringLiteral("c"));
+        if (!c.isArray())
+            return false;
+        for (const QJsonValue &v : c.toArray()) {
+            Node child;
+            if (!v.isObject() || !fromJson(v.toObject(), child))
+                return false;
+            n.children.append(child);
+        }
+        if (n.kind == NodeKind::Not && n.children.size() != 1)
+            return false;
+        break;
+    }
+    }
+    out = n;
+    return true;
+}
+
+QByteArray toJsonText(const Node &root)
+{
+    return QJsonDocument(toJson(root)).toJson(QJsonDocument::Compact);
+}
+
+bool fromJsonText(const QByteArray &text, Node &out)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(text);
+    return doc.isObject() && fromJson(doc.object(), out);
+}
+
+// --- Maintenance ----------------------------------------------------------------
+
+QSet<int> referencedIds(const Node &root, std::initializer_list<NodeKind> kinds)
+{
+    QSet<int> out;
+    std::function<void(const Node &)> walk = [&](const Node &n) {
+        for (NodeKind k : kinds)
+            if (n.kind == k && n.isLeaf())
+                out.insert(n.id);
+        for (const Node &c : n.children)
+            walk(c);
+    };
+    walk(root);
+    return out;
+}
+
+namespace {
+
+// Structural equality that ignores the recorded names of id-bearing leaves, so
+// `forest` and the merged-in `forests` (now the same id) count as one term.
+bool sameTerm(const Node &a, const Node &b)
+{
+    if (a.kind != b.kind || a.id != b.id || a.children.size() != b.children.size())
+        return false;
+    if (a.kind == NodeKind::Missing && (a.name != b.name || a.was != b.was))
+        return false;
+    for (int i = 0; i < a.children.size(); ++i)
+        if (!sameTerm(a.children.at(i), b.children.at(i)))
+            return false;
+    return true;
+}
+
+// Drop later duplicates among an AND/OR's children, and collapse a one-child
+// AND/OR to that child.
+void dedupeChildren(Node &n)
+{
+    for (Node &c : n.children)
+        dedupeChildren(c);
+    if (n.kind != NodeKind::And && n.kind != NodeKind::Or)
+        return;
+    QVector<Node> kept;
+    for (const Node &c : n.children) {
+        bool dup = false;
+        for (const Node &k : kept)
+            if (sameTerm(k, c)) { dup = true; break; }
+        if (!dup)
+            kept.append(c);
+    }
+    n.children = kept;
+    if (n.children.size() == 1)
+        n = n.children.first();
+}
+
+} // namespace
+
+bool replaceTagId(Node &root, int from, int to)
+{
+    bool changed = false;
+    std::function<void(Node &)> walk = [&](Node &n) {
+        if ((n.kind == NodeKind::Tag || n.kind == NodeKind::Album) && n.id == from) {
+            n.id = to;
+            changed = true;
+        }
+        for (Node &c : n.children)
+            walk(c);
+    };
+    walk(root);
+    if (changed)
+        dedupeChildren(root);
+    return changed;
+}
+
+bool markMissing(Node &root, NodeKind kind, int id, const QString &name)
+{
+    bool changed = false;
+    std::function<void(Node &)> walk = [&](Node &n) {
+        if (n.kind == kind && n.id == id) {
+            NameKind was = NameKind::Tag;
+            switch (kind) {
+            case NodeKind::Album: was = NameKind::Album; break;
+            case NodeKind::SmartAlbum: was = NameKind::SmartAlbum; break;
+            case NodeKind::Category: was = NameKind::Category; break;
+            default: break;
+            }
+            n = Node::missing(name, was);
+            changed = true;
+        }
+        for (Node &c : n.children)
+            walk(c);
+    };
+    walk(root);
+    return changed;
+}
+
+// --- Smart-album references ------------------------------------------------------
+
+namespace {
+
+Node expandInto(const Node &n, const SmartAlbumLookup &lookup, QVector<int> &stack,
+                QStringList *errors)
+{
+    if (n.kind == NodeKind::SmartAlbum) {
+        const Node *target = lookup(n.id);
+        if (!target)
+            return Node::missing(n.name, NameKind::SmartAlbum);
+        if (stack.contains(n.id)) {
+            if (errors)
+                errors->append(QStringLiteral("Smart album \"%1\" refers to itself through a chain of albums")
+                                   .arg(n.name));
+            return Node::missing(n.name, NameKind::SmartAlbum);
+        }
+        stack.append(n.id);
+        Node out = expandInto(*target, lookup, stack, errors);
+        stack.removeLast();
+        out.span = n.span;
+        return out;
+    }
+    Node out = n;
+    for (Node &c : out.children)
+        c = expandInto(c, lookup, stack, errors);
+    return out;
+}
+
+} // namespace
+
+Node expand(const Node &root, const SmartAlbumLookup &lookup, QStringList *errors, int selfId)
+{
+    QVector<int> stack;
+    if (selfId >= 0)
+        stack.append(selfId);
+    return expandInto(root, lookup, stack, errors);
+}
+
+bool wouldCycle(int albumId, const Node &query, const SmartAlbumLookup &lookup)
+{
+    // Depth-first over the reference graph from `query`, looking for albumId.
+    QSet<int> seen;
+    std::function<bool(const Node &)> reaches = [&](const Node &n) -> bool {
+        if (n.kind == NodeKind::SmartAlbum) {
+            if (n.id == albumId)
+                return true;
+            if (seen.contains(n.id))
+                return false;
+            seen.insert(n.id);
+            const Node *target = lookup(n.id);
+            return target && reaches(*target);
+        }
+        for (const Node &c : n.children)
+            if (reaches(c))
+                return true;
+        return false;
+    };
+    return reaches(query);
 }
 
 } // namespace oql

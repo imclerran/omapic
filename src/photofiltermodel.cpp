@@ -46,6 +46,7 @@ void PhotoFilterModel::setSelectedTagIds(const QList<int> &ids)
     if (next == m_selected)
         return;
     m_selected = next;
+    m_selectedQuery = oql::fromTagSet(ids, m_matchAll);
     invalidateRowFilter();
     emit selectedTagIdsChanged();
     emit countChanged();
@@ -56,6 +57,7 @@ void PhotoFilterModel::setMatchAll(bool on)
     if (m_matchAll == on)
         return;
     m_matchAll = on;
+    m_selectedQuery = oql::fromTagSet(selectedTagIds(), m_matchAll);
     invalidateRowFilter();
     emit matchAllChanged();
     emit countChanged();
@@ -134,14 +136,8 @@ void PhotoFilterModel::setDedupe(bool on)
 }
 
 void PhotoFilterModel::applyView(bool dedupe, int sortMode, bool sortAscending, bool folderMode,
-                                 const QString &folderPath, bool albumMode,
-                                 const QVariantList &albumTags, bool albumMatchAll)
+                                 const QString &folderPath, bool albumMode, int albumId)
 {
-    QList<int> tags;
-    tags.reserve(albumTags.size());
-    for (const QVariant &v : albumTags)
-        tags.append(v.toInt());
-
     const SortMode mode = static_cast<SortMode>(sortMode);
     bool changed = false;
     if (m_dedupe != dedupe) { m_dedupe = dedupe; emit dedupeChanged(); changed = true; }
@@ -150,12 +146,47 @@ void PhotoFilterModel::applyView(bool dedupe, int sortMode, bool sortAscending, 
     if (m_folderMode != folderMode) { m_folderMode = folderMode; emit folderModeChanged(); changed = true; }
     if (m_folderPath != folderPath) { m_folderPath = folderPath; emit folderPathChanged(); changed = true; }
     if (m_albumMode != albumMode) { m_albumMode = albumMode; changed = true; }
-    if (m_albumTags != tags) { m_albumTags = tags; changed = true; }
-    if (m_albumMatchAll != albumMatchAll) { m_albumMatchAll = albumMatchAll; changed = true; }
+    if (!albumMode)
+        albumId = 0;
+    if (m_albumId != albumId) { m_albumId = albumId; changed = true; }
+    if (albumMode && albumId > 0) {
+        // Resolve the album's query once here; filterAcceptsRow only evaluates.
+        const oql::Node query = m_albumResolver ? m_albumResolver(albumId) : oql::Node::andOf({});
+        if (query != m_albumQuery) { m_albumQuery = query; changed = true; }
+    }
     if (!changed)
         return;
     // One re-filter + re-sort against the final mode, rather than one per setter.
     invalidate();
+    emit countChanged();
+}
+
+void PhotoFilterModel::setAlbumQueryResolver(std::function<oql::Node(int)> resolver)
+{
+    m_albumResolver = std::move(resolver);
+    refreshAlbumQuery();
+}
+
+void PhotoFilterModel::setEvalContext(const oql::EvalContext &ctx)
+{
+    m_ctx = ctx;
+    // Only the album gate can depend on these (cat:, is:fav, is:untagged); the
+    // sidebar selection is a plain tag set.
+    if (m_albumMode && m_albumId > 0) {
+        invalidateRowFilter();
+        emit countChanged();
+    }
+}
+
+void PhotoFilterModel::refreshAlbumQuery()
+{
+    if (!m_albumMode || m_albumId <= 0 || !m_albumResolver)
+        return;
+    const oql::Node query = m_albumResolver(m_albumId);
+    if (query == m_albumQuery)
+        return;
+    m_albumQuery = query;
+    invalidateRowFilter();
     emit countChanged();
 }
 
@@ -178,7 +209,7 @@ void PhotoFilterModel::setAlbumTagIds(const QList<int> &ids)
         return;
     m_albumTagIds = next;
     // Only affects the flattened album-list search; re-filter there.
-    if (m_albumMode && m_albumTags.isEmpty() && !m_search.isEmpty()) {
+    if (m_albumMode && m_albumId <= 0 && !m_search.isEmpty()) {
         invalidateRowFilter();
         emit countChanged();
     }
@@ -352,28 +383,20 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
     }
 
     // Album-view gate (no-op outside album mode). Inside an album, require the
-    // photo to match the album's query — a regular album is a single-tag query,
-    // a smart album its saved (tag set + AND/OR). At the album-list level the grid
-    // is hidden, so show nothing unless a search is active — then flatten to every
-    // photo that belongs to some album (mirroring folder view's flattened search).
+    // photo to match the album's membership query (resolved in applyView: a
+    // regular album is one Album leaf, a smart album its expanded tree). At the
+    // album-list level the grid is hidden, so show nothing unless a search is
+    // active — then flatten to every photo that belongs to some album (mirroring
+    // folder view's flattened search).
     if (m_albumMode) {
         const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
-        if (!m_albumTags.isEmpty()) {
+        if (m_albumId > 0) {
             QSet<int> tags;
             tags.reserve(raw.size());
             for (const QVariant &v : raw)
                 tags.insert(v.toInt());
-            if (m_albumMatchAll) {
-                for (int t : m_albumTags)
-                    if (!tags.contains(t))
-                        return false;
-            } else {
-                bool any = false;
-                for (int t : m_albumTags)
-                    if (tags.contains(t)) { any = true; break; }
-                if (!any)
-                    return false;
-            }
+            if (!oql::matches(m_albumQuery, tags, m_ctx))
+                return false;
         } else {
             if (m_search.isEmpty())
                 return false; // album-list level shows tiles, not a photo grid
@@ -385,29 +408,15 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
         }
     }
 
-    // Tag filter.
+    // Tag filter: the sidebar selection as an AND/OR tree (see setSelectedTagIds).
     if (!m_selected.isEmpty()) {
         const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
         QSet<int> tags;
         tags.reserve(raw.size());
         for (const QVariant &v : raw)
             tags.insert(v.toInt());
-
-        if (m_matchAll) {
-            for (int t : m_selected)
-                if (!tags.contains(t))
-                    return false;
-        } else {
-            bool any = false;
-            for (int t : m_selected) {
-                if (tags.contains(t)) {
-                    any = true;
-                    break;
-                }
-            }
-            if (!any)
-                return false;
-        }
+        if (!oql::matches(m_selectedQuery, tags, m_ctx))
+            return false;
     }
 
     // Text search: match the file name or any tag name. The model pre-folds both

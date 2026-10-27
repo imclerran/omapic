@@ -8,7 +8,7 @@ A photo and video gallery for [Omarchy](https://omarchy.org), built around taggi
 - **Color-coded tag categories** — group tags (people, places, events, …), with colors pulled from your active Omarchy theme.
 - **Tag rules** — "if *beach*, then also *vacation*." Set it once and it applies across your whole library, and to everything you tag from then on.
 - **Tag aliases** — teach a second name to mean an existing tag ("forests" → *forest*). Typing the alias anywhere — tagging, search, import — applies the canonical tag, and aliasing a name that's already a tag merges the two.
-- **Albums, Favorites, and Smart Albums** — star favorites, build albums by hand, or save a tag search as a smart album that keeps itself up to date.
+- **Albums, Favorites, and Smart Albums** — star favorites, build albums by hand, or save a query as a smart album that keeps itself up to date — pick a set of tags, or write anything the [query language](#query-language-oql) can say.
 - **Drill into tags by folder** — pick a tag and the folder view narrows to just the folders that contain it.
 - **Forgiving search** — find tags without worrying about case or accents ("cafe" finds "café").
 - **Slideshows** — from any filter, selection, or album, with folder-aware shuffle and intervals down to 0.1 s.
@@ -41,6 +41,44 @@ it; update Omapic (or restore a backup) to open it again. Before a non-trivial
 (non-additive) upgrade, Omapic writes a backup beside the library at
 `~/.local/share/omapic/library.db.bak-v<N>` (the two most recent are kept), so
 there's always a pre-upgrade copy to fall back on.
+
+## Query language (OQL)
+
+Smart albums are saved queries in **OQL**, the Omapic Query Language. The
+smart-album dialog's tag picker covers the common case (a set of tags, all or
+any); **Edit as text** opens the whole language.
+
+| Form | Meaning |
+|---|---|
+| `a b` | AND — both |
+| `a \| b` | OR — either |
+| `-a` | NOT. `-` is syntax only at the start of a term, so `t-shirt` is just a tag. |
+| `( … )` | grouping. `(` at the start of a term always opens a group. |
+| `"…"` | a literal name, never syntax |
+| `is:fav` | in Favorites |
+| `is:untagged` | has no tags (album and Favorites membership don't count) |
+| `album:<name>` | in an album or a smart album, by name |
+| `cat:<name>` | has any tag in that category; `-cat:<name>` means none |
+
+NOT binds tightest, then OR, then AND: `beach sunset | sunrise` means
+`beach (sunset | sunrise)`. There are no word operators (`AND`, `OR`, `NOT`),
+because they could be tag names.
+
+Names are matched by **longest match**, ignoring case and accents, so names
+with spaces and parentheses need no quoting: `dinner (2019)` is one tag if such a
+tag exists, `Star Wars: Episode IV` is a tag (a colon only starts a predicate
+after `is`, `album` or `cat`), and `dark forest` is the tag of that name when
+there is one, else the two tags `dark` and `forest`. Aliases work too and
+resolve to their tag. Syntax wins at the start of a term, so a name that starts
+with `-` or `(` must be quoted: `"-20 °C"`, `"(untitled)"`. An unknown name is
+an error with suggestions, never a silent fallback to something else.
+
+A smart album can refer to another with `album:<name>`; the reference is
+expanded when photos are evaluated, so editing the inner album changes every
+album that uses it. Deleting a tag, album or category a query mentions leaves a
+named "missing" term in its place (shown as `"name"`) that matches nothing —
+the query is never silently rewritten. A `"` can't appear in a name (it is the
+one character a query can't quote), so Omapic turns it into `“`/`”`.
 
 ## Tag retention
 

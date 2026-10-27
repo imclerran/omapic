@@ -15,6 +15,7 @@
 #include <QVector>
 
 #include "photo.h"
+#include "oql.h"
 #include "photofiltermodel.h"
 #include "photomodel.h"
 
@@ -48,6 +49,8 @@ private slots:
 
     // Album view
     void albumModeInsideFiltersByAlbumQuery();
+    void albumModeEvaluatesFullQueries();
+    void albumModeRefreshesWhenQueryChanges();
     void albumModeListLevelFlattenedSearch();
 
     // Misc ordering / combinations / bounds
@@ -383,21 +386,96 @@ void TestPhotoFilterModel::albumModeInsideFiltersByAlbumQuery()
         makePhoto(3, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg"), {albumA, albumB}),
         makePhoto(4, QStringLiteral("/p/d.jpg"), QStringLiteral("d.jpg"), {}),
     });
+    // The library resolves an album id to its membership tree: a regular album
+    // is one Album leaf; a smart album (ids 1000+ here) its saved query, which for
+    // the legacy all/any forms is a flat AND/OR of tags.
+    m_proxy->setAlbumQueryResolver([&](int id) -> oql::Node {
+        if (id == 1001) return oql::fromTagSet({albumA, albumB}, /*matchAll=*/false);
+        if (id == 1002) return oql::fromTagSet({albumA, albumB}, /*matchAll=*/true);
+        return oql::Node::album(id);
+    });
 
-    // A regular album is a single-tag query: show only its members.
+    // A regular album: show only its members.
     m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), /*albumMode=*/true,
-                       /*albumTags=*/QVariantList{albumA}, /*albumMatchAll=*/true);
+                       /*albumId=*/albumA);
     QCOMPARE(proxyIds(), (QList<int>{1, 3}));
 
     // A smart album in OR mode: carry any of its tags.
-    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true,
-                       QVariantList{albumA, albumB}, /*albumMatchAll=*/false);
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1001);
     QCOMPARE(proxyIds(), (QList<int>{1, 2, 3}));
 
     // A smart album in AND mode: carry every tag.
-    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true,
-                       QVariantList{albumA, albumB}, /*albumMatchAll=*/true);
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1002);
     QCOMPARE(proxyIds(), QList<int>{3});
+
+    // Leaving album mode drops the gate even if an album id is passed.
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), false, 1002);
+    QCOMPARE(proxyIds(), (QList<int>{1, 2, 3, 4}));
+}
+
+void TestPhotoFilterModel::albumModeEvaluatesFullQueries()
+{
+    // The gate is the OQL evaluator, so a smart album can use the whole language:
+    // negation, categories (via the eval context), favorites and untagged.
+    const int beach = 1, people = 2, paris = 3, fav = 50, trip = 60;
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"), {beach}),
+        makePhoto(2, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg"), {beach, people}),
+        makePhoto(3, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg"), {paris, fav}),
+        makePhoto(4, QStringLiteral("/p/d.jpg"), QStringLiteral("d.jpg"), {trip}),
+        makePhoto(5, QStringLiteral("/p/e.jpg"), QStringLiteral("e.jpg"), {}),
+    });
+    oql::EvalContext ctx;
+    ctx.favoritesTagId = fav;
+    ctx.albumTagIds = {fav, trip};
+    ctx.tagCategory = {{paris, 7}};
+    m_proxy->setEvalContext(ctx);
+    m_proxy->setAlbumQueryResolver([&](int id) -> oql::Node {
+        switch (id) {
+        case 1001: return oql::Node::andOf({oql::Node::tag(beach), oql::Node::notOf(oql::Node::tag(people))});
+        case 1002: return oql::Node::orOf({oql::Node::category(7), oql::Node::favorite()});
+        case 1003: return oql::Node::untagged();
+        case 1004: return oql::Node::missing(QStringLiteral("gone"));
+        default: return oql::Node::andOf({});
+        }
+    });
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1001);
+    QCOMPARE(proxyIds(), QList<int>{1});              // beach -people
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1002);
+    QCOMPARE(proxyIds(), QList<int>{3});              // cat:Place | is:fav
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1003);
+    QCOMPARE(proxyIds(), (QList<int>{4, 5}));         // is:untagged ignores album membership
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1004);
+    QCOMPARE(m_proxy->count(), 0);                    // a missing term matches nothing
+}
+
+void TestPhotoFilterModel::albumModeRefreshesWhenQueryChanges()
+{
+    const int beach = 1, sunset = 2;
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"), {beach}),
+        makePhoto(2, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg"), {sunset}),
+    });
+    // The resolver reads live state, as Library's does from its expanded trees.
+    oql::Node current = oql::Node::tag(beach);
+    m_proxy->setAlbumQueryResolver([&](int) { return current; });
+    m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), true, 1001);
+    QCOMPARE(proxyIds(), QList<int>{1});
+
+    // The album's definition changed (or a nested album it refers to did):
+    // refreshAlbumQuery re-resolves without a full applyView.
+    current = oql::Node::tag(sunset);
+    m_proxy->refreshAlbumQuery();
+    QCOMPARE(proxyIds(), QList<int>{2});
+
+    // A category-dependent query reacts to a new eval context too.
+    current = oql::Node::category(9);
+    m_proxy->refreshAlbumQuery();
+    QCOMPARE(m_proxy->count(), 0);
+    oql::EvalContext ctx;
+    ctx.tagCategory = {{beach, 9}};
+    m_proxy->setEvalContext(ctx);
+    QCOMPARE(proxyIds(), QList<int>{1});
 }
 
 void TestPhotoFilterModel::albumModeListLevelFlattenedSearch()
@@ -412,7 +490,7 @@ void TestPhotoFilterModel::albumModeListLevelFlattenedSearch()
 
     // Album-list level (no album selected): a grid of tiles, so no photos show...
     m_proxy->applyView(false, PhotoFilterModel::SortByName, true, false, QString(), /*albumMode=*/true,
-                       /*albumTags=*/QVariantList{}, true);
+                       /*albumId=*/0);
     QCOMPARE(m_proxy->count(), 0);
 
     // ...until a search flattens to "photos in any album matching the text". The

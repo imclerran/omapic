@@ -36,24 +36,6 @@ constexpr int kBulkTagThreshold = 100;
 // kind-agnostic. The offset is decoded only inside Library.
 constexpr int kSmartAlbumIdBase = 1'000'000'000;
 
-// True when a photo's tags satisfy a smart album's query (AND = carry every tag,
-// OR = carry any). An empty query matches nothing (an all-tags-deleted album).
-bool photoMatchesQuery(const QSet<int> &photoTags, const QList<int> &queryTags, bool matchAll)
-{
-    if (queryTags.isEmpty())
-        return false;
-    if (matchAll) {
-        for (int t : queryTags)
-            if (!photoTags.contains(t))
-                return false;
-        return true;
-    }
-    for (int t : queryTags)
-        if (photoTags.contains(t))
-            return true;
-    return false;
-}
-
 // The active Omarchy theme's short name (the folder name under themes/), read
 // from the state file the theme switcher keeps. Empty if it can't be read.
 QString currentOmarchyTheme()
@@ -125,6 +107,9 @@ Library::Library(QObject *parent)
     // saved view it re-sorts once — the same cost as before, just not doubled.
     m_filtered->setSortMode(PhotoFilterModel::SortByDate);
     m_photos->setPhotos(std::move(loaded));
+    // The album view's membership gate asks here for an album's query tree.
+    m_filtered->setAlbumQueryResolver([this](int albumId) { return albumTree(albumId); });
+    rebuildQueryState();
     // The tag sidebar is built asynchronously on the worker (see below), so the
     // window appears and stays responsive instead of stalling on its ~150ms query.
     updateFolderRoots();
@@ -710,17 +695,11 @@ QStringList Library::folderSlideshowSources(const QStringList &folderPaths,
 QStringList Library::albumSlideshowSources(const QVariantList &albumIds,
                                            const QVariantList &photoIds) const
 {
-    // Selected albums split into regular (membership by tag id) and smart
-    // (membership by saved query). Smart ids are in the reserved high range.
-    QSet<int> regularAlbums;
-    QVector<SmartAlbumInfo> smartSel;
-    for (const QVariant &v : albumIds) {
-        const int id = v.toInt();
-        if (id >= kSmartAlbumIdBase)
-            smartSel.append(m_db.smartAlbum(id - kSmartAlbumIdBase));
-        else
-            regularAlbums.insert(id);
-    }
+    // Each selected album's membership query (a regular album is one Album leaf,
+    // a smart album its expanded tree), resolved once up front.
+    QVector<oql::Node> queries;
+    for (const QVariant &v : albumIds)
+        queries.append(albumTree(v.toInt()));
 
     // Active photos in any of the selected albums, newest first (the album view's
     // order), de-duped across albums by photo id.
@@ -728,11 +707,8 @@ QStringList Library::albumSlideshowSources(const QVariantList &albumIds,
     QSet<int> seen;
     for (const Photo &p : m_photos->photos()) {
         bool inAlbum = false;
-        for (int aid : regularAlbums)
-            if (p.tagIds.contains(aid)) { inAlbum = true; break; }
-        if (!inAlbum)
-            for (const SmartAlbumInfo &sa : smartSel)
-                if (photoMatchesQuery(p.tagIds, sa.tagIds, sa.matchAll)) { inAlbum = true; break; }
+        for (const oql::Node &q : queries)
+            if (oql::matches(q, p.tagIds, m_evalContext)) { inAlbum = true; break; }
         if (inAlbum && !seen.contains(p.id)) {
             seen.insert(p.id);
             members.append(&p);
@@ -1310,11 +1286,11 @@ QVariantList Library::albums() const
     // Count members (and gather up-to-4 cover thumbs) per album over the active
     // photo set, honoring the current tag filter — so album tiles narrow exactly
     // like folder tiles. A regular album's membership is a plain tagIds test; a
-    // smart album's is its saved (tag set + AND/OR) query. Both are keyed in `acc`
-    // by the UI-facing album id (smart albums use the reserved high id range).
+    // smart album's is its expanded query tree. Both are keyed in `acc` by the
+    // UI-facing album id (smart albums use the reserved high id range).
     const QList<int> sel = m_tags->selectedTagIds();
-    const QSet<int> selSet(sel.begin(), sel.end());
-    const bool filtering = !selSet.isEmpty();
+    const bool filtering = !sel.isEmpty();
+    const oql::Node selQuery = oql::fromTagSet(sel, m_matchAll);
 
     struct Acc { int count = 0; QStringList thumbs; };
     QHash<int, Acc> acc;
@@ -1325,26 +1301,16 @@ QVariantList Library::albums() const
             x.thumbs.append(p.path);
     };
     for (const Photo &p : m_photos->photos()) {
-        if (filtering) {
-            bool ok;
-            if (m_matchAll) {
-                ok = true;
-                for (int t : selSet)
-                    if (!p.tagIds.contains(t)) { ok = false; break; }
-            } else {
-                ok = false;
-                for (int t : selSet)
-                    if (p.tagIds.contains(t)) { ok = true; break; }
-            }
-            if (!ok)
-                continue;
-        }
+        if (filtering && !oql::matches(selQuery, p.tagIds, m_evalContext))
+            continue;
         for (const AlbumInfo &a : metas)
             if (p.tagIds.contains(a.id))
                 tally(a.id, p);
-        for (const SmartAlbumInfo &sa : smart)
-            if (photoMatchesQuery(p.tagIds, sa.tagIds, sa.matchAll))
+        for (const SmartAlbumInfo &sa : smart) {
+            const auto tree = m_smartTrees.constFind(sa.id);
+            if (tree != m_smartTrees.constEnd() && oql::matches(tree.value(), p.tagIds, m_evalContext))
                 tally(kSmartAlbumIdBase + sa.id, p);
+        }
     }
 
     QVariantList out;
@@ -1365,15 +1331,18 @@ QVariantList Library::albums() const
         });
     }
     // Smart album tiles after the regular ones (by name). Hidden when empty, like
-    // everything else. They carry their query so the UI can enter/edit without a
-    // round trip.
+    // everything else. They carry their query text for the tile's tooltip (the
+    // vocabulary it is formatted against is loaded only when a tile needs it).
+    oql::MapVocabulary vocab;
+    bool vocabLoaded = false;
     for (const SmartAlbumInfo &sa : smart) {
         const Acc x = acc.value(kSmartAlbumIdBase + sa.id);
         if (x.count == 0)
             continue;
-        QVariantList tagIds;
-        for (int t : sa.tagIds)
-            tagIds.append(t);
+        if (!vocabLoaded) {
+            m_db.fillVocabulary(vocab);
+            vocabLoaded = true;
+        }
         out.append(QVariantMap{
             {QStringLiteral("type"), QStringLiteral("album")},
             {QStringLiteral("id"), kSmartAlbumIdBase + sa.id},
@@ -1382,8 +1351,7 @@ QVariantList Library::albums() const
             {QStringLiteral("smart"), true},
             {QStringLiteral("count"), x.count},
             {QStringLiteral("thumbs"), x.thumbs},
-            {QStringLiteral("tags"), tagIds},
-            {QStringLiteral("matchAll"), sa.matchAll},
+            {QStringLiteral("query"), oql::format(sa.query, vocab)},
         });
     }
     return out;
@@ -1499,36 +1467,125 @@ bool Library::isSmartAlbum(int albumId) const
     return albumId >= kSmartAlbumIdBase;
 }
 
-QVariantMap Library::albumQuery(int albumId) const
+oql::Node Library::albumTree(int albumId) const
 {
-    QVariantList tags;
-    bool matchAll = true;
     if (albumId >= kSmartAlbumIdBase) {
-        const SmartAlbumInfo sa = m_db.smartAlbum(albumId - kSmartAlbumIdBase);
-        for (int t : sa.tagIds)
-            tags.append(t);
-        matchAll = sa.matchAll;
-    } else if (albumId > 0) {
-        tags.append(albumId); // a regular album is a one-tag query
+        const auto it = m_smartTrees.constFind(albumId - kSmartAlbumIdBase);
+        return it == m_smartTrees.constEnd() ? oql::Node::andOf({}) : it.value();
     }
-    return QVariantMap{
-        {QStringLiteral("tags"), tags},
-        {QStringLiteral("matchAll"), matchAll},
+    if (albumId > 0)
+        return oql::Node::album(albumId); // a regular album is a one-term query
+    return oql::Node::andOf({});
+}
+
+oql::MapVocabulary Library::vocabulary() const
+{
+    oql::MapVocabulary vocab;
+    m_db.fillVocabulary(vocab);
+    return vocab;
+}
+
+void Library::rebuildQueryState()
+{
+    m_evalContext = m_db.evalContext();
+    const QHash<int, oql::Node> stored = m_db.smartAlbumQueries();
+    const oql::SmartAlbumLookup lookup = [&stored](int id) -> const oql::Node * {
+        const auto it = stored.constFind(id);
+        return it == stored.constEnd() ? nullptr : &it.value();
     };
+    m_smartTrees.clear();
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
+        QStringList errors;
+        m_smartTrees.insert(it.key(), oql::expand(it.value(), lookup, &errors, it.key()));
+        for (const QString &e : errors)
+            qWarning("omapic: %s", qPrintable(e));
+    }
+    m_filtered->setEvalContext(m_evalContext);
+    m_filtered->refreshAlbumQuery();
 }
 
 QVariantMap Library::smartAlbum(int albumId) const
 {
     const SmartAlbumInfo sa = m_db.smartAlbum(albumId - kSmartAlbumIdBase);
+    QList<int> setIds;
+    bool matchAll = true;
+    const bool simple = oql::asTagSet(sa.query, setIds, matchAll);
     QVariantList tags;
-    for (int t : sa.tagIds)
+    for (int t : setIds)
         tags.append(t);
     return QVariantMap{
         {QStringLiteral("id"), albumId},
         {QStringLiteral("name"), sa.name},
+        {QStringLiteral("text"), oql::format(sa.query, vocabulary())},
+        {QStringLiteral("simple"), simple},
         {QStringLiteral("tags"), tags},
-        {QStringLiteral("matchAll"), sa.matchAll},
+        {QStringLiteral("matchAll"), matchAll},
     };
+}
+
+QVariantMap Library::parseQuery(const QString &text) const
+{
+    const oql::MapVocabulary vocab = vocabulary();
+    const oql::ParseResult r = oql::parse(text, vocab);
+    if (!r.ok()) {
+        return QVariantMap{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("message"), r.error.message},
+            {QStringLiteral("start"), r.error.span.start},
+            {QStringLiteral("length"), r.error.span.length},
+            {QStringLiteral("suggestions"), r.error.suggestions},
+        };
+    }
+    QList<int> setIds;
+    bool matchAll = true;
+    const bool simple = oql::asTagSet(r.root, setIds, matchAll);
+    QVariantList tags;
+    for (int t : setIds)
+        tags.append(t);
+    QStringList notes;
+    for (const oql::Note &n : r.notes)
+        notes.append(n.message);
+    return QVariantMap{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("canonical"), oql::format(r.root, vocab)},
+        {QStringLiteral("simple"), simple},
+        {QStringLiteral("tags"), tags},
+        {QStringLiteral("matchAll"), matchAll},
+        {QStringLiteral("notes"), notes},
+    };
+}
+
+QString Library::formatTagQuery(const QVariantList &tagIds, bool matchAll) const
+{
+    QList<int> ids;
+    for (const QVariant &v : tagIds)
+        ids.append(v.toInt());
+    if (ids.isEmpty())
+        return {};
+    const oql::MapVocabulary vocab = vocabulary();
+    return oql::format(oql::fromTagSet(ids, matchAll, &vocab), vocab);
+}
+
+QString Library::saveSmartAlbumQuery(int albumId, const QString &name, const QString &text)
+{
+    const oql::ParseResult r = oql::parse(text, vocabulary());
+    if (!r.ok())
+        return r.error.message;
+    if (name.trimmed().isEmpty())
+        return tr("The smart album needs a name");
+    if (albumId >= kSmartAlbumIdBase) {
+        const int id = albumId - kSmartAlbumIdBase;
+        if (m_db.smartAlbumWouldCycle(id, r.root))
+            return tr("That query would make the album refer to itself through album: references");
+        if (!m_db.updateSmartAlbum(id, name, r.root))
+            return tr("Another smart album already uses that name");
+    } else {
+        if (m_db.createSmartAlbum(name, r.root) < 0)
+            return tr("A smart album already uses that name");
+    }
+    rebuildQueryState();
+    emit albumsChanged();
+    return {};
 }
 
 int Library::createSmartAlbum(const QString &name, const QVariantList &tagIds, bool matchAll)
@@ -1539,6 +1596,7 @@ int Library::createSmartAlbum(const QString &name, const QVariantList &tagIds, b
     const int id = m_db.createSmartAlbum(name, tags, matchAll);
     if (id < 0)
         return -1;
+    rebuildQueryState();
     emit albumsChanged();
     return kSmartAlbumIdBase + id;
 }
@@ -1551,6 +1609,7 @@ bool Library::updateSmartAlbum(int albumId, const QString &name,
         tags.append(v.toInt());
     if (!m_db.updateSmartAlbum(albumId - kSmartAlbumIdBase, name, tags, matchAll))
         return false;
+    rebuildQueryState();
     emit albumsChanged();
     return true;
 }
@@ -1558,6 +1617,7 @@ bool Library::updateSmartAlbum(int albumId, const QString &name,
 void Library::deleteSmartAlbum(int albumId)
 {
     m_db.deleteSmartAlbum(albumId - kSmartAlbumIdBase);
+    rebuildQueryState();
     emit albumsChanged();
 }
 
@@ -1879,6 +1939,10 @@ void Library::applyFacetTags(const QVector<TagInfo> &tags)
     // setTags drops any selected tag no longer in the list, so an incompatible
     // match-all pick is deselected once it leaves the active set.
     m_tags->setTags(tags);
+    // Every tag/category/album mutation lands here, so this is where the query
+    // state (categories, album ids, smart-album trees) is brought up to date
+    // before the album tiles and the grid re-read it.
+    rebuildQueryState();
     emit tagsChanged();
     // Category and implication visibility in the tag manager depend on the same
     // active set (a category is hidden once all its tags leave the active folders;

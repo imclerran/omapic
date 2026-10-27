@@ -14,9 +14,15 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <functional>
+
+#include "oql.h"
+
 // Filters the photo list down to those matching the selected tag set.
 // matchAll == true  -> photo must carry every selected tag (intersection / narrow)
 // matchAll == false -> photo must carry at least one selected tag (union)
+// Both that selection and the album-view gate are evaluated as OQL trees
+// (oql::matches), so a smart album and the sidebar read the same way.
 class PhotoFilterModel : public QSortFilterProxyModel {
     Q_OBJECT
     QML_ELEMENT
@@ -83,12 +89,24 @@ public:
     // a single re-filter + re-sort. Switching views changes several of these
     // together; setting them one at a time made the proxy re-sort once per change
     // — e.g. a wasted name-sort before the date-sort when opening the timeline.
-    // albumTags is the current album's membership query: a regular album is a
-    // single-tag query ([albumTagId]); a smart album is its saved tag set. An
-    // empty list means the album-list level (tiles, not a photo grid).
+    // albumId is the current album (a UI-facing id: a regular album's tag id or
+    // a smart album's offset id); 0 means the album-list level (tiles, not a photo
+    // grid). Its membership query comes from the resolver below.
     Q_INVOKABLE void applyView(bool dedupe, int sortMode, bool sortAscending, bool folderMode,
-                               const QString &folderPath, bool albumMode = false,
-                               const QVariantList &albumTags = {}, bool albumMatchAll = true);
+                               const QString &folderPath, bool albumMode = false, int albumId = 0);
+
+    // How an album id becomes its membership query: an expanded OQL tree (a
+    // regular album is an Album leaf; a smart album its saved query with every
+    // album: reference replaced by that album's current tree). Set by Library,
+    // which owns the definitions; resolved once per applyView / refreshAlbumQuery,
+    // never per photo.
+    void setAlbumQueryResolver(std::function<oql::Node(int albumId)> resolver);
+    // The library facts the evaluator needs (Favorites id, album tag ids, the
+    // tag -> category map). Re-filters in album mode, where they can matter.
+    void setEvalContext(const oql::EvalContext &ctx);
+    // Re-resolve the current album's query (its definition, or one it refers
+    // to, changed) and re-filter if the tree differs.
+    void refreshAlbumQuery();
 
     // The registered folder roots, used to tell orphan photos (shown at the
     // folder-view root) from foldered ones. Set by Library; not a QML property.
@@ -155,8 +173,11 @@ private:
     QString m_folderPath;
     bool m_dedupe = true; // ungrouped is the default view, which dedupes
     bool m_albumMode = false;   // album view: restrict to one album (or the list level)
-    QList<int> m_albumTags;     // the viewed album's query tags; empty = the list level
-    bool m_albumMatchAll = true; // AND (every tag) vs OR (any tag) for m_albumTags
+    int m_albumId = 0;          // the viewed album's UI id; 0 = the list level
+    oql::Node m_albumQuery;     // its expanded membership query (valid when m_albumId > 0)
+    std::function<oql::Node(int)> m_albumResolver;
+    oql::Node m_selectedQuery;  // m_selected + m_matchAll as a tree
+    oql::EvalContext m_ctx;
     QStringList m_folderRoots;
     QSet<int> m_albumTagIds;    // every album tag id (for the flattened album search)
     QCollator m_collator;

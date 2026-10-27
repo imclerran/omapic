@@ -50,6 +50,11 @@ private slots:
     void evaluateLeaves();
     void evaluateOperators();
 
+    void tagSetConversions();
+    void jsonRoundTrip();
+    void referencedIdsAndRewrites();
+    void expandReferencesAndCycles();
+
 private:
     // The base vocabulary: tricky tag names, aliases, albums, categories.
     MapVocabulary m_vocab;
@@ -611,6 +616,145 @@ void TestOql::evaluateOperators()
     // Degenerate operators: an empty AND/OR never matches.
     QVERIFY(!matches(Node::andOf({}), {Beach}, ctx));
     QVERIFY(!matches(Node::orOf({}), {Beach}, ctx));
+}
+
+void TestOql::tagSetConversions()
+{
+    QCOMPARE(fromTagSet({Beach, Sunset}, true, &m_vocab),
+             Node::andOf({Node::tag(Beach, QStringLiteral("beach")), Node::tag(Sunset, QStringLiteral("sunset"))}));
+    QCOMPARE(fromTagSet({Beach, Sunset}, false), Node::orOf({Node::tag(Beach), Node::tag(Sunset)}));
+    QCOMPARE(fromTagSet({Beach}, false, &m_vocab), Node::tag(Beach, QStringLiteral("beach")));
+    QCOMPARE(fromTagSet({}, true), Node::andOf({}));
+
+    QList<int> ids;
+    bool all = false;
+    QVERIFY(asTagSet(Node::andOf({Node::tag(Beach), Node::tag(Sunset)}), ids, all));
+    QCOMPARE(ids, (QList<int>{Beach, Sunset}));
+    QVERIFY(all);
+    QVERIFY(asTagSet(Node::orOf({Node::tag(Beach), Node::tag(Sunset)}), ids, all));
+    QVERIFY(!all);
+    QVERIFY(asTagSet(Node::tag(Beach), ids, all));
+    QCOMPARE(ids, QList<int>{Beach});
+    QVERIFY(all);
+    // Anything the picker can't show is not a tag set.
+    QVERIFY(!asTagSet(Node::andOf({Node::tag(Beach), Node::notOf(Node::tag(Sunset))}), ids, all));
+    QVERIFY(!asTagSet(Node::andOf({Node::tag(Beach), Node::album(kAlbumTrip)}), ids, all));
+    QVERIFY(!asTagSet(Node::favorite(), ids, all));
+    QVERIFY(!asTagSet(Node::andOf({Node::tag(Beach), Node::missing(QStringLiteral("x"))}), ids, all));
+}
+
+void TestOql::jsonRoundTrip()
+{
+    const Node t = Node::andOf({
+        Node::tag(Beach, QStringLiteral("beach")),
+        Node::notOf(Node::orOf({Node::album(kAlbumTrip, QStringLiteral("Trip")),
+                                Node::smartAlbum(kSmartBest, QStringLiteral("Best of 2019")),
+                                Node::category(kCatPlace, QStringLiteral("Place"))})),
+        Node::favorite(), Node::untagged(),
+        Node::missing(QStringLiteral("gone"), NameKind::Category),
+    });
+    Node back;
+    QVERIFY(fromJsonText(toJsonText(t), back));
+    QCOMPARE(back, t);
+    // The stored form is compact JSON of ids with names as hints.
+    const QByteArray json = toJsonText(Node::tag(Beach, QStringLiteral("beach")));
+    QCOMPARE(json, QByteArray("{\"id\":10,\"k\":\"tag\",\"n\":\"beach\"}"));
+    // Malformed input is refused, leaving `out` alone.
+    Node untouched = Node::tag(1);
+    QVERIFY(!fromJsonText("not json", untouched));
+    QVERIFY(!fromJsonText("{\"k\":\"bogus\"}", untouched));
+    QVERIFY(!fromJsonText("{\"k\":\"tag\"}", untouched));                 // no id
+    QVERIFY(!fromJsonText("{\"k\":\"not\",\"c\":[]}", untouched));        // NOT needs one child
+    QVERIFY(!fromJsonText("{\"k\":\"and\",\"c\":[{\"k\":\"x\"}]}", untouched));
+    QCOMPARE(untouched, Node::tag(1));
+}
+
+void TestOql::referencedIdsAndRewrites()
+{
+    Node t = Node::andOf({
+        Node::tag(Beach), Node::tag(Sunset),
+        Node::orOf({Node::tag(Beach), Node::album(kAlbumTrip), Node::smartAlbum(kSmartBest),
+                    Node::category(kCatPlace)}),
+    });
+    QCOMPARE(referencedIds(t, {NodeKind::Tag}), (QSet<int>{Beach, Sunset}));
+    QCOMPARE(referencedIds(t, {NodeKind::Tag, NodeKind::Album}), (QSet<int>{Beach, Sunset, kAlbumTrip}));
+    QCOMPARE(referencedIds(t, {NodeKind::SmartAlbum}), QSet<int>{kSmartBest});
+    QCOMPARE(referencedIds(t, {NodeKind::Category}), QSet<int>{kCatPlace});
+
+    // A merge of Sunset into Beach leaves `beach beach (…)`, which dedupes.
+    QVERIFY(replaceTagId(t, Sunset, Beach));
+    QCOMPARE(t, Node::andOf({Node::tag(Beach),
+                             Node::orOf({Node::tag(Beach), Node::album(kAlbumTrip), Node::smartAlbum(kSmartBest),
+                                         Node::category(kCatPlace)})}));
+    QVERIFY(!replaceTagId(t, Sunset, Beach)); // nothing left to replace
+    // An OR that collapses to one child becomes that child.
+    Node pair = Node::orOf({Node::tag(Beach), Node::tag(Sunset)});
+    QVERIFY(replaceTagId(pair, Sunset, Beach));
+    QCOMPARE(pair, Node::tag(Beach));
+
+    // Deleting things turns their terms into named missing nodes.
+    QVERIFY(markMissing(t, NodeKind::Album, kAlbumTrip, QStringLiteral("Trip")));
+    QVERIFY(markMissing(t, NodeKind::SmartAlbum, kSmartBest, QStringLiteral("Best")));
+    QVERIFY(markMissing(t, NodeKind::Category, kCatPlace, QStringLiteral("Place")));
+    QVERIFY(!markMissing(t, NodeKind::Tag, Sunset, QStringLiteral("sunset")));
+    QCOMPARE(t, Node::andOf({Node::tag(Beach),
+                             Node::orOf({Node::tag(Beach),
+                                         Node::missing(QStringLiteral("Trip"), NameKind::Album),
+                                         Node::missing(QStringLiteral("Best"), NameKind::SmartAlbum),
+                                         Node::missing(QStringLiteral("Place"), NameKind::Category)})}));
+    QCOMPARE(format(t, m_vocab), QStringLiteral("beach (beach | album:\"Trip\" | album:\"Best\" | cat:\"Place\")"));
+}
+
+void TestOql::expandReferencesAndCycles()
+{
+    // 1: beach; 2: album:1 -people; 3: album:2 | sunset; 4: album:4 (self); 5 <-> 6.
+    QHash<int, Node> stored;
+    stored.insert(1, Node::tag(Beach));
+    stored.insert(2, Node::andOf({Node::smartAlbum(1, QStringLiteral("One")), Node::notOf(Node::tag(Paris))}));
+    stored.insert(3, Node::orOf({Node::smartAlbum(2, QStringLiteral("Two")), Node::tag(Sunset)}));
+    stored.insert(4, Node::smartAlbum(4, QStringLiteral("Self")));
+    stored.insert(5, Node::andOf({Node::tag(Beach), Node::smartAlbum(6, QStringLiteral("Six"))}));
+    stored.insert(6, Node::notOf(Node::smartAlbum(5, QStringLiteral("Five"))));
+    const SmartAlbumLookup lookup = [&stored](int id) -> const Node * {
+        auto it = stored.constFind(id);
+        return it == stored.constEnd() ? nullptr : &it.value();
+    };
+
+    // Nested references expand to the referenced albums' current trees.
+    QStringList errors;
+    QCOMPARE(expand(stored.value(3), lookup, &errors),
+             Node::orOf({Node::andOf({Node::tag(Beach), Node::notOf(Node::tag(Paris))}), Node::tag(Sunset)}));
+    QVERIFY(errors.isEmpty());
+    // Editing a nested album changes what its users expand to.
+    stored[1] = Node::tag(Sunrise);
+    QCOMPARE(expand(stored.value(2), lookup), Node::andOf({Node::tag(Sunrise), Node::notOf(Node::tag(Paris))}));
+    // An unknown album becomes a missing term by its last known name.
+    QCOMPARE(expand(Node::smartAlbum(99, QStringLiteral("Gone")), lookup),
+             Node::missing(QStringLiteral("Gone"), NameKind::SmartAlbum));
+    // A cycle is an error, not a recursion: the closing reference goes missing.
+    QCOMPARE(expand(stored.value(4), lookup, &errors, 4), Node::missing(QStringLiteral("Self"), NameKind::SmartAlbum));
+    QCOMPARE(errors.size(), 1);
+    QVERIFY(errors.first().contains(QStringLiteral("Self")));
+    errors.clear();
+    QCOMPARE(expand(stored.value(5), lookup, &errors, 5),
+             Node::andOf({Node::tag(Beach), Node::notOf(Node::missing(QStringLiteral("Five"), NameKind::SmartAlbum))}));
+    QCOMPARE(errors.size(), 1);
+    // Without a self id the same tree is a free query: it is expanded through
+    // 6 and back into 5's own tree, and the cycle closes one level deeper.
+    errors.clear();
+    // free == beach -(beach <Six missing>)
+    const Node free = expand(stored.value(5), lookup, &errors);
+    QCOMPARE(free, Node::andOf({Node::tag(Beach),
+                                Node::notOf(Node::andOf({Node::tag(Beach),
+                                                         Node::missing(QStringLiteral("Six"), NameKind::SmartAlbum)}))}));
+    QCOMPARE(errors.size(), 1);
+
+    // wouldCycle: saving a query as album N that reaches N through any chain.
+    QVERIFY(wouldCycle(1, Node::smartAlbum(1), lookup));                        // direct
+    QVERIFY(wouldCycle(1, Node::orOf({Node::tag(Beach), Node::smartAlbum(3)}), lookup)); // 3 -> 2 -> 1
+    QVERIFY(!wouldCycle(3, Node::smartAlbum(2), lookup));                       // 2 never reaches 3
+    QVERIFY(!wouldCycle(7, Node::smartAlbum(4), lookup));                       // someone else's loop
+    QVERIFY(!wouldCycle(1, Node::smartAlbum(99), lookup));                      // unknown target
 }
 
 QTEST_GUILESS_MAIN(TestOql)
