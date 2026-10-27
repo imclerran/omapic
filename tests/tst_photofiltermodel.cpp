@@ -52,6 +52,7 @@ private slots:
     void albumModeEvaluatesFullQueries();
     void albumModeRefreshesWhenQueryChanges();
     void albumModeListLevelFlattenedSearch();
+    void advancedQueryGateCombinesWithSelection();
 
     // Misc ordering / combinations / bounds
     void folderFirstGroupsByFolder();
@@ -497,6 +498,37 @@ void TestPhotoFilterModel::albumModeListLevelFlattenedSearch()
     // photo in no album (beach2) is excluded despite matching the search term.
     m_proxy->setSearchText(QStringLiteral("beach"));
     QCOMPARE(proxyIds(), QList<int>{1});
+}
+
+void TestPhotoFilterModel::advancedQueryGateCombinesWithSelection()
+{
+    const int beach = 1, sunset = 2, people = 3;
+    m_source->setPhotos({
+        makePhoto(1, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg"), {beach}),
+        makePhoto(2, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg"), {beach, sunset}),
+        makePhoto(3, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg"), {beach, sunset, people}),
+        makePhoto(4, QStringLiteral("/p/d.jpg"), QStringLiteral("d.jpg"), {sunset}),
+    });
+    QVERIFY(!m_proxy->hasAdvancedQuery());
+    // beach -people, on its own.
+    m_proxy->setAdvancedQuery(oql::Node::andOf({oql::Node::tag(beach), oql::Node::notOf(oql::Node::tag(people))}));
+    QVERIFY(m_proxy->hasAdvancedQuery());
+    QCOMPARE(proxyIds(), (QList<int>{1, 2}));
+    // Combined with the sidebar selection: both must hold.
+    m_proxy->setSelectedTagIds({sunset});
+    QCOMPARE(proxyIds(), QList<int>{2});
+    // And with the search.
+    m_proxy->setSearchText(QStringLiteral("zzz"));
+    QCOMPARE(m_proxy->count(), 0);
+    m_proxy->setSearchText(QString());
+    // Replacing the query re-filters; clearing it lifts the gate.
+    m_proxy->setAdvancedQuery(oql::Node::tag(people));
+    QCOMPARE(proxyIds(), QList<int>{3});
+    m_proxy->clearAdvancedQuery();
+    QVERIFY(!m_proxy->hasAdvancedQuery());
+    QCOMPARE(proxyIds(), (QList<int>{2, 3, 4}));
+    m_proxy->setSelectedTagIds({});
+    QCOMPARE(proxyIds(), (QList<int>{1, 2, 3, 4}));
 }
 
 // --- Misc ordering / combinations / bounds ----------------------------------

@@ -2126,9 +2126,11 @@ ApplicationWindow {
                     // narrow its tags to the current match set when this is on.
                     onMatchAllChanged: { library.setMatchAll(matchAll); win.scrollGalleryToTop() }
                     Component.onCompleted: library.setMatchAll(matchAll)
-                    // The builder opens on the selection as `a b` / `a | b`.
+                    // The builder opens on the applied query, else on the selection
+                    // as `a b` / `a | b`.
                     onAdvancedRequested: smartAlbumDialog.openAdvanced(
-                        library.formatTagQuery(library.tags.selectedTagIds, matchAll))
+                        library.advancedQuery !== "" ? library.advancedQuery
+                                                     : library.formatTagQuery(library.tags.selectedTagIds, matchAll))
                     // Tab cycle: tag filter → gallery; Shift+Tab → add-a-tag.
                     onTabForward: win.tabStepTo(2, true)
                     onTabBackward: win.tabStepTo(0, false)
@@ -2161,11 +2163,58 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: palette.base
 
+            // The applied advanced query, as a strip above the views so the
+            // narrowing is visible and can be edited or lifted from where it acts.
+            Rectangle {
+                id: queryBanner
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                visible: library.advancedQuery !== "" && !win.triageActive
+                height: visible ? bannerRow.implicitHeight + 8 : 0
+                color: Qt.alpha(win.accent, 0.14)
+
+                RowLayout {
+                    id: bannerRow
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 6
+                    spacing: 8
+                    Label {
+                        text: qsTr("Query")
+                        font.pixelSize: 12
+                        color: palette.placeholderText
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: library.advancedQuery
+                        elide: Text.ElideRight
+                        font.pixelSize: 12
+                        font.family: "monospace"
+                    }
+                    ToolButton {
+                        text: qsTr("Edit…")
+                        font.pixelSize: 12
+                        focusPolicy: Qt.NoFocus
+                        onClicked: smartAlbumDialog.openAdvanced(library.advancedQuery)
+                    }
+                    ToolButton {
+                        text: "✕"
+                        focusPolicy: Qt.NoFocus
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 500
+                        ToolTip.text: qsTr("Clear the query")
+                        onClicked: { library.clearAdvancedQuery(); win.scrollGalleryToTop() }
+                    }
+                }
+            }
+
             // The central region, keyed on the triage flag: the gallery (its four
             // views stacked, exactly one shown) or the triage view. A hidden page
             // neither paints nor gets key events.
             StackLayout {
                 anchors.fill: parent
+                anchors.topMargin: queryBanner.height
                 currentIndex: win.triageActive ? 1 : 0
 
                 Item {
@@ -2637,6 +2686,18 @@ ApplicationWindow {
             smartNameField.text = ""
             builder.focusInput()
         }
+        // Apply the built query to the gallery (advanced mode) and close.
+        function applyQuery() {
+            if (!builder.valid)
+                return
+            const err = library.setAdvancedQuery(builder.text)
+            if (err.length > 0) {
+                win.toast(err)
+                return
+            }
+            win.scrollGalleryToTop()
+            close()
+        }
         onOpened: {
             if (mode === "advanced")
                 return
@@ -2685,9 +2746,13 @@ ApplicationWindow {
                 tags: library.tagSuggestions()
                 aliases: library.tagAliases
                 implications: library.tagImplications
-                // Enter on an empty field: save (smart mode) or nothing (advanced).
-                onSubmitted: if (smartAlbumDialog.mode === "smart" && smartAlbumDialog.formValid)
-                                 smartAlbumDialog.accept()
+                // Enter on an empty field: save (smart mode) or apply (advanced).
+                onSubmitted: {
+                    if (smartAlbumDialog.mode === "smart" && smartAlbumDialog.formValid)
+                        smartAlbumDialog.accept()
+                    else if (smartAlbumDialog.mode === "advanced")
+                        smartAlbumDialog.applyQuery()
+                }
             }
             Label {
                 Layout.fillWidth: true
@@ -2701,7 +2766,6 @@ ApplicationWindow {
             RowLayout {
                 visible: smartAlbumDialog.mode === "advanced"
                 Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
                 Button {
                     text: qsTr("Save as smart album…")
                     enabled: builder.valid
@@ -2710,6 +2774,16 @@ ApplicationWindow {
                         smartAlbumDialog.syncOk()
                         smartNameField.forceActiveFocus()
                     }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: qsTr("Apply")
+                    enabled: builder.valid
+                    highlighted: true
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 500
+                    ToolTip.text: qsTr("Show only the photos matching this query (Enter)")
+                    onClicked: smartAlbumDialog.applyQuery()
                 }
             }
         }

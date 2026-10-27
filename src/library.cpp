@@ -1291,6 +1291,12 @@ QVariantList Library::albums() const
     const QList<int> sel = m_tags->selectedTagIds();
     const bool filtering = !sel.isEmpty();
     const oql::Node selQuery = oql::fromTagSet(sel, m_matchAll);
+    // The builder's applied query narrows the tiles as the sidebar filter does.
+    const bool advanced = !m_advancedText.isEmpty();
+    const oql::Node advQuery = advanced ? oql::expand(m_advancedRoot, [this](int id) -> const oql::Node * {
+        const auto it = m_smartTrees.constFind(id);
+        return it == m_smartTrees.constEnd() ? nullptr : &it.value();
+    }) : oql::Node();
 
     struct Acc { int count = 0; QStringList thumbs; };
     QHash<int, Acc> acc;
@@ -1302,6 +1308,8 @@ QVariantList Library::albums() const
     };
     for (const Photo &p : m_photos->photos()) {
         if (filtering && !oql::matches(selQuery, p.tagIds, m_evalContext))
+            continue;
+        if (advanced && !oql::matches(advQuery, p.tagIds, m_evalContext))
             continue;
         for (const AlbumInfo &a : metas)
             if (p.tagIds.contains(a.id))
@@ -1318,7 +1326,7 @@ QVariantList Library::albums() const
         const Acc x = acc.value(a.id);
         // Hide empty albums, like empty tags/categories. Favorites stays visible
         // when not filtering (a permanent destination), even with no photos yet.
-        if (x.count == 0 && !(a.favorite && !filtering))
+        if (x.count == 0 && !(a.favorite && !filtering && !advanced))
             continue;
         out.append(QVariantMap{
             {QStringLiteral("type"), QStringLiteral("album")},
@@ -1502,6 +1510,38 @@ void Library::rebuildQueryState()
     }
     m_filtered->setEvalContext(m_evalContext);
     m_filtered->refreshAlbumQuery();
+    // The applied free query refers to smart albums by id; re-expand it too.
+    if (!m_advancedText.isEmpty())
+        m_filtered->setAdvancedQuery(oql::expand(m_advancedRoot, lookup));
+}
+
+QString Library::setAdvancedQuery(const QString &text)
+{
+    const oql::MapVocabulary vocab = vocabulary();
+    const oql::ParseResult r = oql::parse(text, vocab);
+    if (!r.ok())
+        return r.error.message;
+    m_advancedRoot = r.root;
+    const QString canonical = oql::format(r.root, vocab);
+    const bool changed = canonical != m_advancedText;
+    m_advancedText = canonical;
+    rebuildQueryState(); // expands and hands the tree to the filter model
+    if (changed) {
+        emit advancedQueryChanged();
+        emit albumsChanged(); // tile counts honour the query
+    }
+    return {};
+}
+
+void Library::clearAdvancedQuery()
+{
+    if (m_advancedText.isEmpty())
+        return;
+    m_advancedText.clear();
+    m_advancedRoot = oql::Node();
+    m_filtered->clearAdvancedQuery();
+    emit advancedQueryChanged();
+    emit albumsChanged();
 }
 
 QVariantMap Library::smartAlbum(int albumId) const

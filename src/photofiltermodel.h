@@ -107,6 +107,13 @@ public:
     // Re-resolve the current album's query (its definition, or one it refers
     // to, changed) and re-filter if the tree differs.
     void refreshAlbumQuery();
+    // A free OQL query gate (the "Advanced…" builder's Apply), combined with
+    // everything else: a photo must satisfy it as well as the sidebar selection,
+    // the search, and the view's own gate. `tree` is the expanded query; set by
+    // Library, which keeps it current when smart albums it refers to change.
+    void setAdvancedQuery(const oql::Node &tree);
+    void clearAdvancedQuery();
+    bool hasAdvancedQuery() const { return m_advancedActive; }
 
     // The registered folder roots, used to tell orphan photos (shown at the
     // folder-view root) from foldered ones. Set by Library; not a QML property.
@@ -178,6 +185,8 @@ private:
     oql::Node m_albumQuery;     // its expanded membership query (valid when m_albumId > 0)
     std::function<oql::Node(int)> m_albumResolver;
     oql::Node m_selectedQuery;  // m_selected + m_matchAll as a tree
+    oql::Node m_advanced;       // the free query gate (valid when m_advancedActive)
+    bool m_advancedActive = false;
     oql::EvalContext m_ctx;
     QStringList m_folderRoots;
     QSet<int> m_albumTagIds;    // every album tag id (for the flattened album search)

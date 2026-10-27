@@ -87,8 +87,10 @@ one character a query can't quote), so Omapic turns it into `“`/`”`.
 pre-filled with the current selection (`a b` or `a | b`). The smart-album
 dialog is the same builder with a name field. A query is a row of chips — tags,
 `is:` / `album:` / `cat:` predicates, parentheses and `|` bars, any of them
-negated — with the result count updating live underneath, and **Save as smart
-album…** keeps it.
+negated — with the result count updating live underneath. **Apply** (or Enter)
+narrows the gallery to the matches on top of the sidebar selection and the
+search, shown as a strip above the photos with Edit… and ✕ to lift it; **Save
+as smart album…** keeps the query instead.
 
 - Type a tag name and press **Tab** or **Enter** (or click a suggestion) to
   commit it as a chip. Space never commits, because names can contain spaces.

@@ -77,6 +77,10 @@ class Library : public QObject {
     // How many removed files still have tags remembered (for the settings stats).
     Q_PROPERTY(int rememberedRemovedCount READ rememberedRemovedCount
                    NOTIFY rememberedRemovedCountChanged)
+    // The free OQL query currently applied to the gallery (the builder's Apply),
+    // in canonical text; empty when none. It narrows every view on top of the
+    // sidebar selection and the search, and the album tiles honour it too.
+    Q_PROPERTY(QString advancedQuery READ advancedQuery NOTIFY advancedQueryChanged)
 
 public:
     enum RenameResult {
@@ -121,6 +125,11 @@ public:
     int tagRetentionDays() const { return m_tagRetentionDays; }
     void setTagRetentionDays(int days);
     int rememberedRemovedCount() const { return m_db.rememberedRemovedCount(); }
+    QString advancedQuery() const { return m_advancedText; }
+    // Apply query text to the gallery; returns an empty string, or the parse
+    // error. clearAdvancedQuery lifts it.
+    Q_INVOKABLE QString setAdvancedQuery(const QString &text);
+    Q_INVOKABLE void clearAdvancedQuery();
 
     Q_INVOKABLE void importDirectory(const QUrl &dir);
     Q_INVOKABLE void removeFolder(int folderId);
@@ -353,6 +362,7 @@ signals:
     void autoWriteSidecarsChanged();
     void tagRetentionDaysChanged();
     void rememberedRemovedCountChanged();
+    void advancedQueryChanged();
     // A sidecar export finished: counts of files written and failures, for a toast.
     void sidecarsExported(int written, int failed);
 
@@ -451,6 +461,8 @@ private:
 
     oql::EvalContext m_evalContext;
     QHash<int, oql::Node> m_smartTrees; // smart album id -> expanded query (see rebuildQueryState)
+    oql::Node m_advancedRoot;           // the applied free query, unexpanded (re-expanded with the trees)
+    QString m_advancedText;             // its canonical text; empty = none applied
 
     QThread m_workerThread;
     LibraryWorker *m_worker = nullptr;

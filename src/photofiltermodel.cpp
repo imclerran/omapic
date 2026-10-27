@@ -190,6 +190,26 @@ void PhotoFilterModel::refreshAlbumQuery()
     emit countChanged();
 }
 
+void PhotoFilterModel::setAdvancedQuery(const oql::Node &tree)
+{
+    if (m_advancedActive && tree == m_advanced)
+        return;
+    m_advanced = tree;
+    m_advancedActive = true;
+    invalidateRowFilter();
+    emit countChanged();
+}
+
+void PhotoFilterModel::clearAdvancedQuery()
+{
+    if (!m_advancedActive)
+        return;
+    m_advancedActive = false;
+    m_advanced = oql::Node();
+    invalidateRowFilter();
+    emit countChanged();
+}
+
 void PhotoFilterModel::setFolderRoots(const QStringList &roots)
 {
     if (m_folderRoots == roots)
@@ -388,14 +408,17 @@ bool PhotoFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
         }
     }
 
-    // Tag filter: the sidebar selection as an AND/OR tree (see setSelectedTagIds).
-    if (!m_selected.isEmpty()) {
+    // Tag filter: the sidebar selection as an AND/OR tree (see setSelectedTagIds),
+    // and the free query from the builder when one is applied. Both must hold.
+    if (!m_selected.isEmpty() || m_advancedActive) {
         const QVariantList raw = sourceModel()->data(idx, PhotoModel::TagIdsRole).toList();
         QSet<int> tags;
         tags.reserve(raw.size());
         for (const QVariant &v : raw)
             tags.insert(v.toInt());
-        if (!oql::matches(m_selectedQuery, tags, m_ctx))
+        if (!m_selected.isEmpty() && !oql::matches(m_selectedQuery, tags, m_ctx))
+            return false;
+        if (m_advancedActive && !oql::matches(m_advanced, tags, m_ctx))
             return false;
     }
 
