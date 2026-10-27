@@ -1,5 +1,0 @@
-# makepkg build artifacts and the local source checkout
-/omapic/
-/src/
-/pkg/
-/*.pkg.tar.*
