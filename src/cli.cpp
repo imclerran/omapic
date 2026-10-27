@@ -38,6 +38,7 @@ const CommandName kCommands[] = {
     {"categories", Command::Categories},
     {"view", Command::View},
     {"slideshow", Command::Slideshow},
+    {"completion", Command::Completion},
 };
 
 // Which commands an option belongs to.
@@ -49,6 +50,7 @@ enum Scope : unsigned {
     WithQuery = Query_ | View_ | Slideshow_,
     Gui = View_ | Slideshow_,
     Names = (1u << int(Command::Tags)) | (1u << int(Command::Albums)) | (1u << int(Command::Categories)),
+    WithLibrary = WithQuery | Names, // every command that reads the library
 };
 
 struct OptionSpec {
@@ -61,9 +63,10 @@ struct OptionSpec {
 };
 const OptionSpec kOptions[] = {
     {"help", 'h', false, All, "", "Show this help."},
-    {"library", 0, true, All, "path", "The library to read (default: $OMAPIC_LIBRARY, else the gallery's)."},
+    {"library", 0, true, WithLibrary, "path", "The library to read (default: $OMAPIC_LIBRARY, else the gallery's)."},
     {"count", 0, false, Query_, "", "Print only the number of matches."},
     {"counts", 0, false, Names, "", "Print each name, a tab, and its number of photos."},
+    {"tsv", 0, false, Names, "", "Tab-separated: name, photos, then a tag's category or an album's kind."},
     {"json", 0, false, Query_ | Names, "", "Print an indented JSON array of objects."},
     {"jsonl", 0, false, Query_ | Names, "", "Print one compact JSON object per line."},
     {"0", '0', false, Query_, "", "Separate paths with NUL instead of newline (for xargs -0)."},
@@ -321,6 +324,7 @@ void printJson(const QVector<QJsonObject> &objects, Output format, QTextStream &
 struct NameRow {
     QString name;
     int count = 0;
+    QString extra; // --tsv's third field: a tag's category, an album's kind
     QJsonObject json;
 };
 
@@ -381,6 +385,8 @@ QVector<NameRow> nameRows(const Options &opts, Database &db)
             r.name = n;
             r.count = byTag.value(id);
             const int category = ctx.tagCategory.value(id, -1);
+            if (category >= 0)
+                r.extra = vocab.name(oql::NameKind::Category, category);
             r.json = {
                 {QStringLiteral("name"), n},
                 {QStringLiteral("category"), nullable(category >= 0 ? vocab.name(oql::NameKind::Category, category) : QString())},
@@ -396,6 +402,7 @@ QVector<NameRow> nameRows(const Options &opts, Database &db)
             NameRow r;
             r.name = n;
             r.count = byTag.value(vocab.resolve(oql::NameKind::Album, oql::foldName(n)));
+            r.extra = QStringLiteral("album");
             r.json = {
                 {QStringLiteral("name"), n},
                 {QStringLiteral("smart"), false},
@@ -413,6 +420,7 @@ QVector<NameRow> nameRows(const Options &opts, Database &db)
         for (const SmartAlbumInfo &sa : db.smartAlbums()) {
             NameRow r;
             r.name = sa.name;
+            r.extra = QStringLiteral("smart album");
             if (counting) {
                 const oql::Node tree = oql::expand(sa.query, lookup, nullptr, sa.id);
                 for (const Photo &p : photos)
@@ -464,6 +472,14 @@ int runNameList(const Options &opts, Database &db, QTextStream &out)
         for (const NameRow &r : rows)
             out << r.name << '\t' << r.count << '\n';
         break;
+    case Output::Tsv:
+        for (const NameRow &r : rows) {
+            out << r.name << '\t' << r.count;
+            if (opts.command != Command::Categories)
+                out << '\t' << r.extra;
+            out << '\n';
+        }
+        break;
     default: {
         QString last;
         for (const NameRow &r : rows) {
@@ -489,7 +505,8 @@ bool isSubcommand(const QString &arg)
 
 bool isHeadless(Command c)
 {
-    return c == Command::Query || c == Command::Tags || c == Command::Albums || c == Command::Categories;
+    return c == Command::Query || c == Command::Tags || c == Command::Albums || c == Command::Categories
+        || c == Command::Completion;
 }
 
 Command commandFor(const QString &arg)
@@ -577,6 +594,9 @@ Options parse(const QStringList &args)
         } else if (n == QLatin1String("counts")) {
             o.output = Output::Counts;
             ++shapes;
+        } else if (n == QLatin1String("tsv")) {
+            o.output = Output::Tsv;
+            ++shapes;
         } else if (n == QLatin1String("json")) {
             o.output = Output::Json;
             ++shapes;
@@ -631,10 +651,18 @@ Options parse(const QStringList &args)
     if (shapes > 1) {
         o.error = o.command == Command::Query
             ? QStringLiteral("--count, --json, --jsonl and -0 are mutually exclusive")
-            : QStringLiteral("--counts, --json and --jsonl are mutually exclusive");
+            : QStringLiteral("--counts, --tsv, --json and --jsonl are mutually exclusive");
         return o;
     }
 
+    // `completion` takes the shell's name instead of a query.
+    if (o.command == Command::Completion) {
+        if (queryParts.size() != 1 || completionScript(queryParts.first()).isEmpty())
+            o.error = QStringLiteral("completion takes one of zsh, bash or fish");
+        else
+            o.shell = queryParts.first();
+        return o;
+    }
     // An unquoted query the shell split arrives as several arguments.
     o.query = queryParts.join(QLatin1Char(' ')).trimmed();
     if (takesQuery(o.command) && o.query.isEmpty())
@@ -654,6 +682,7 @@ QString usage(Command command)
               "       omapic tags | albums | categories    list names, one per line\n"
               "       omapic view [options] '<query>'      open the matches in the viewer\n"
               "       omapic slideshow [options] '<query>' play the matches as a slideshow\n"
+              "       omapic completion zsh|bash|fish      print a shell completion script\n"
               "\n"
               "Subcommands win over file arguments: open a file named \"query\" with\n"
               "`omapic ./query` or `omapic -- query`. Long options go anywhere before `--`\n"
@@ -673,6 +702,8 @@ QString usage(Command command)
         ts << " [options]";
     if (takesQuery(command))
         ts << " '<query>'";
+    else if (command == Command::Completion)
+        ts << " zsh|bash|fish";
     ts << "\n";
     switch (command) {
     case Command::Query:
@@ -694,6 +725,12 @@ QString usage(Command command)
         ts << "Play the matching photos as a slideshow: 4 seconds per photo, in order, with\n"
               "cuts between them, unless a flag says otherwise. The gallery's saved slideshow\n"
               "settings are not consulted.\n";
+        break;
+    case Command::Completion:
+        ts << "Print a completion script for the shell to stdout; see the README for where\n"
+              "to install it. The script completes subcommands, options and query words\n"
+              "(tags, album: and cat: names, is: values), fetching the names from omapic\n"
+              "itself as you type.\n";
         break;
     case Command::None: break;
     }
@@ -723,6 +760,23 @@ QString usage(Command command)
     return s;
 }
 
+QVector<OptionInfo> optionsFor(Command command)
+{
+    QVector<OptionInfo> out;
+    for (const OptionSpec &o : kOptions) {
+        if (!(o.scope & (1u << int(command))))
+            continue;
+        OptionInfo info;
+        info.name = QLatin1String(o.name);
+        info.shortName = o.shortName ? QLatin1Char(o.shortName) : QChar();
+        info.takesValue = o.takesValue;
+        info.valueName = QLatin1String(o.valueName);
+        info.help = QLatin1String(o.help);
+        out.append(info);
+    }
+    return out;
+}
+
 QString defaultDatabasePath()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
@@ -749,6 +803,10 @@ int runHeadless(const Options &opts, QTextStream &out, QTextStream &err)
     }
     if (opts.help) {
         out << usage(opts.command);
+        return kExitMatches;
+    }
+    if (opts.command == Command::Completion) {
+        out << completionScript(opts.shell);
         return kExitMatches;
     }
     Database db;

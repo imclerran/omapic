@@ -128,6 +128,7 @@ omapic albums --json                               # name, smart, count, query
 omapic view 'is:fav'                               # open the matches in the viewer
 omapic slideshow --interval 3 --shuffle 'beach'    # play them as a slideshow
 omapic tags --library ~/backup/library.db          # read another library
+omapic completion zsh                              # a completion script (see below)
 ```
 
 `--json` prints an indented array and `--jsonl` one compact object per line,
@@ -137,9 +138,10 @@ with the same fields; `takenAt` is UTC with a `Z` suffix
 a tab and its number of photos, or with `--json` / `--jsonl` objects: tags
 `{name, category, count, aliases}` (category null when it has none), albums
 `{name, smart, count, query}` (the canonical query text of a smart album, else
-null), categories `{name, count}`. Counts use the same scope as `query`'s
-defaults, and these commands take `--include-disabled` and `--all-copies` to
-widen it.
+null), categories `{name, count}`; `--tsv` is the tab-separated form the
+completion scripts read (name, count, then a tag's category or an album's
+kind). Counts use the same scope as `query`'s defaults, and these commands
+take `--include-disabled` and `--all-copies` to widen it.
 
 Every subcommand reads the gallery's own library
 (`~/.local/share/omapic/library.db`, or wherever `$XDG_DATA_HOME` points)
@@ -184,6 +186,33 @@ codes: 0 something matched (for `--explain`: the query parses), 1 nothing
 matched, 2 a usage or query error, 3 the library couldn't be opened. The tool
 never migrates the library: if it is older than the installed Omapic, launch
 the app once to upgrade it.
+
+### Shell completion
+
+`omapic completion zsh|bash|fish` prints a completion script for the shell.
+It completes the subcommands, each one's options (and the values of `--sort`),
+and query words: tag names by default, album names after `album:`, category
+names after `cat:`, and the `is:` values — fetched from the library as you
+type, so `OMAPIC_LIBRARY` and a `--library` already on the line are honoured.
+zsh and fish show each tag's category and photo count next to it. Names with
+spaces or shell characters are inserted quoted. Install it once:
+
+```sh
+# zsh: a file named _omapic in a directory on $fpath, before compinit
+mkdir -p ~/.zsh/completions && omapic completion zsh > ~/.zsh/completions/_omapic
+# then in ~/.zshrc, before `compinit`:  fpath=(~/.zsh/completions $fpath)
+
+# bash: where bash-completion loads scripts on demand…
+mkdir -p ~/.local/share/bash-completion/completions
+omapic completion bash > ~/.local/share/bash-completion/completions/omapic
+# …or, without bash-completion, in ~/.bashrc:  eval "$(omapic completion bash)"
+
+# fish
+omapic completion fish > ~/.config/fish/completions/omapic.fish
+```
+
+Like the other subcommands, `completion` wins over a file of that name:
+`omapic ./completion` opens the file.
 
 ## Tag retention
 

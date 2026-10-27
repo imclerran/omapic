@@ -9,18 +9,21 @@
 #include <QStringList>
 #include <QTextStream>
 #include <QUrl>
+#include <QVector>
 
 // The command-line interface: `omapic query|tags|albums|categories` (headless,
-// read-only) and `omapic view|slideshow` (resolve a query, then open the
-// viewer). main.cpp dispatches on the subcommand before creating any
-// application object; everything here runs on omapic-core only, so the tests
-// drive it against a temporary library.
+// read-only), `omapic view|slideshow` (resolve a query, then open the viewer)
+// and `omapic completion` (print a shell completion script). main.cpp
+// dispatches on the subcommand before creating any application object;
+// everything here runs on omapic-core only, so the tests drive it against a
+// temporary library.
 //
 //   omapic query [--count | --json | --jsonl | -0] [--explain] [--strict]
 //                [--sort name|date|tags] [--reverse] [--all-copies]
 //                [--include-disabled] '<query>'
-//   omapic tags | albums | categories [--counts | --json | --jsonl]
+//   omapic tags | albums | categories [--counts | --tsv | --json | --jsonl]
 //                [--all-copies] [--include-disabled]
+//   omapic completion zsh|bash|fish
 //   omapic view [scope/sort flags] [--strict] [--fullscreen] '<query>'
 //   omapic slideshow [scope/sort flags] [--interval S] [--shuffle]
 //                    [--shuffle-folders] [--crossfade] [--start-random]
@@ -49,12 +52,13 @@
 // the app to upgrade it, or newer than this build).
 namespace cli {
 
-enum class Command { None, Query, Tags, Albums, Categories, View, Slideshow };
+enum class Command { None, Query, Tags, Albums, Categories, View, Slideshow, Completion };
 // How a headless command prints. Plain is one path (query) or one name (tags,
-// albums, categories) per line; Count and Nul are query's, Counts is the name
-// lists' (name, tab, photo count); Json (an indented array) and Jsonl (one
-// compact object per line) are shared.
-enum class Output { Plain, Count, Json, Jsonl, Nul, Counts };
+// albums, categories) per line; Count and Nul are query's, Counts (name, tab,
+// photo count) and Tsv (name, count, then the tag's category or the album's
+// kind, for the completion scripts) are the name lists'; Json (an indented
+// array) and Jsonl (one compact object per line) are shared.
+enum class Output { Plain, Count, Json, Jsonl, Nul, Counts, Tsv };
 
 constexpr int kExitMatches = 0;
 constexpr int kExitNoMatches = 1;
@@ -66,6 +70,7 @@ struct Options {
     bool help = false;
     QString error;   // non-empty: a usage error (exit 2) with this message
     QString query;   // the joined query text
+    QString shell;   // completion: zsh, bash or fish
     QString library; // --library <path>; empty when not given
     Output output = Output::Plain;
     bool explain = false;
@@ -99,6 +104,22 @@ Options parse(const QStringList &args);
 // The usage text, for --help and usage errors. With a command, that command's
 // text; otherwise the overview.
 QString usage(Command command = Command::None);
+
+// The options a subcommand accepts, in the order --help lists them, so the
+// completion scripts describe exactly what parse() accepts.
+struct OptionInfo {
+    QString name;      // long name ("count"); "0" for -0
+    QChar shortName;   // null when there is none
+    bool takesValue = false;
+    QString valueName; // for --help: "S", "path", "name|date|tags"
+    QString help;
+};
+QVector<OptionInfo> optionsFor(Command command);
+
+// The completion script for `shell` (zsh, bash or fish); empty for any other.
+// The scripts complete subcommands, options and query words, fetching tag,
+// album and category names from omapic itself at completion time.
+QString completionScript(const QString &shell);
 
 // The gallery's library file (~/.local/share/omapic/library.db).
 QString defaultDatabasePath();
