@@ -11,13 +11,13 @@
 #include <QStringList>
 
 #include "photomodel.h"
+#include "photosort.h"
 #include "textfold.h"
 
 PhotoFilterModel::PhotoFilterModel(QObject *parent)
     : QSortFilterProxyModel(parent)
 {
-    m_collator.setNumericMode(true);
-    m_collator.setCaseSensitivity(Qt::CaseInsensitive);
+    m_collator = photosort::collator();
 
     connect(this, &QAbstractItemModel::rowsInserted, this, &PhotoFilterModel::countChanged);
     connect(this, &QAbstractItemModel::rowsRemoved, this, &PhotoFilterModel::countChanged);
@@ -290,51 +290,31 @@ bool PhotoFilterModel::containsId(int id) const
 
 bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const
 {
+    // The comparison itself lives in photosort (shared with the CLI); this only
+    // gathers each row's keys. Only the keys the mode needs are read.
+    photosort::Keys a, b;
+    a.fileName = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
+    b.fileName = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
     if (m_folderFirst) {
-        // Flat-view "group by folder": compare the containing folder first (always
-        // ascending), then order within a folder by the chosen sort below.
-        const QString lp = sourceModel()->data(left, PhotoModel::FilePathRole).toString();
-        const QString rp = sourceModel()->data(right, PhotoModel::FilePathRole).toString();
-        const QString ld = lp.left(lp.lastIndexOf(QLatin1Char('/')));
-        const QString rd = rp.left(rp.lastIndexOf(QLatin1Char('/')));
-        const int dirCmp = m_collator.compare(ld, rd);
-        if (dirCmp != 0)
-            return dirCmp < 0;
+        a.path = sourceModel()->data(left, PhotoModel::FilePathRole).toString();
+        b.path = sourceModel()->data(right, PhotoModel::FilePathRole).toString();
     }
-
-    // Primary key for the active sort, computed in an ascending sense (negative =
-    // left orders first). m_sortAscending flips it; the file name is always the
-    // ascending tiebreak so equal keys keep a stable order.
-    int cmp = 0;
+    photosort::Mode mode = photosort::Mode::Name;
     switch (m_sortMode) {
-    case SortByDate: {
-        // Ascending = oldest first. Photos without a date (0) share the smallest
-        // key, so they group together (at the start ascending, the end descending).
-        const qint64 lt = sourceModel()->data(left, PhotoModel::DateTakenRole).toLongLong();
-        const qint64 rt = sourceModel()->data(right, PhotoModel::DateTakenRole).toLongLong();
-        cmp = lt < rt ? -1 : lt > rt ? 1 : 0;
+    case SortByDate:
+        mode = photosort::Mode::Date;
+        a.takenAt = sourceModel()->data(left, PhotoModel::DateTakenRole).toLongLong();
+        b.takenAt = sourceModel()->data(right, PhotoModel::DateTakenRole).toLongLong();
         break;
-    }
-    case SortByTagCount: {
-        // Ascending = fewest tags first.
-        const int lc = sourceModel()->data(left, PhotoModel::TagCountRole).toInt();
-        const int rc = sourceModel()->data(right, PhotoModel::TagCountRole).toInt();
-        cmp = lc < rc ? -1 : lc > rc ? 1 : 0;
+    case SortByTagCount:
+        mode = photosort::Mode::TagCount;
+        a.tagCount = sourceModel()->data(left, PhotoModel::TagCountRole).toInt();
+        b.tagCount = sourceModel()->data(right, PhotoModel::TagCountRole).toInt();
         break;
-    }
     case SortByName:
-        break; // the name comparison below is the key
+        break;
     }
-
-    const QString ln = sourceModel()->data(left, PhotoModel::FileNameRole).toString();
-    const QString rn = sourceModel()->data(right, PhotoModel::FileNameRole).toString();
-    const int nameCmp = m_collator.compare(ln, rn);
-    if (m_sortMode == SortByName)
-        cmp = nameCmp;
-    else if (cmp == 0)
-        return nameCmp < 0; // stable tiebreak, always ascending
-
-    return m_sortAscending ? cmp < 0 : cmp > 0;
+    return photosort::lessThan(a, b, mode, m_sortAscending, m_folderFirst, m_collator);
 }
 
 bool PhotoFilterModel::passesFolderGate(const QString &path) const

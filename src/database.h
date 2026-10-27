@@ -27,6 +27,14 @@ public:
     // partially open. On success the schema is migrated up to kSchemaVersion.
     bool open(const QString &path, const QString &connectionName = {});
 
+    // Open an existing library for reading only, for the command-line tool: no
+    // schema migration, no reserved-row creation, and the connection refuses
+    // every write (PRAGMA query_only). WAL mode means this is safe alongside a
+    // running gallery. SchemaOlder means the library is behind this build (launch
+    // the app once to upgrade it); SchemaNewer means it is ahead (update Omapic).
+    enum class OpenStatus { Ok, CannotOpen, SchemaOlder, SchemaNewer };
+    OpenStatus openReadOnly(const QString &path, const QString &connectionName = {});
+
     // True when the most recent open() refused because the library's schema
     // version is newer than this build understands. Lets the UI show a clear
     // "update Omapic" message instead of a generic failure.
@@ -38,7 +46,9 @@ public:
     bool beginTransaction();  // wrap many writes in one commit (much faster)
     bool commitTransaction();
 
-    QVector<Photo> loadPhotos();         // only photos in the active (shown) set
+    // Photos in the active (shown) set — or, with activeOnly false, every photo
+    // including those under disabled folders (the CLI's --include-disabled).
+    QVector<Photo> loadPhotos(bool activeOnly = true);
     QVector<TagInfo> loadTags();         // tags with >=1 active-folder photo, total count (tag manager)
     // Tags applying to >=1 active photo, with active counts. When folderScope is
     // non-empty, restricts to photos at or under that directory (the folder-view
@@ -356,6 +366,8 @@ private:
     // regardless of schema version, since the ids are per-instance in-memory.
     void ensureAlbumsCategory();
     void ensureFavoritesAlbum();
+    // The read-only counterpart: look the two ids up without creating anything.
+    void resolveReservedIds();
 
     // --- Schema versioning (PRAGMA user_version) ---
     int userVersion();                 // the opened file's current schema version
