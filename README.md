@@ -118,14 +118,28 @@ the gallery is open.
 omapic query 'beach (sunset | sunrise) -people'   # one path per line
 omapic query --count is:untagged                   # just the number
 omapic query --json --sort date 'album:Trip'       # id, path, name, tags, takenAt, favorite, video
+omapic query --jsonl 'is:fav'                      # the same, one object per line
 omapic query -0 'cat:Place' | xargs -0 cp -t ~/places/
 omapic query --explain 'dark forest'               # how the query was read (exit 0 if it parses)
 omapic query --strict 'dark forest'                # error out instead of guessing at names
 omapic tags | albums | categories                  # names, one per line (for completion)
+omapic tags --counts                               # name, tab, number of photos
+omapic albums --json                               # name, smart, count, query
 omapic view 'is:fav'                               # open the matches in the viewer
 omapic slideshow --interval 3 --shuffle 'beach'    # play them as a slideshow
 omapic tags --library ~/backup/library.db          # read another library
 ```
+
+`--json` prints an indented array and `--jsonl` one compact object per line,
+with the same fields; `takenAt` is UTC with a `Z` suffix
+(`2024-06-01T18:30:00Z`), or null when unknown. `tags`, `albums` and
+`categories` print one name per line, or with `--counts` each name followed by
+a tab and its number of photos, or with `--json` / `--jsonl` objects: tags
+`{name, category, count, aliases}` (category null when it has none), albums
+`{name, smart, count, query}` (the canonical query text of a smart album, else
+null), categories `{name, count}`. Counts use the same scope as `query`'s
+defaults, and these commands take `--include-disabled` and `--all-copies` to
+widen it.
 
 Every subcommand reads the gallery's own library
 (`~/.local/share/omapic/library.db`, or wherever `$XDG_DATA_HOME` points)

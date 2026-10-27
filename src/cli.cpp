@@ -48,6 +48,7 @@ enum Scope : unsigned {
     Slideshow_ = 1u << int(Command::Slideshow),
     WithQuery = Query_ | View_ | Slideshow_,
     Gui = View_ | Slideshow_,
+    Names = (1u << int(Command::Tags)) | (1u << int(Command::Albums)) | (1u << int(Command::Categories)),
 };
 
 struct OptionSpec {
@@ -62,14 +63,16 @@ const OptionSpec kOptions[] = {
     {"help", 'h', false, All, "", "Show this help."},
     {"library", 0, true, All, "path", "The library to read (default: $OMAPIC_LIBRARY, else the gallery's)."},
     {"count", 0, false, Query_, "", "Print only the number of matches."},
-    {"json", 0, false, Query_, "", "Print matches as JSON objects."},
+    {"counts", 0, false, Names, "", "Print each name, a tab, and its number of photos."},
+    {"json", 0, false, Query_ | Names, "", "Print an indented JSON array of objects."},
+    {"jsonl", 0, false, Query_ | Names, "", "Print one compact JSON object per line."},
     {"0", '0', false, Query_, "", "Separate paths with NUL instead of newline (for xargs -0)."},
     {"explain", 0, false, Query_, "", "Print how the query was read instead of matches (exit 0 when it parses)."},
     {"strict", 0, false, WithQuery, "", "Refuse a reading that depends on your tag names or a broken smart album."},
     {"sort", 0, true, WithQuery, "name|date|tags", "Order, as the gallery sorts: name (default), date, tags."},
     {"reverse", 0, false, WithQuery, "", "Reverse the order."},
-    {"all-copies", 0, false, WithQuery, "", "Keep duplicate copies of the same content."},
-    {"include-disabled", 0, false, WithQuery, "", "Include photos under disabled folders."},
+    {"all-copies", 0, false, WithQuery | Names, "", "Keep duplicate copies of the same content."},
+    {"include-disabled", 0, false, WithQuery | Names, "", "Include photos under disabled folders."},
     {"fullscreen", 0, false, Gui, "", "Open full screen."},
     {"interval", 0, true, Slideshow_, "S", "Seconds per photo (default 4)."},
     {"shuffle", 0, false, Slideshow_, "", "Shuffle the photos."},
@@ -289,21 +292,190 @@ QJsonObject photoJson(const Photo &p)
     o.insert(QStringLiteral("name"), p.fileName);
     o.insert(QStringLiteral("video"), p.isVideo);
     o.insert(QStringLiteral("favorite"), p.favorite);
+    // In UTC with a Z suffix, so the value means the same wherever it is read.
     o.insert(QStringLiteral("takenAt"),
-             p.takenAt > 0 ? QJsonValue(QDateTime::fromSecsSinceEpoch(p.takenAt).toString(Qt::ISODate))
+             p.takenAt > 0 ? QJsonValue(QDateTime::fromSecsSinceEpoch(p.takenAt).toUTC().toString(Qt::ISODate))
                            : QJsonValue());
     o.insert(QStringLiteral("tags"), QJsonArray::fromStringList(p.tagNames));
     return o;
 }
 
-// Names of one kind, sorted for people (case-insensitive), one per line.
-void printNames(QStringList names, QTextStream &out)
+// The indented array (--json) or one compact object per line (--jsonl).
+void printJson(const QVector<QJsonObject> &objects, Output format, QTextStream &out)
 {
-    std::sort(names.begin(), names.end(),
-              [](const QString &a, const QString &b) { return a.compare(b, Qt::CaseInsensitive) < 0; });
-    names.removeDuplicates();
-    for (const QString &n : names)
-        out << n << '\n';
+    if (format == Output::Jsonl) {
+        for (const QJsonObject &o : objects)
+            out << QJsonDocument(o).toJson(QJsonDocument::Compact) << '\n';
+        return;
+    }
+    QJsonArray arr;
+    for (const QJsonObject &o : objects)
+        arr.append(o);
+    out << QJsonDocument(arr).toJson(QJsonDocument::Indented);
+}
+
+// --- The name lists ---------------------------------------------------------------
+
+// One line of `tags`, `albums` or `categories`: the name, the number of photos
+// in scope that carry it, and the object --json / --jsonl print.
+struct NameRow {
+    QString name;
+    int count = 0;
+    QJsonObject json;
+};
+
+// The photos a name list counts: query's default scope (one copy per content,
+// enabled folders, files on disk), widened by the same flags.
+QVector<Photo> scopedPhotos(const Options &opts, Database &db)
+{
+    QVector<Photo> out;
+    for (const Photo &p : db.loadPhotos(/*activeOnly=*/!opts.includeDisabled)) {
+        if (p.isDuplicate && !opts.allCopies)
+            continue;
+        if (!QFileInfo::exists(p.path))
+            continue;
+        out.append(p);
+    }
+    return out;
+}
+
+QVector<NameRow> nameRows(const Options &opts, Database &db)
+{
+    oql::MapVocabulary vocab;
+    db.fillVocabulary(vocab);
+    // Counting walks every photo; the plain list doesn't need to.
+    const bool counting = opts.output != Output::Plain;
+    QVector<Photo> photos;
+    oql::EvalContext ctx;
+    QHash<int, int> byTag;      // tag id (album tags included) -> photos carrying it
+    QHash<int, int> byCategory; // category id -> photos with any tag in it
+    if (counting) {
+        photos = scopedPhotos(opts, db);
+        ctx = db.evalContext();
+        for (const Photo &p : photos) {
+            QSet<int> categories;
+            for (int t : p.tagIds) {
+                ++byTag[t];
+                const int c = ctx.tagCategory.value(t, -1);
+                if (c >= 0)
+                    categories.insert(c);
+            }
+            for (int c : categories)
+                ++byCategory[c];
+        }
+    }
+    auto nullable = [](const QString &s) { return s.isEmpty() ? QJsonValue() : QJsonValue(s); };
+
+    QVector<NameRow> rows;
+    switch (opts.command) {
+    case Command::Tags: {
+        QHash<int, QStringList> aliases; // by tag id, in alias-name order
+        for (const AliasInfo &a : db.loadAliases())
+            aliases[a.tagId].append(a.aliasName);
+        // Canonical names only: an alias is listed by the tag it stands for.
+        for (const QString &n : vocab.names(oql::NameKind::Tag)) {
+            const int id = vocab.resolve(oql::NameKind::Tag, oql::foldName(n));
+            if (id < 0 || vocab.name(oql::NameKind::Tag, id) != n)
+                continue;
+            NameRow r;
+            r.name = n;
+            r.count = byTag.value(id);
+            const int category = ctx.tagCategory.value(id, -1);
+            r.json = {
+                {QStringLiteral("name"), n},
+                {QStringLiteral("category"), nullable(category >= 0 ? vocab.name(oql::NameKind::Category, category) : QString())},
+                {QStringLiteral("count"), r.count},
+                {QStringLiteral("aliases"), QJsonArray::fromStringList(aliases.value(id))},
+            };
+            rows.append(r);
+        }
+        break;
+    }
+    case Command::Albums: {
+        for (const QString &n : vocab.names(oql::NameKind::Album)) {
+            NameRow r;
+            r.name = n;
+            r.count = byTag.value(vocab.resolve(oql::NameKind::Album, oql::foldName(n)));
+            r.json = {
+                {QStringLiteral("name"), n},
+                {QStringLiteral("smart"), false},
+                {QStringLiteral("count"), r.count},
+                {QStringLiteral("query"), QJsonValue()},
+            };
+            rows.append(r);
+        }
+        // A smart album's count is its query evaluated over the same photos.
+        const QHash<int, oql::Node> stored = db.smartAlbumQueries();
+        const auto lookup = [&stored](int id) -> const oql::Node * {
+            const auto it = stored.constFind(id);
+            return it == stored.constEnd() ? nullptr : &it.value();
+        };
+        for (const SmartAlbumInfo &sa : db.smartAlbums()) {
+            NameRow r;
+            r.name = sa.name;
+            if (counting) {
+                const oql::Node tree = oql::expand(sa.query, lookup, nullptr, sa.id);
+                for (const Photo &p : photos)
+                    if (oql::matches(tree, p.tagIds, ctx))
+                        ++r.count;
+            }
+            r.json = {
+                {QStringLiteral("name"), sa.name},
+                {QStringLiteral("smart"), true},
+                {QStringLiteral("count"), r.count},
+                {QStringLiteral("query"), oql::format(sa.query, vocab)},
+            };
+            rows.append(r);
+        }
+        break;
+    }
+    case Command::Categories:
+        for (const QString &n : vocab.names(oql::NameKind::Category)) {
+            NameRow r;
+            r.name = n;
+            r.count = byCategory.value(vocab.resolve(oql::NameKind::Category, oql::foldName(n)));
+            r.json = {{QStringLiteral("name"), n}, {QStringLiteral("count"), r.count}};
+            rows.append(r);
+        }
+        break;
+    default:
+        break;
+    }
+    // Sorted for people (case-insensitive).
+    std::stable_sort(rows.begin(), rows.end(), [](const NameRow &a, const NameRow &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return rows;
+}
+
+int runNameList(const Options &opts, Database &db, QTextStream &out)
+{
+    const QVector<NameRow> rows = nameRows(opts, db);
+    switch (opts.output) {
+    case Output::Json:
+    case Output::Jsonl: {
+        QVector<QJsonObject> objects;
+        for (const NameRow &r : rows)
+            objects.append(r.json);
+        printJson(objects, opts.output, out);
+        break;
+    }
+    case Output::Counts:
+        for (const NameRow &r : rows)
+            out << r.name << '\t' << r.count << '\n';
+        break;
+    default: {
+        QString last;
+        for (const NameRow &r : rows) {
+            if (r.name == last)
+                continue;
+            out << r.name << '\n';
+            last = r.name;
+        }
+        break;
+    }
+    }
+    return rows.isEmpty() ? kExitNoMatches : kExitMatches;
 }
 
 } // namespace
@@ -344,7 +516,7 @@ Options parse(const QStringList &args)
     // tag "0") and `-people` starts a query. After `--` everything is query text.
     QStringList queryParts;
     bool literal = false;
-    int shapes = 0; // --count / --json / -0 given
+    int shapes = 0; // output shapes given (--count, --json, --jsonl, -0, --counts)
     for (int i = 1; i < args.size(); ++i) {
         const QString a = args.at(i);
         if (literal) {
@@ -402,8 +574,14 @@ Options parse(const QStringList &args)
         } else if (n == QLatin1String("count")) {
             o.output = Output::Count;
             ++shapes;
+        } else if (n == QLatin1String("counts")) {
+            o.output = Output::Counts;
+            ++shapes;
         } else if (n == QLatin1String("json")) {
             o.output = Output::Json;
+            ++shapes;
+        } else if (n == QLatin1String("jsonl")) {
+            o.output = Output::Jsonl;
             ++shapes;
         } else if (n == QLatin1String("0")) {
             o.output = Output::Nul;
@@ -451,7 +629,9 @@ Options parse(const QStringList &args)
 
     // Only one output shape makes sense at a time.
     if (shapes > 1) {
-        o.error = QStringLiteral("--count, --json and -0 are mutually exclusive");
+        o.error = o.command == Command::Query
+            ? QStringLiteral("--count, --json, --jsonl and -0 are mutually exclusive")
+            : QStringLiteral("--counts, --json and --jsonl are mutually exclusive");
         return o;
     }
 
@@ -500,9 +680,15 @@ QString usage(Command command)
               "flat-view order. Duplicate copies, disabled folders and files missing from\n"
               "disk are left out unless asked for.\n";
         break;
-    case Command::Tags: ts << "List every tag name, for discovery and completion.\n"; break;
-    case Command::Albums: ts << "List every album and smart album name.\n"; break;
-    case Command::Categories: ts << "List every tag category name.\n"; break;
+    case Command::Tags:
+    case Command::Albums:
+    case Command::Categories:
+        ts << (command == Command::Tags ? "List every tag name, one per line, for discovery and completion.\n"
+               : command == Command::Albums ? "List every album and smart album name, one per line.\n"
+                                            : "List every tag category name, one per line.\n")
+           << "Counts (--counts, --json, --jsonl) use query's default scope: one copy per\n"
+              "content, enabled folders, files on disk.\n";
+        break;
     case Command::View: ts << "Open the matching photos in the viewer.\n"; break;
     case Command::Slideshow:
         ts << "Play the matching photos as a slideshow: 4 seconds per photo, in order, with\n"
@@ -570,31 +756,8 @@ int runHeadless(const Options &opts, QTextStream &out, QTextStream &err)
     if (opened != kExitMatches)
         return opened;
 
-    if (opts.command != Command::Query) {
-        oql::MapVocabulary vocab;
-        db.fillVocabulary(vocab);
-        QStringList names;
-        switch (opts.command) {
-        case Command::Tags:
-            // Canonical names only: an alias is listed by the tag it stands for.
-            for (const QString &n : vocab.names(oql::NameKind::Tag)) {
-                const int id = vocab.resolve(oql::NameKind::Tag, oql::foldName(n));
-                if (id >= 0 && vocab.name(oql::NameKind::Tag, id) == n)
-                    names.append(n);
-            }
-            break;
-        case Command::Albums:
-            names = vocab.names(oql::NameKind::Album) + vocab.names(oql::NameKind::SmartAlbum);
-            break;
-        case Command::Categories:
-            names = vocab.names(oql::NameKind::Category);
-            break;
-        default:
-            break;
-        }
-        printNames(names, out);
-        return names.isEmpty() ? kExitNoMatches : kExitMatches;
-    }
+    if (opts.command != Command::Query)
+        return runNameList(opts, db, out);
 
     Parsed q;
     if (parseQuery(opts, db, err, q) != kExitMatches)
@@ -610,18 +773,19 @@ int runHeadless(const Options &opts, QTextStream &out, QTextStream &err)
     case Output::Count:
         out << r.photos.size() << '\n';
         break;
-    case Output::Json: {
-        QJsonArray arr;
+    case Output::Json:
+    case Output::Jsonl: {
+        QVector<QJsonObject> objects;
         for (const Photo &p : r.photos)
-            arr.append(photoJson(p));
-        out << QJsonDocument(arr).toJson(QJsonDocument::Indented);
+            objects.append(photoJson(p));
+        printJson(objects, opts.output, out);
         break;
     }
     case Output::Nul:
         for (const Photo &p : r.photos)
             out << p.path << QChar(u'\0');
         break;
-    case Output::Paths:
+    default:
         for (const Photo &p : r.photos)
             out << p.path << '\n';
         break;
