@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
         QCoreApplication app(argc, argv);
         setApplicationNames();
         QTextStream out(stdout), err(stderr);
-        return cli::runHeadless(cliOpts, cli::defaultDatabasePath(), out, err);
+        return cli::runHeadless(cliOpts, out, err);
     }
     const bool queryLaunch = cliOpts.command != cli::Command::None;
 
@@ -114,7 +114,7 @@ int main(int argc, char *argv[])
             QTextStream(stdout) << cli::usage(cliOpts.command);
             return cli::kExitMatches;
         }
-        const int code = cli::resolveMedia(cliOpts, cli::defaultDatabasePath(), launchUrls, err);
+        const int code = cli::resolveMedia(cliOpts, launchUrls, err);
         if (code != cli::kExitMatches)
             return code; // no window for an error or an empty result
         if (cliOpts.command == cli::Command::Slideshow) {

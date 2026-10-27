@@ -25,10 +25,15 @@
 //                    [--shuffle-folders] [--crossfade] [--start-random]
 //                    [--loop-videos] [--fullscreen] '<query>'
 //
-// What the tool does depends only on its arguments and the library: it never
-// reads the gallery's saved settings (QSettings), which are incidental UI state.
-// The one piece of library state it honours is which folders are enabled,
-// because that lives in the database (see --include-disabled).
+// What the tool does depends only on its arguments, its environment variables
+// and the library: it never reads the gallery's saved settings (QSettings),
+// which are incidental UI state. The one piece of library state it honours is
+// which folders are enabled, because that lives in the database (see
+// --include-disabled).
+//
+// Every subcommand that reads the library takes --library <path>; without it
+// the OMAPIC_LIBRARY environment variable is used, and without that the
+// gallery's own library ($XDG_DATA_HOME/omapic/library.db).
 //
 // A subcommand's long options are recognised anywhere before `--`, before or
 // after the query has started (`omapic query beach --count`); an unknown
@@ -56,6 +61,7 @@ struct Options {
     bool help = false;
     QString error;   // non-empty: a usage error (exit 2) with this message
     QString query;   // the joined query text
+    QString library; // --library <path>; empty when not given
     Output output = Output::Paths;
     bool explain = false;
     // Refuse any reading that depended on the library's names (every oql::Note)
@@ -91,15 +97,18 @@ QString usage(Command command = Command::None);
 
 // The gallery's library file (~/.local/share/omapic/library.db).
 QString defaultDatabasePath();
+// The library a command reads: --library, else $OMAPIC_LIBRARY, else the
+// default. Always opened read-only.
+QString libraryPath(const Options &opts);
 
-// Run a headless command against the library at `dbPath`, writing to the
-// streams. Returns the exit code.
-int runHeadless(const Options &opts, const QString &dbPath, QTextStream &out, QTextStream &err);
+// Run a headless command against the library libraryPath(opts) names, writing
+// to the streams. Returns the exit code.
+int runHeadless(const Options &opts, QTextStream &out, QTextStream &err);
 
 // Resolve a view/slideshow query to file URLs in gallery order, applying the
 // scope flags and skipping files missing from disk (reported on `err`).
 // Returns the exit code; `urls` is filled only on kExitMatches.
-int resolveMedia(const Options &opts, const QString &dbPath, QList<QUrl> &urls, QTextStream &err);
+int resolveMedia(const Options &opts, QList<QUrl> &urls, QTextStream &err);
 
 // The slideshow's settings, from the command-line flags alone: 4 s per photo
 // and everything else off unless a flag turns it on. The gallery's saved
