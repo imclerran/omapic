@@ -504,4 +504,165 @@ ParseResult parse(const QString &text, const Vocabulary &vocab)
     return Parser(text, vocab).run();
 }
 
+QVector<Token> tokenize(const QString &text, const Vocabulary &vocab)
+{
+    QVector<Token> out;
+    const int n = int(text.size());
+    int pos = 0;
+    bool negate = false;
+    int negateStart = -1;
+    auto wordEnd = [&](int from) {
+        int p = from;
+        while (p < n && !syntax::isBoundary(text.at(p)))
+            ++p;
+        return p;
+    };
+    // Longest known name of `kind` from `start`, ending at a boundary (the
+    // parser's rule; see Parser::longestMatch).
+    auto longest = [&](NameKind kind, int start, int &end) -> int {
+        int limit = int(text.indexOf(QLatin1Char('"'), start));
+        if (limit < 0)
+            limit = n;
+        for (int p = limit; p > start; --p) {
+            if (p != n && !syntax::isBoundary(text.at(p)))
+                continue;
+            if (text.at(p - 1).isSpace())
+                continue;
+            const int id = vocab.resolve(kind, foldName(text.mid(start, p - start)));
+            if (id >= 0) {
+                end = p;
+                return id;
+            }
+        }
+        return -1;
+    };
+    auto push = [&](Token t) {
+        if (negate && (t.kind == Token::Tag || t.kind == Token::Predicate || t.kind == Token::Open
+                       || t.kind == Token::Unknown)) {
+            t.negated = true;
+            t.span = {negateStart, t.span.end() - negateStart};
+        } else if (negate) {
+            // A `-` with nothing to negate (before `)`, `|` or the end).
+            Token stray;
+            stray.kind = Token::Unknown;
+            stray.span = {negateStart, 1};
+            stray.name = QStringLiteral("-");
+            out.append(stray);
+        }
+        negate = false;
+        out.append(t);
+    };
+
+    while (pos < n) {
+        const QChar c = text.at(pos);
+        if (c.isSpace()) {
+            ++pos;
+            continue;
+        }
+        Token t;
+        if (c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char('|')) {
+            t.kind = c == QLatin1Char('(') ? Token::Open : c == QLatin1Char(')') ? Token::Close : Token::Or;
+            t.span = {pos, 1};
+            t.name = QString(c);
+            ++pos;
+            push(t);
+            continue;
+        }
+        if (c == QLatin1Char('-')) {
+            if (negate) { // `--a`: the second `-` is its own (stray) token
+                Token stray;
+                stray.kind = Token::Unknown;
+                stray.span = {negateStart, 1};
+                stray.name = QStringLiteral("-");
+                out.append(stray);
+            }
+            negate = true;
+            negateStart = pos;
+            ++pos;
+            continue;
+        }
+        if (c == QLatin1Char('"')) {
+            const int close = int(text.indexOf(QLatin1Char('"'), pos + 1));
+            const int end = close < 0 ? n : close + 1;
+            const QString raw = text.mid(pos + 1, (close < 0 ? n : close) - pos - 1);
+            const int id = vocab.resolve(NameKind::Tag, foldName(raw));
+            t.kind = id >= 0 && close >= 0 ? Token::Tag : Token::Unknown;
+            t.span = {pos, end - pos};
+            t.id = id;
+            t.name = t.kind == Token::Tag ? vocab.name(NameKind::Tag, id) : text.mid(pos, end - pos);
+            pos = end;
+            push(t);
+            continue;
+        }
+        const int key = syntax::predicateKeyAt(text, pos);
+        if (key >= 0) {
+            const syntax::PredicateSpec &spec = syntax::kPredicates[key];
+            const int valueStart = pos + int(qstrlen(spec.key)) + 1;
+            t.kind = Token::Predicate;
+            t.name = QLatin1String(spec.key);
+            int end = valueStart;
+            bool ok = false;
+            if (spec.pred == syntax::Predicate::Is) {
+                end = wordEnd(valueStart);
+                t.value = foldName(text.mid(valueStart, end - valueStart));
+                ok = t.value == syntax::kFavValue || t.value == syntax::kUntaggedValue;
+            } else {
+                const QVector<NameKind> kinds = spec.pred == syntax::Predicate::Album
+                    ? QVector<NameKind>{NameKind::Album, NameKind::SmartAlbum}
+                    : QVector<NameKind>{NameKind::Category};
+                if (valueStart < n && text.at(valueStart) == QLatin1Char('"')) {
+                    const int close = int(text.indexOf(QLatin1Char('"'), valueStart + 1));
+                    end = close < 0 ? n : close + 1;
+                    const QString raw = text.mid(valueStart + 1, (close < 0 ? n : close) - valueStart - 1);
+                    for (NameKind k : kinds) {
+                        const int id = vocab.resolve(k, foldName(raw));
+                        if (id >= 0 && close >= 0) { t.id = id; t.nameKind = k; ok = true; break; }
+                    }
+                } else {
+                    int best = -1;
+                    for (NameKind k : kinds) {
+                        int e = 0;
+                        const int id = longest(k, valueStart, e);
+                        if (id >= 0 && e > best) { best = e; t.id = id; t.nameKind = k; ok = true; }
+                    }
+                    end = ok ? best : wordEnd(valueStart);
+                }
+                if (ok)
+                    t.value = vocab.name(t.nameKind, t.id);
+            }
+            t.span = {pos, end - pos};
+            if (!ok) {
+                t.kind = Token::Unknown;
+                t.name = text.mid(pos, end - pos);
+                t.value.clear();
+            }
+            pos = end;
+            push(t);
+            continue;
+        }
+        int end = 0;
+        const int id = longest(NameKind::Tag, pos, end);
+        if (id >= 0) {
+            t.kind = Token::Tag;
+            t.id = id;
+            t.name = vocab.name(NameKind::Tag, id);
+        } else {
+            end = wordEnd(pos);
+            t.kind = Token::Unknown;
+            t.name = text.mid(pos, end - pos);
+        }
+        t.span = {pos, end - pos};
+        pos = end;
+        push(t);
+    }
+    if (negate) { // a trailing `-`
+        Token stray;
+        stray.kind = Token::Unknown;
+        stray.span = {negateStart, 1};
+        stray.name = QStringLiteral("-");
+        out.append(stray);
+    }
+    return out;
+}
+
 } // namespace oql

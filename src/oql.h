@@ -183,6 +183,27 @@ struct ParseResult {
 // error ("empty query") since no consumer has a use for one.
 ParseResult parse(const QString &text, const Vocabulary &vocab);
 
+// --- Tokens -----------------------------------------------------------------
+
+// A flat lexical reading of query text, for editors that show a query as a
+// row of chips rather than a tree: every term, parenthesis and bar in order,
+// with a `-` folded into the term or group it negates, and with anything the
+// vocabulary can't resolve kept as an Unknown token (so a pasted query can
+// be shown with its bad spans highlighted instead of being refused outright).
+// Follows the same longest-match / syntax-wins rules as the parser; it just
+// doesn't check the grammar.
+struct Token {
+    enum Kind { Tag, Predicate, Open, Close, Or, Unknown };
+    Kind kind = Unknown;
+    Span span;
+    bool negated = false;  // a `-` immediately before it (Tag, Predicate, Open, Unknown)
+    int id = -1;           // Tag: tag id; Predicate album:/cat:: the album/category id
+    NameKind nameKind = NameKind::Tag; // Predicate album:/cat:: Album, SmartAlbum or Category
+    QString name;          // Tag: canonical name; Predicate: the key (is/album/cat); Unknown: the raw text
+    QString value;         // Predicate: fav/untagged, or the resolved album/category name
+};
+QVector<Token> tokenize(const QString &text, const Vocabulary &vocab);
+
 // --- Formatting -------------------------------------------------------------
 
 // The canonical text of a tree: terms by their current names, one space

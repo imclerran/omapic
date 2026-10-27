@@ -34,6 +34,8 @@ Rectangle {
     // Tab focus cycle (routed by Main): forward from / back to the filter field.
     signal tabForward()
     signal tabBackward()
+    // "Advanced…": open the query builder, pre-filled from the current selection.
+    signal advancedRequested()
     // Focus the tag-filter field. Returns false when it's hidden (no tags), so
     // the cycle can skip this stop.
     function focusSearch() {
@@ -214,6 +216,14 @@ Rectangle {
                 checked: true
             }
             Item { Layout.fillWidth: true }
+            ToolButton {
+                text: qsTr("Advanced…")
+                font.pixelSize: 12
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: qsTr("Build a query with NOT, OR, groups and predicates")
+                onClicked: root.advancedRequested()
+            }
         }
     }
 }

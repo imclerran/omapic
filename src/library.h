@@ -292,6 +292,17 @@ public:
     // string on success, else a message to show (a parse error, a duplicate name,
     // or a query that would make the album refer to itself).
     Q_INVOKABLE QString saveSmartAlbumQuery(int albumId, const QString &name, const QString &text);
+    // The flat chip reading of query text (oql::tokenize), for the query builder:
+    // a list of {type: tag|pred|open|close|or|bad, negated, name, id, kind
+    // (album|smart|category for pred), value, colorSlot, categoryName, start,
+    // length}. Unknown names come back as `bad` tokens with their raw text.
+    Q_INVOKABLE QVariantList tokenizeQuery(const QString &text) const;
+    // How many photos of the flat view (active, one per content) match the query
+    // text; -1 when it doesn't parse. The builder's live count.
+    Q_INVOKABLE int queryMatchCount(const QString &text) const;
+    // The names the builder offers after album: and cat: — every album and smart
+    // album as {name, smart}, every user category as {name, colorSlot}.
+    Q_INVOKABLE QVariantMap queryVocabulary() const;
 
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.

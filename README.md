@@ -45,9 +45,9 @@ there's always a pre-upgrade copy to fall back on.
 
 ## Query language (OQL)
 
-Smart albums are saved queries in **OQL**, the Omapic Query Language. The
-smart-album dialog's tag picker covers the common case (a set of tags, all or
-any); **Edit as text** opens the whole language.
+Smart albums are saved queries in **OQL**, the Omapic Query Language, and the
+filter sidebar's **Advanced…** button opens the same query builder on the
+current tag selection (see [Advanced queries](#advanced-queries) below).
 
 | Form | Meaning |
 |---|---|
@@ -80,6 +80,30 @@ album that uses it. Deleting a tag, album or category a query mentions leaves a
 named "missing" term in its place (shown as `"name"`) that matches nothing —
 the query is never silently rewritten. A `"` can't appear in a name (it is the
 one character a query can't quote), so Omapic turns it into `“`/`”`.
+
+## Advanced queries
+
+**Advanced…** at the bottom of the tag sidebar opens the query builder,
+pre-filled with the current selection (`a b` or `a | b`). The smart-album
+dialog is the same builder with a name field. A query is a row of chips — tags,
+`is:` / `album:` / `cat:` predicates, parentheses and `|` bars, any of them
+negated — with the result count updating live underneath, and **Save as smart
+album…** keeps it.
+
+- Type a tag name and press **Tab** or **Enter** (or click a suggestion) to
+  commit it as a chip. Space never commits, because names can contain spaces.
+  Suggestions show tags with their category dots, aliases as `forests → forest`,
+  predicates, and the `( )` and `NOT…` rows when you type `(` or `-`; after
+  `album:` or `cat:` only albums or categories are offered. Enter on text that
+  isn't a tag offers corrections, or a split into the tags it does contain.
+- Typing `(` and choosing `( )` inserts both parentheses with the cursor between
+  them; typing `)` steps over the one that was inserted for you; Backspace on an
+  empty `()` removes both; an unmatched parenthesis is underlined.
+- **←/→** move between chips; **Backspace** selects the previous chip and, again,
+  turns it back into text; **Shift+arrows** select a range; **-** on a selected
+  chip toggles NOT; **|** inserts an OR; **Ctrl+C** copies the selection as text
+  and **Ctrl+V** pastes text as chips, highlighting anything it couldn't resolve.
+- **Text** switches to the raw query for editing by hand; **Chips** switches back.
 
 ## Command line
 
@@ -136,7 +160,8 @@ byte-identical, so most re-downloads from services that re-encode won't match.
 ## Tests
 
 The logic layer (the SQLite store, text folding, the query engine, the command
-line, media scanning, and the gallery filter) has a [Qt Test](https://doc.qt.io/qt-6/qttest-index.html) suite under
+line, media scanning, and the gallery filter) and the query builder (driven with
+key events against a mock library, offscreen) have a [Qt Test](https://doc.qt.io/qt-6/qttest-index.html) suite under
 [`tests/`](tests/), run via CTest and exercised in CI on every push and pull
 request:
 

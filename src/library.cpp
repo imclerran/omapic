@@ -1555,6 +1555,79 @@ QVariantMap Library::parseQuery(const QString &text) const
     };
 }
 
+QVariantList Library::tokenizeQuery(const QString &text) const
+{
+    const oql::MapVocabulary vocab = vocabulary();
+    QHash<int, TagInfo> infos;
+    for (const TagInfo &t : m_db.loadTags())
+        infos.insert(t.id, t);
+    QVariantList out;
+    for (const oql::Token &t : oql::tokenize(text, vocab)) {
+        QVariantMap m{
+            {QStringLiteral("negated"), t.negated},
+            {QStringLiteral("name"), t.name},
+            {QStringLiteral("id"), t.id},
+            {QStringLiteral("value"), t.value},
+            {QStringLiteral("start"), t.span.start},
+            {QStringLiteral("length"), t.span.length},
+            {QStringLiteral("colorSlot"), -1},
+            {QStringLiteral("categoryName"), QString()},
+            {QStringLiteral("kind"), QString()},
+        };
+        switch (t.kind) {
+        case oql::Token::Tag: {
+            m.insert(QStringLiteral("type"), QStringLiteral("tag"));
+            const TagInfo info = infos.value(t.id);
+            m.insert(QStringLiteral("colorSlot"), info.colorSlot);
+            m.insert(QStringLiteral("categoryName"), info.categoryName);
+            break;
+        }
+        case oql::Token::Predicate:
+            m.insert(QStringLiteral("type"), QStringLiteral("pred"));
+            m.insert(QStringLiteral("kind"), t.nameKind == oql::NameKind::Album ? QStringLiteral("album")
+                                             : t.nameKind == oql::NameKind::SmartAlbum ? QStringLiteral("smart")
+                                             : t.nameKind == oql::NameKind::Category ? QStringLiteral("category")
+                                             : QString());
+            break;
+        case oql::Token::Open: m.insert(QStringLiteral("type"), QStringLiteral("open")); break;
+        case oql::Token::Close: m.insert(QStringLiteral("type"), QStringLiteral("close")); break;
+        case oql::Token::Or: m.insert(QStringLiteral("type"), QStringLiteral("or")); break;
+        case oql::Token::Unknown: m.insert(QStringLiteral("type"), QStringLiteral("bad")); break;
+        }
+        out.append(m);
+    }
+    return out;
+}
+
+int Library::queryMatchCount(const QString &text) const
+{
+    const oql::ParseResult r = oql::parse(text, vocabulary());
+    if (!r.ok())
+        return -1;
+    const QHash<int, oql::Node> stored = m_db.smartAlbumQueries();
+    const oql::Node tree = oql::expand(r.root, [&stored](int id) -> const oql::Node * {
+        const auto it = stored.constFind(id);
+        return it == stored.constEnd() ? nullptr : &it.value();
+    });
+    int n = 0;
+    for (const Photo &p : m_photos->photos())
+        if (!p.isDuplicate && oql::matches(tree, p.tagIds, m_evalContext))
+            ++n;
+    return n;
+}
+
+QVariantMap Library::queryVocabulary() const
+{
+    QVariantList albums, categories;
+    for (const AlbumInfo &a : m_db.albumTags())
+        albums.append(QVariantMap{{QStringLiteral("name"), a.name}, {QStringLiteral("smart"), false}});
+    for (const SmartAlbumInfo &sa : m_db.smartAlbums())
+        albums.append(QVariantMap{{QStringLiteral("name"), sa.name}, {QStringLiteral("smart"), true}});
+    for (const CategoryInfo &c : m_db.loadCategories(/*activeOnly=*/false))
+        categories.append(QVariantMap{{QStringLiteral("name"), c.name}, {QStringLiteral("colorSlot"), c.colorSlot}});
+    return QVariantMap{{QStringLiteral("albums"), albums}, {QStringLiteral("categories"), categories}};
+}
+
 QString Library::formatTagQuery(const QVariantList &tagIds, bool matchAll) const
 {
     QList<int> ids;
