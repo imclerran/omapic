@@ -124,7 +124,14 @@ omapic query --strict 'dark forest'                # error out instead of guessi
 omapic tags | albums | categories                  # names, one per line (for completion)
 omapic view 'is:fav'                               # open the matches in the viewer
 omapic slideshow --interval 3 --shuffle 'beach'    # play them as a slideshow
+omapic tags --library ~/backup/library.db          # read another library
 ```
+
+Every subcommand reads the gallery's own library
+(`~/.local/share/omapic/library.db`, or wherever `$XDG_DATA_HOME` points)
+unless `--library <path>` names another one, or, failing that, the
+`OMAPIC_LIBRARY` environment variable does. The library is only ever opened
+read-only; an error names the path that couldn't be opened.
 
 `query`, `view` and `slideshow` share the scope and sort flags: by default the
 results are what the gallery's flat view shows — one copy per file content
@@ -136,10 +143,11 @@ for 4 seconds, in order, with cuts between them, unless a flag says otherwise:
 `--interval S`, `--shuffle`, `--shuffle-folders`, `--crossfade`,
 `--start-random` and `--loop-videos`; `--fullscreen` opens `view` full screen.
 
-The command line depends only on its arguments and the library. It never reads
-the gallery's saved settings, so a command behaves the same whatever was last
-clicked in the app; the one piece of library state it honours is which folders
-are enabled, because that is part of the library itself.
+The command line depends only on its arguments, its environment variables and
+the library. It never reads the gallery's saved settings, so a command behaves
+the same whatever was last clicked in the app; the one piece of library state
+it honours is which folders are enabled, because that is part of the library
+itself.
 
 Long options go anywhere before `--`, before or after the query
 (`omapic query beach --count`); an unknown `--option` is an error wherever it

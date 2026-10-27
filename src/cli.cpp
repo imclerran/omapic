@@ -60,6 +60,7 @@ struct OptionSpec {
 };
 const OptionSpec kOptions[] = {
     {"help", 'h', false, All, "", "Show this help."},
+    {"library", 0, true, All, "path", "The library to read (default: $OMAPIC_LIBRARY, else the gallery's)."},
     {"count", 0, false, Query_, "", "Print only the number of matches."},
     {"json", 0, false, Query_, "", "Print matches as JSON objects."},
     {"0", '0', false, Query_, "", "Separate paths with NUL instead of newline (for xargs -0)."},
@@ -104,24 +105,39 @@ QString commandName(Command c)
 
 // --- Library access -------------------------------------------------------------
 
-// Open the library read-only, explaining on `err` when that isn't possible.
-// Returns kExitMatches when open.
-int openLibrary(Database &db, const QString &dbPath, QTextStream &err)
+const char kLibraryEnv[] = "OMAPIC_LIBRARY";
+
+// Open the library libraryPath(opts) names, read-only, explaining on `err`
+// (naming the path) when that isn't possible. Returns kExitMatches when open.
+int openLibrary(Database &db, const Options &opts, QTextStream &err)
 {
+    const QString dbPath = libraryPath(opts);
+    // "Launch omapic once to create it" only helps for the gallery's own
+    // library; a path someone chose is simply missing.
+    const bool chosen = !opts.library.isEmpty() || !qEnvironmentVariableIsEmpty(kLibraryEnv);
     static int seq = 0;
     const QString conn = QStringLiteral("cli_%1").arg(++seq);
     switch (db.openReadOnly(dbPath, conn)) {
     case Database::OpenStatus::Ok:
         return kExitMatches;
     case Database::OpenStatus::CannotOpen:
-        err << "omapic: cannot open the library at " << dbPath
-            << " (launch omapic once to create it)\n";
+        if (!QFileInfo::exists(dbPath)) {
+            if (chosen)
+                err << "omapic: no library exists at " << dbPath << '\n';
+            else
+                err << "omapic: cannot open the library at " << dbPath
+                    << " (launch omapic once to create it)\n";
+        } else {
+            err << "omapic: cannot open the library at " << dbPath << '\n';
+        }
         return kExitLibrary;
     case Database::OpenStatus::SchemaOlder:
-        err << "omapic: the library needs upgrading; launch omapic once to upgrade it\n";
+        err << "omapic: the library at " << dbPath
+            << " needs upgrading; launch omapic once to upgrade it\n";
         return kExitLibrary;
     case Database::OpenStatus::SchemaNewer:
-        err << "omapic: the library was written by a newer Omapic; update Omapic to use it\n";
+        err << "omapic: the library at " << dbPath
+            << " was written by a newer Omapic; update Omapic to use it\n";
         return kExitLibrary;
     }
     return kExitLibrary;
@@ -377,6 +393,12 @@ Options parse(const QStringList &args)
         const QLatin1String n(spec->name);
         if (n == QLatin1String("help")) {
             o.help = true;
+        } else if (n == QLatin1String("library")) {
+            if (value.isEmpty()) {
+                o.error = QStringLiteral("--library needs a path");
+                return o;
+            }
+            o.library = value;
         } else if (n == QLatin1String("count")) {
             o.output = Output::Count;
             ++shapes;
@@ -521,9 +543,19 @@ QString defaultDatabasePath()
         + QStringLiteral("/omapic/library.db");
 }
 
+QString libraryPath(const Options &opts)
+{
+    if (!opts.library.isEmpty())
+        return opts.library;
+    const QString env = qEnvironmentVariable(kLibraryEnv);
+    if (!env.isEmpty())
+        return env;
+    return defaultDatabasePath();
+}
+
 // --- Commands -------------------------------------------------------------------
 
-int runHeadless(const Options &opts, const QString &dbPath, QTextStream &out, QTextStream &err)
+int runHeadless(const Options &opts, QTextStream &out, QTextStream &err)
 {
     if (!opts.error.isEmpty()) {
         err << "omapic: " << opts.error << '\n' << usage(opts.command);
@@ -534,7 +566,7 @@ int runHeadless(const Options &opts, const QString &dbPath, QTextStream &out, QT
         return kExitMatches;
     }
     Database db;
-    const int opened = openLibrary(db, dbPath, err);
+    const int opened = openLibrary(db, opts, err);
     if (opened != kExitMatches)
         return opened;
 
@@ -597,14 +629,14 @@ int runHeadless(const Options &opts, const QString &dbPath, QTextStream &out, QT
     return code;
 }
 
-int resolveMedia(const Options &opts, const QString &dbPath, QList<QUrl> &urls, QTextStream &err)
+int resolveMedia(const Options &opts, QList<QUrl> &urls, QTextStream &err)
 {
     if (!opts.error.isEmpty()) {
         err << "omapic: " << opts.error << '\n' << usage(opts.command);
         return kExitUsage;
     }
     Database db;
-    const int opened = openLibrary(db, dbPath, err);
+    const int opened = openLibrary(db, opts, err);
     if (opened != kExitMatches)
         return opened;
     Parsed q;

@@ -46,6 +46,7 @@ private slots:
     void queryParseErrorShowsCaret();
     void queryExpandsSmartAlbumReferences();
     void listCommands();
+    void libraryChoice();
     void libraryOpenFailures();
     void resolveMediaForView();
     void slideshowIgnoresSavedSettings();
@@ -53,8 +54,11 @@ private slots:
     void orderPlaylistShapes();
 
 private:
-    // Run a headless command line (without argv[0]) against the test library.
+    // Run a headless command line (without argv[0]) against the test library,
+    // named with --library after the subcommand.
     int run(const QStringList &args, QString *out = nullptr, QString *err = nullptr);
+    // The same with the arguments exactly as given.
+    int runRaw(const QStringList &args, QString *out = nullptr, QString *err = nullptr);
     // Seed the library: a tagged photo set on disk, a disabled folder, a
     // duplicate copy, and one file missing from disk.
     void seedLibrary();
@@ -88,9 +92,16 @@ void TestCli::touch(const QString &p)
 
 int TestCli::run(const QStringList &args, QString *out, QString *err)
 {
+    QStringList withLibrary = args;
+    withLibrary.insert(1, QStringLiteral("--library=") + dbPath());
+    return runRaw(withLibrary, out, err);
+}
+
+int TestCli::runRaw(const QStringList &args, QString *out, QString *err)
+{
     QString o, e;
     QTextStream outStream(&o), errStream(&e);
-    const int code = cli::runHeadless(cli::parse(args), dbPath(), outStream, errStream);
+    const int code = cli::runHeadless(cli::parse(args), outStream, errStream);
     outStream.flush();
     errStream.flush();
     if (out) *out = o;
@@ -446,12 +457,57 @@ void TestCli::listCommands()
     QCOMPARE(out, QStringLiteral("Place\n"));
 }
 
+void TestCli::libraryChoice()
+{
+    seedLibrary();
+    const QString other = path(QStringLiteral("elsewhere/library.db"));
+    QString out, err;
+    // Precedence: --library, then $OMAPIC_LIBRARY, then the gallery's default
+    // (under $XDG_DATA_HOME, pointed at an empty directory here).
+    qputenv("XDG_DATA_HOME", path(QStringLiteral("data")).toUtf8());
+    qunsetenv("OMAPIC_LIBRARY");
+    QCOMPARE(cli::libraryPath(cli::parse({QStringLiteral("tags")})), path(QStringLiteral("data/omapic/library.db")));
+    QCOMPARE(runRaw({QStringLiteral("tags")}, &out, &err), cli::kExitLibrary);
+    QVERIFY(err.contains(path(QStringLiteral("data/omapic/library.db"))));
+    QVERIFY(err.contains(QStringLiteral("launch omapic once")));
+
+    qputenv("OMAPIC_LIBRARY", dbPath().toUtf8());
+    QCOMPARE(cli::libraryPath(cli::parse({QStringLiteral("tags")})), dbPath());
+    QCOMPARE(runRaw({QStringLiteral("tags")}, &out, &err), cli::kExitMatches); // environment beats default
+    QCOMPARE(out, QStringLiteral("beach\nParis\npeople\nsunset\n"));
+    QCOMPARE(cli::libraryPath(cli::parse({QStringLiteral("tags"), QStringLiteral("--library"), other})), other);
+    QCOMPARE(runRaw({QStringLiteral("tags"), QStringLiteral("--library"), other}, &out, &err), cli::kExitLibrary); // flag beats environment
+    QVERIFY(out.isEmpty());
+    // A path someone chose that doesn't exist is reported as such, with the
+    // path, and without the advice to launch the app (that creates the default).
+    QCOMPARE(err, QStringLiteral("omapic: no library exists at %1\n").arg(other));
+    qunsetenv("OMAPIC_LIBRARY");
+    QCOMPARE(runRaw({QStringLiteral("query"), QStringLiteral("--library=") + other, QStringLiteral("beach")}, &out, &err), cli::kExitLibrary);
+    QCOMPARE(err, QStringLiteral("omapic: no library exists at %1\n").arg(other));
+    QVERIFY(!QFile::exists(other)); // nothing is created
+    // view and slideshow resolve against the same choice.
+    {
+        QString e;
+        QTextStream errStream(&e);
+        QList<QUrl> urls;
+        QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view"), QStringLiteral("--library"), dbPath(), QStringLiteral("beach")}),
+                                   urls, errStream), cli::kExitMatches);
+        QCOMPARE(urls.size(), 2);
+        urls.clear();
+        QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("slideshow"), QStringLiteral("--library"), other, QStringLiteral("beach")}),
+                                   urls, errStream), cli::kExitLibrary);
+        QVERIFY(urls.isEmpty());
+    }
+    QVERIFY(!cli::parse({QStringLiteral("tags"), QStringLiteral("--library")}).error.isEmpty()); // needs a path
+    qunsetenv("XDG_DATA_HOME");
+}
+
 void TestCli::libraryOpenFailures()
 {
     QString err;
-    // No library yet: nothing is created, and the user is told what to do.
+    // No library yet: nothing is created, and the message names the path.
     QCOMPARE(run({QStringLiteral("tags")}, nullptr, &err), cli::kExitLibrary);
-    QVERIFY(err.contains(QStringLiteral("launch omapic once")));
+    QVERIFY(err.contains(QStringLiteral("no library exists at ") + dbPath()));
     QVERIFY(!QFile::exists(dbPath()));
 
     // An older library is not migrated by the CLI.
@@ -467,6 +523,7 @@ void TestCli::libraryOpenFailures()
     QSqlDatabase::removeDatabase(QStringLiteral("rewind"));
     QCOMPARE(run({QStringLiteral("tags")}, nullptr, &err), cli::kExitLibrary);
     QVERIFY(err.contains(QStringLiteral("needs upgrading")));
+    QVERIFY(err.contains(dbPath()));
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("check"));
         db.setDatabaseName(dbPath());
@@ -482,27 +539,30 @@ void TestCli::libraryOpenFailures()
     // A newer one is refused.
     QCOMPARE(run({QStringLiteral("tags")}, nullptr, &err), cli::kExitLibrary);
     QVERIFY(err.contains(QStringLiteral("newer Omapic")));
+    QVERIFY(err.contains(dbPath()));
 }
 
 void TestCli::resolveMediaForView()
 {
     seedLibrary();
+    qputenv("OMAPIC_LIBRARY", dbPath().toUtf8());
     QString e;
     QTextStream err(&e);
     QList<QUrl> urls;
-    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view"), QStringLiteral("beach")}), dbPath(), urls, err),
+    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view"), QStringLiteral("beach")}), urls, err),
              cli::kExitMatches);
     QCOMPARE(urls, (QList<QUrl>{QUrl::fromLocalFile(path(QStringLiteral("on/a.jpg"))),
                                 QUrl::fromLocalFile(path(QStringLiteral("on/b.jpg")))}));
     urls.clear();
-    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("slideshow"), QStringLiteral("sunset people")}), dbPath(), urls, err),
+    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("slideshow"), QStringLiteral("sunset people")}), urls, err),
              cli::kExitNoMatches);
     QVERIFY(urls.isEmpty());
     err.flush();
     QVERIFY(e.contains(QStringLiteral("nothing matches")));
-    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view"), QStringLiteral("zzz")}), dbPath(), urls, err),
+    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view"), QStringLiteral("zzz")}), urls, err),
              cli::kExitUsage);
-    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view")}), dbPath(), urls, err), cli::kExitUsage);
+    QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view")}), urls, err), cli::kExitUsage);
+    qunsetenv("OMAPIC_LIBRARY");
 }
 
 void TestCli::slideshowIgnoresSavedSettings()
