@@ -2677,7 +2677,14 @@ ApplicationWindow {
         // footer sits right under it.
         standardButtons: mode === "advanced" ? Dialog.Close : (Dialog.Ok | Dialog.Cancel)
 
+        // What would stop the save (a duplicate name, a query that would make the
+        // album refer to itself), checked live so OK stays disabled and the reason
+        // shows under the name instead of the dialog closing and a toast appearing.
+        readonly property string saveProblem:
+            (mode === "smart" && builder.valid && smartNameField.text.trim().length > 0)
+                ? library.smartAlbumProblem(editId, smartNameField.text, builder.text) : ""
         readonly property bool formValid: builder.valid && smartNameField.text.trim().length > 0
+                                          && saveProblem === ""
         function syncOk() {
             const b = standardButton(Dialog.Ok)
             if (b) b.enabled = formValid
@@ -2741,6 +2748,14 @@ ApplicationWindow {
                 validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
                 onAccepted: if (smartAlbumDialog.formValid) smartAlbumDialog.accept()
                 ClearButton { field: smartNameField }
+            }
+            Label {
+                visible: smartAlbumDialog.saveProblem !== ""
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: "#e06c75"
+                text: smartAlbumDialog.saveProblem
             }
             QueryBuilder {
                 id: builder
@@ -3125,15 +3140,18 @@ ApplicationWindow {
         closePolicy: Popup.NoAutoClose
         padding: 12
 
+        // Painted from the application palette: a popup in the overlay inherits
+        // the window's stale (gtk3-stamped) palette, which left the text unreadable
+        // on some themes.
         background: Rectangle {
-            color: palette.window
+            color: appPalette.window
             radius: 8
-            border.color: palette.mid
+            border.color: appPalette.mid
         }
 
         Label {
             id: toastLabel
-            color: palette.windowText
+            color: appPalette.windowText
             font.pixelSize: 13
         }
 

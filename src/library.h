@@ -301,6 +301,10 @@ public:
     // string on success, else a message to show (a parse error, a duplicate name,
     // or a query that would make the album refer to itself).
     Q_INVOKABLE QString saveSmartAlbumQuery(int albumId, const QString &name, const QString &text);
+    // What would stop that save, checked live so the dialog can disable OK and
+    // say why before anything is attempted: an empty string when it would go
+    // through, else the same message saveSmartAlbumQuery would return.
+    Q_INVOKABLE QString smartAlbumProblem(int albumId, const QString &name, const QString &text) const;
     // The flat chip reading of query text (oql::tokenize), for the query builder:
     // a list of {type: tag|pred|open|close|or|bad, negated, name, id, kind
     // (album|smart|category for pred), value, colorSlot, categoryName, start,

@@ -1694,18 +1694,32 @@ QString Library::formatTagQuery(const QVariantList &tagIds, bool matchAll) const
     return oql::format(oql::fromTagSet(ids, matchAll, &vocab), vocab);
 }
 
-QString Library::saveSmartAlbumQuery(int albumId, const QString &name, const QString &text)
+QString Library::smartAlbumProblem(int albumId, const QString &name, const QString &text) const
 {
     const oql::ParseResult r = oql::parse(text, vocabulary());
     if (!r.ok())
         return r.error.message;
-    if (name.trimmed().isEmpty())
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
         return tr("The smart album needs a name");
+    const int id = albumId >= kSmartAlbumIdBase ? albumId - kSmartAlbumIdBase : -1;
+    for (const SmartAlbumInfo &sa : m_db.smartAlbums())
+        if (sa.id != id && sa.name.compare(trimmed, Qt::CaseInsensitive) == 0)
+            return id >= 0 ? tr("Another smart album already uses that name")
+                           : tr("A smart album already uses that name");
+    if (id >= 0 && m_db.smartAlbumWouldCycle(id, r.root))
+        return tr("That query would make the album refer to itself through album: references");
+    return {};
+}
+
+QString Library::saveSmartAlbumQuery(int albumId, const QString &name, const QString &text)
+{
+    const QString problem = smartAlbumProblem(albumId, name, text);
+    if (!problem.isEmpty())
+        return problem;
+    const oql::ParseResult r = oql::parse(text, vocabulary());
     if (albumId >= kSmartAlbumIdBase) {
-        const int id = albumId - kSmartAlbumIdBase;
-        if (m_db.smartAlbumWouldCycle(id, r.root))
-            return tr("That query would make the album refer to itself through album: references");
-        if (!m_db.updateSmartAlbum(id, name, r.root))
+        if (!m_db.updateSmartAlbum(albumId - kSmartAlbumIdBase, name, r.root))
             return tr("Another smart album already uses that name");
     } else {
         if (m_db.createSmartAlbum(name, r.root) < 0)
