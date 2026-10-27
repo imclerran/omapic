@@ -894,12 +894,18 @@ void TestCli::completionBashInsertsThroughReadline()
         }
         return -1;
     };
-    qsizetype pos = waitFor("$ ", 0); // bash's default prompt ends so
-    QVERIFY2(pos >= 0, "no prompt from the interactive shell");
+    // With --norc the prompt is bash's default, `bash-5.3$ ` (`# ` as root):
+    // wait for its start and the space that ends it.
+    qsizetype pos = waitFor("bash-", 0);
+    if (pos >= 0)
+        pos = waitFor(" ", pos);
+    QVERIFY2(pos >= 0, qPrintable(QStringLiteral("no prompt from the interactive shell; it printed: ")
+                                  + QString::fromUtf8(seen)));
     p.write("PS1='P$ '; source '" + file.toUtf8() + "'; bind 'set bell-style none'; "
             "bind -x '\"\\C-p\": echo \"LINE=[$READLINE_LINE]\"'; echo READY\n");
     pos = waitFor("READY", pos);
-    QVERIFY2(pos >= 0, "the completion script did not load");
+    QVERIFY2(pos >= 0, qPrintable(QStringLiteral("the completion script did not load; the shell printed: ")
+                                  + QString::fromUtf8(seen)));
 
     // Type `typed`, press Tab, read the line back, then clear it (Ctrl-U).
     auto lineAfterTab = [&](const QByteArray &typed) {
