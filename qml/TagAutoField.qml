@@ -57,6 +57,9 @@ Item {
     property bool suggestTags: true
     // A floor for the dropdown's width (it otherwise matches the field's).
     property int suggestionMinWidth: 0
+    // The field's own ✕ (clears the typed text). A host with a wider notion of
+    // "clear" — the query builder clears the whole query — turns it off.
+    property bool showClearButton: true
     // The entry rule. The default is the tag-name rule shared by every name
     // editor; a host that accepts syntax (the query builder) passes its own.
     property var validatorRegex: /([^|"\s]+( [^|"\s]+)* ?)?/
@@ -186,7 +189,7 @@ Item {
         onTextEdited: refresh()
         onActiveFocusChanged: if (!activeFocus) pop.close()
 
-        ClearButton { field: field }
+        ClearButton { field: field; visible: active && root.showClearButton }
 
         Keys.onDownPressed: if (suggestions.length > 0)
                                 highlighted = Math.min(highlighted + 1, suggestions.length - 1)

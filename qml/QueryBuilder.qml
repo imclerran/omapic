@@ -515,6 +515,7 @@ Item {
                 visible: root.rawMode
                 anchors.fill: parent
                 anchors.margins: 2
+                anchors.rightMargin: clearAll.width + 14
                 background: null
                 font.family: "monospace"
                 placeholderText: qsTr("e.g. beach (sunset | sunrise) -people")
@@ -529,6 +530,45 @@ Item {
                 onClicked: { root.clearSelection(); root.cursor = root.tokens.length; input.focusInput() }
             }
 
+            // One ✕ for the whole box, at its far end: clears every chip and any
+            // text being typed (or the raw text), and keeps the focus.
+            Item {
+                id: clearAll
+                width: 16
+                height: 16
+                anchors.right: parent.right
+                anchors.rightMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !root.empty || input.text.length > 0
+                Rectangle {
+                    anchors.fill: parent
+                    radius: width / 2
+                    color: clearTap.containsMouse ? sys.mid : "transparent"
+                    Label {
+                        anchors.centerIn: parent
+                        text: "✕"
+                        font.pixelSize: 11
+                        color: sys.text
+                        opacity: clearTap.containsMouse ? 1.0 : 0.55
+                    }
+                }
+                MouseArea {
+                    id: clearTap
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: qsTr("Clear the query")
+                    onClicked: {
+                        const raw = root.rawMode
+                        root.clear()
+                        if (raw) root.setRawMode(true)
+                        root.focusInput()
+                    }
+                }
+            }
+
             Flow {
                 id: flow
                 visible: !root.rawMode
@@ -536,6 +576,7 @@ Item {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.margins: 5
+                anchors.rightMargin: clearAll.width + 14 // keep chips clear of the ✕
                 spacing: 4
 
                 component Chip: Rectangle {
@@ -639,6 +680,7 @@ Item {
                     categoryColorFn: root.colorFor
                     sampleFn: root.tagSampleFn
                     suggestionMinWidth: 320 // the entry field is only as wide as its text
+                    showClearButton: false  // the box has one ✕ for the whole query
                     placeholderText: root.tokens.length === 0 ? qsTr("Type a tag, is:, album:, cat:, ( or -") : ""
                     // Syntax is typed here, so only '"' is barred (it can't be quoted).
                     validatorRegex: /[^"]*/
