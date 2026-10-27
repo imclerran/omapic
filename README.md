@@ -89,8 +89,9 @@ dialog is the same builder with a name field. A query is a row of chips — tags
 `is:` / `album:` / `cat:` predicates, parentheses and `|` bars, any of them
 negated — with the result count updating live underneath. **Apply** (or Enter)
 narrows the gallery to the matches on top of the sidebar selection and the
-search, shown as a strip above the photos with Edit… and ✕ to lift it; **Save
-as smart album…** keeps the query instead.
+search, shown as a strip above the photos with Edit… and ✕ to lift it, and the
+tag sidebar narrows to the tags on the matching photos, as it does inside a
+folder; **Save as smart album…** keeps the query instead.
 
 - Type a tag name and press **Tab** or **Enter** (or click a suggestion) to
   commit it as a chip. Space never commits, because names can contain spaces.

@@ -1293,10 +1293,7 @@ QVariantList Library::albums() const
     const oql::Node selQuery = oql::fromTagSet(sel, m_matchAll);
     // The builder's applied query narrows the tiles as the sidebar filter does.
     const bool advanced = !m_advancedText.isEmpty();
-    const oql::Node advQuery = advanced ? oql::expand(m_advancedRoot, [this](int id) -> const oql::Node * {
-        const auto it = m_smartTrees.constFind(id);
-        return it == m_smartTrees.constEnd() ? nullptr : &it.value();
-    }) : oql::Node();
+    const oql::Node &advQuery = m_advancedTree;
 
     struct Acc { int count = 0; QStringList thumbs; };
     QHash<int, Acc> acc;
@@ -1511,8 +1508,21 @@ void Library::rebuildQueryState()
     m_filtered->setEvalContext(m_evalContext);
     m_filtered->refreshAlbumQuery();
     // The applied free query refers to smart albums by id; re-expand it too.
-    if (!m_advancedText.isEmpty())
-        m_filtered->setAdvancedQuery(oql::expand(m_advancedRoot, lookup));
+    if (!m_advancedText.isEmpty()) {
+        m_advancedTree = oql::expand(m_advancedRoot, lookup);
+        m_filtered->setAdvancedQuery(m_advancedTree);
+    }
+}
+
+QList<int> Library::advancedScopeIds() const
+{
+    QList<int> ids;
+    if (m_advancedText.isEmpty())
+        return ids;
+    for (const Photo &p : m_photos->photos())
+        if (oql::matches(m_advancedTree, p.tagIds, m_evalContext))
+            ids.append(p.id);
+    return ids;
 }
 
 QString Library::setAdvancedQuery(const QString &text)
@@ -1528,7 +1538,7 @@ QString Library::setAdvancedQuery(const QString &text)
     rebuildQueryState(); // expands and hands the tree to the filter model
     if (changed) {
         emit advancedQueryChanged();
-        emit albumsChanged(); // tile counts honour the query
+        refreshTags(); // the sidebar narrows to the matching photos' tags; emits albumsChanged
     }
     return {};
 }
@@ -1539,9 +1549,10 @@ void Library::clearAdvancedQuery()
         return;
     m_advancedText.clear();
     m_advancedRoot = oql::Node();
+    m_advancedTree = oql::Node();
     m_filtered->clearAdvancedQuery();
     emit advancedQueryChanged();
-    emit albumsChanged();
+    refreshTags(); // back to the unscoped sidebar; emits albumsChanged
 }
 
 QVariantMap Library::smartAlbum(int albumId) const
@@ -2031,7 +2042,8 @@ void Library::refreshTags()
     // all" mode with tags already selected, it narrows further to co-occurring
     // tags (faceted drill-down). Database::facetTags does all of that; apply it
     // here on the GUI thread.
-    applyFacetTags(m_db.facetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll));
+    applyFacetTags(m_db.facetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll,
+                                  advancedScopeIds(), !m_advancedText.isEmpty()));
 }
 
 void Library::refreshTagsAsync()
@@ -2039,7 +2051,8 @@ void Library::refreshTagsAsync()
     // Same result as refreshTags(), but the ~150ms query runs on the worker so it
     // never freezes the window — used at launch, where a synchronous build would
     // stall the first interaction.
-    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll);
+    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll,
+                          advancedScopeIds(), !m_advancedText.isEmpty());
 }
 
 void Library::onFacetTagsReady(const QVector<TagInfo> &tags)

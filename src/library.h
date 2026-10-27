@@ -375,7 +375,8 @@ signals:
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
-    void requestFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
+    void requestFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll,
+                          const QList<int> &scopeIds, bool scoped);
     void requestResample();
 
 private:
@@ -462,7 +463,11 @@ private:
     oql::EvalContext m_evalContext;
     QHash<int, oql::Node> m_smartTrees; // smart album id -> expanded query (see rebuildQueryState)
     oql::Node m_advancedRoot;           // the applied free query, unexpanded (re-expanded with the trees)
+    oql::Node m_advancedTree;           // its expansion against the current smart-album trees
     QString m_advancedText;             // its canonical text; empty = none applied
+    // The photos the applied query matches (every active photo, copies included,
+    // as the sidebar counts them), for scoping the facet tags; empty when none.
+    QList<int> advancedScopeIds() const;
 
     QThread m_workerThread;
     LibraryWorker *m_worker = nullptr;
