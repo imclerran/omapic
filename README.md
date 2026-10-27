@@ -171,7 +171,10 @@ appears. Short options (`-0`, `-h`) count only before the query, because
 `-0` is also a valid query term (NOT the tag `0`) — so `omapic query -people`
 is the query `-people`. `--` ends the options, and everything after it is query
 text (`omapic query --count -- -people`). An unquoted query the shell splits
-into words is joined back with single spaces. Subcommands win over file
+into words is joined back with single spaces, and a word you shell-quoted
+(`omapic query is:fav "dark forest"`) is quoted in the query too, since the
+shell strips its quotes; a single argument is taken as the whole query as
+typed, so `omapic query 'beach "dark forest"'` works as well. Subcommands win over file
 arguments: open a file literally named `query` with `omapic ./query` or
 `omapic -- query`.
 
