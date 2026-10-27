@@ -119,7 +119,8 @@ omapic query 'beach (sunset | sunrise) -people'   # one path per line
 omapic query --count is:untagged                   # just the number
 omapic query --json --sort date 'album:Trip'       # id, path, name, tags, takenAt, favorite, video
 omapic query -0 'cat:Place' | xargs -0 cp -t ~/places/
-omapic query --explain 'dark forest'               # how the query was read
+omapic query --explain 'dark forest'               # how the query was read (exit 0 if it parses)
+omapic query --strict 'dark forest'                # error out instead of guessing at names
 omapic tags | albums | categories                  # names, one per line (for completion)
 omapic view 'is:fav'                               # open the matches in the viewer
 omapic slideshow --interval 3 --shuffle 'beach'    # play them as a slideshow
@@ -140,19 +141,27 @@ the gallery's saved settings, so a command behaves the same whatever was last
 clicked in the app; the one piece of library state it honours is which folders
 are enabled, because that is part of the library itself.
 
-Options go before the query. The first argument that isn't an option starts
-the query — so `omapic query -people` is the query `-people` — and `--` ends
-the options explicitly (`omapic query --count -- -people`). An unquoted query
-the shell splits into words is joined back with single spaces. Subcommands win
-over file arguments: open a file literally named `query` with `omapic ./query`
-or `omapic -- query`.
+Long options go anywhere before `--`, before or after the query
+(`omapic query beach --count`); an unknown `--option` is an error wherever it
+appears. Short options (`-0`, `-h`) count only before the query, because
+`-0` is also a valid query term (NOT the tag `0`) — so `omapic query -people`
+is the query `-people`. `--` ends the options, and everything after it is query
+text (`omapic query --count -- -people`). An unquoted query the shell splits
+into words is joined back with single spaces. Subcommands win over file
+arguments: open a file literally named `query` with `omapic ./query` or
+`omapic -- query`.
 
 Parse errors are shown with a caret under the offending span and "did you
 mean" suggestions, and a reading that depended on your tags (`dark forest`
-split into two tags because no tag has that name) is noted on stderr. Exit
-codes: 0 something matched, 1 nothing matched, 2 a usage or query error, 3 the
-library couldn't be opened. The tool never migrates the library: if it is older
-than the installed Omapic, launch the app once to upgrade it.
+split into two tags because no tag has that name) is noted on stderr. With
+`--strict`, such a reading — and a smart album whose query mentions a deleted
+name or refers back to itself — is an error instead (exit 2), so a script
+never silently runs a different query than it meant; quote the names
+(`"dark forest"`, or `"dark" "forest"`) to say which reading you want. Exit
+codes: 0 something matched (for `--explain`: the query parses), 1 nothing
+matched, 2 a usage or query error, 3 the library couldn't be opened. The tool
+never migrates the library: if it is older than the installed Omapic, launch
+the app once to upgrade it.
 
 ## Tag retention
 

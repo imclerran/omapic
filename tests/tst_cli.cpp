@@ -33,7 +33,7 @@ private slots:
     void cleanup();
 
     void dispatchRecognisesSubcommandsOnly();
-    void optionsStopAtFirstNonOption();
+    void optionsAnywhereBeforeDoubleDash();
     void parseValidatesOptions();
     void helpAndUsage();
 
@@ -42,6 +42,7 @@ private slots:
     void querySortFlags();
     void queryOutputShapes();
     void queryExplainAndNotes();
+    void queryStrict();
     void queryParseErrorShowsCaret();
     void queryExpandsSmartAlbumReferences();
     void listCommands();
@@ -163,22 +164,46 @@ void TestCli::dispatchRecognisesSubcommandsOnly()
     QVERIFY(!cli::isHeadless(cli::Command::None));
 }
 
-void TestCli::optionsStopAtFirstNonOption()
+void TestCli::optionsAnywhereBeforeDoubleDash()
 {
     // A query starting with '-' is a query, not an option.
     cli::Options o = cli::parse({QStringLiteral("query"), QStringLiteral("-people")});
     QVERIFY(o.error.isEmpty());
     QCOMPARE(o.query, QStringLiteral("-people"));
-    // Options before the query are honoured; later dash tokens are query text.
-    o = cli::parse({QStringLiteral("query"), QStringLiteral("--count"), QStringLiteral("beach"), QStringLiteral("--count")});
+    // Long options are recognised after the query has started too, with their
+    // values; the query is what's left.
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("--count")});
+    QVERIFY(o.error.isEmpty());
     QCOMPARE(o.output, cli::Output::Count);
-    QCOMPARE(o.query, QStringLiteral("beach --count"));
-    // `--` ends the options explicitly.
+    QCOMPARE(o.query, QStringLiteral("beach"));
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("--sort"), QStringLiteral("date"),
+                    QStringLiteral("-people"), QStringLiteral("--reverse")});
+    QVERIFY(o.error.isEmpty());
+    QCOMPARE(o.sort, QStringLiteral("date"));
+    QVERIFY(o.reverse);
+    QCOMPARE(o.query, QStringLiteral("beach -people"));
+    // An unknown long option after the query is a usage error, not query text.
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("--bogus")});
+    QVERIFY(o.error.contains(QStringLiteral("Unknown option --bogus")));
+    QVERIFY(o.error.contains(QStringLiteral("--")));
+    // Short options only count before the query: `-0` after it is OQL (NOT "0").
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("-0")});
+    QVERIFY(o.error.isEmpty());
+    QCOMPARE(o.output, cli::Output::Paths);
+    QCOMPARE(o.query, QStringLiteral("beach -0"));
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("-0"), QStringLiteral("beach")});
+    QCOMPARE(o.output, cli::Output::Nul);
+    QCOMPARE(o.query, QStringLiteral("beach"));
+    // `--` ends option parsing; everything after it is query text.
     o = cli::parse({QStringLiteral("query"), QStringLiteral("--count"), QStringLiteral("--"), QStringLiteral("-people")});
     QCOMPARE(o.output, cli::Output::Count);
     QCOMPARE(o.query, QStringLiteral("-people"));
     o = cli::parse({QStringLiteral("query"), QStringLiteral("--"), QStringLiteral("--count")});
+    QCOMPARE(o.output, cli::Output::Paths);
     QCOMPARE(o.query, QStringLiteral("--count"));
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("--"), QStringLiteral("--bogus")});
+    QVERIFY(o.error.isEmpty());
+    QCOMPARE(o.query, QStringLiteral("beach --bogus"));
     // An unquoted query the shell split is joined with single spaces.
     o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("(sunset"), QStringLiteral("|"), QStringLiteral("sunrise)")});
     QCOMPARE(o.query, QStringLiteral("beach (sunset | sunrise)"));
@@ -329,16 +354,57 @@ void TestCli::queryExplainAndNotes()
 {
     seedLibrary();
     QString out, err;
-    // --explain prints the canonical reading instead of matches; the exit code
-    // still says whether anything matched.
+    // --explain prints the canonical reading instead of matches and exits 0
+    // whenever the query parses, whether or not anything matches.
     QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--explain"), QStringLiteral("beach   sunset|people")}, &out, &err), cli::kExitMatches);
     QCOMPARE(out, QStringLiteral("beach (sunset | people)\n"));
-    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--explain"), QStringLiteral("people sunset")}, &out, &err), cli::kExitNoMatches);
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--explain"), QStringLiteral("people sunset")}, &out, &err), cli::kExitMatches);
     QCOMPARE(out, QStringLiteral("people sunset\n"));
     // A reading that depended on the vocabulary is noted on stderr.
     QVERIFY(err.contains(QStringLiteral("omapic: note: \"people sunset\" is read as 2 separate terms")));
+    // A parse error is still exit 2, with nothing on stdout.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--explain"), QStringLiteral("beach sunsets")}, &out, &err), cli::kExitUsage);
+    QVERIFY(out.isEmpty());
+    QVERIFY(err.contains(QStringLiteral("Unknown tag \"sunsets\"")));
     QCOMPARE(run({QStringLiteral("query"), QStringLiteral("beach | people")}, &out, &err), cli::kExitMatches);
     QVERIFY(!err.contains(QStringLiteral("note:")));
+}
+
+void TestCli::queryStrict()
+{
+    seedLibrary();
+    QString out, err;
+    // A split that depended on the vocabulary is an error under --strict, in
+    // the caret format with a hint to quote the names.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("people sunset")}, &out, &err), cli::kExitUsage);
+    QVERIFY(out.isEmpty());
+    QVERIFY(err.startsWith(QStringLiteral("omapic: error: \"people sunset\" is read as 2 separate terms")));
+    QVERIFY(err.contains(QStringLiteral("\n  people sunset\n"
+                                        "  ^^^^^^^^^^^^^\n")));
+    QVERIFY(err.contains(QStringLiteral("hint: quote")));
+    // The quoted form has nothing to guess, so it passes (and here matches
+    // b.jpg and d.jpg).
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("\"people\" | \"sunset\"")}, &out, &err), cli::kExitMatches);
+    QVERIFY(!err.contains(QStringLiteral("error")));
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("--explain"), QStringLiteral("\"people\" \"sunset\"")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("people sunset\n"));
+    // Without --strict the same query is accepted with a note.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--explain"), QStringLiteral("people sunset")}, &out, &err), cli::kExitMatches);
+    QVERIFY(err.contains(QStringLiteral("note:")));
+
+    // A smart album with a term that no longer exists: silently matches nothing
+    // without --strict, an error with it.
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("strict")));
+        db.deleteTag(m_sunset); // Beachy was `beach sunset`
+        db = Database();
+        QSqlDatabase::removeDatabase(QStringLiteral("strict"));
+    }
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("album:Beachy")}, &out, &err), cli::kExitNoMatches);
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("album:Beachy")}, &out, &err), cli::kExitUsage);
+    QVERIFY(err.contains(QStringLiteral("omapic: error: A smart album refers to the tag \"sunset\", which no longer exists")));
+    QVERIFY(err.contains(QStringLiteral("\n  album:Beachy\n  ^^^^^^^^^^^^\n")));
 }
 
 void TestCli::queryParseErrorShowsCaret()
