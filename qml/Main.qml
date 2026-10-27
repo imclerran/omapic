@@ -2677,21 +2677,51 @@ ApplicationWindow {
         // footer sits right under it.
         standardButtons: mode === "advanced" ? Dialog.Close : (Dialog.Ok | Dialog.Cancel)
 
+        // In "smart" mode the query is built either the basic way — a set of tag
+        // chips with the all/any switch (the default for a new album, and for an
+        // existing one whose query is a plain tag set) — or in the query builder
+        // ("Advanced"). The sidebar's Advanced… always uses the builder.
+        property bool basic: true
+        // The query as OQL text, whichever editor is showing.
+        readonly property string queryText: (mode === "smart" && basic)
+            ? library.formatTagQuery(smartPicker.selectedIds, smartPicker.matchAll) : builder.text
+        readonly property bool queryValid: (mode === "smart" && basic)
+            ? smartPicker.selectedIds.length > 0 : builder.valid
         // What would stop the save (a duplicate name, a query that would make the
         // album refer to itself), checked live so OK stays disabled and the reason
         // shows under the name instead of the dialog closing and a toast appearing.
         readonly property string saveProblem:
-            (mode === "smart" && builder.valid && smartNameField.text.trim().length > 0)
-                ? library.smartAlbumProblem(editId, smartNameField.text, builder.text) : ""
-        readonly property bool formValid: builder.valid && smartNameField.text.trim().length > 0
+            (mode === "smart" && queryValid && smartNameField.text.trim().length > 0)
+                ? library.smartAlbumProblem(editId, smartNameField.text, queryText) : ""
+        readonly property bool formValid: queryValid && smartNameField.text.trim().length > 0
                                           && saveProblem === ""
         function syncOk() {
             const b = standardButton(Dialog.Ok)
             if (b) b.enabled = formValid
         }
         onFormValidChanged: syncOk()
+        // Basic ⇄ Advanced. Going to the builder seeds it with the picked set; coming
+        // back is offered only while the built query is a plain tag set.
+        readonly property bool canGoBasic: mode === "smart" && !basic && builder.valid
+                                           && library.parseQuery(builder.text).simple === true
+        function setBasic(on) {
+            if (on === basic)
+                return
+            if (on) {
+                const p = library.parseQuery(builder.text)
+                if (!p.ok || !p.simple)
+                    return
+                smartPicker.setSelection(p.tags, p.matchAll)
+                basic = true
+            } else {
+                builder.setQueryText(library.formatTagQuery(smartPicker.selectedIds, smartPicker.matchAll))
+                basic = false
+                builder.focusInput()
+            }
+        }
         function openAdvanced(text) {
             mode = "advanced"
+            basic = false
             editId = 0
             open()
             builder.setQueryText(text)
@@ -2717,37 +2747,62 @@ ApplicationWindow {
                 const sa = library.smartAlbum(editId)
                 smartNameField.text = sa.name
                 builder.setQueryText(sa.text)
+                // A plain tag set opens in the basic editor; anything else needs the builder.
+                if (sa.simple) {
+                    smartPicker.setSelection(sa.tags, sa.matchAll)
+                    basic = true
+                } else {
+                    smartPicker.clear()
+                    basic = false
+                }
             } else {
                 smartNameField.text = ""
+                smartPicker.clear()
                 builder.clear()
+                basic = true
             }
             syncOk()
             smartNameField.forceActiveFocus()
         }
-        onClosed: { mode = "smart"; builder.clear() }
+        onClosed: { mode = "smart"; basic = true; builder.clear(); smartPicker.clear() }
         onAccepted: {
             if (mode !== "smart")
                 return
             const name = smartNameField.text.trim()
-            if (name.length === 0 || !builder.valid)
+            if (name.length === 0 || !queryValid)
                 return
             // Library emits albumsChanged on success, which refreshes the tiles.
-            const err = library.saveSmartAlbumQuery(editId, name, builder.text)
+            const err = library.saveSmartAlbumQuery(editId, name, queryText)
             if (err.length > 0)
                 win.toast(err)
         }
 
         contentItem: ColumnLayout {
             spacing: 8
-            TextField {
-                id: smartNameField
+            RowLayout {
                 visible: smartAlbumDialog.mode === "smart"
                 Layout.fillWidth: true
-                placeholderText: qsTr("Smart album name")
-                // Same name rules as tags and albums (see TagAutoField).
-                validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
-                onAccepted: if (smartAlbumDialog.formValid) smartAlbumDialog.accept()
-                ClearButton { field: smartNameField }
+                spacing: 8
+                TextField {
+                    id: smartNameField
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Smart album name")
+                    // Same name rules as tags and albums (see TagAutoField).
+                    validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
+                    onAccepted: if (smartAlbumDialog.formValid) smartAlbumDialog.accept()
+                    ClearButton { field: smartNameField }
+                }
+                Button {
+                    text: smartAlbumDialog.basic ? qsTr("Advanced") : qsTr("Basic")
+                    enabled: smartAlbumDialog.basic || smartAlbumDialog.canGoBasic
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 500
+                    ToolTip.text: smartAlbumDialog.basic
+                                  ? qsTr("Build the query with NOT, OR, groups and predicates")
+                                  : (enabled ? qsTr("Back to picking tags")
+                                             : qsTr("The basic editor can only show a plain set of tags"))
+                    onClicked: smartAlbumDialog.setBasic(!smartAlbumDialog.basic)
+                }
             }
             Label {
                 visible: smartAlbumDialog.saveProblem !== ""
@@ -2757,8 +2812,19 @@ ApplicationWindow {
                 color: "#e06c75"
                 text: smartAlbumDialog.saveProblem
             }
+            // Basic: the tag chips with the all/any switch.
+            TagPicker {
+                id: smartPicker
+                visible: smartAlbumDialog.mode === "smart" && smartAlbumDialog.basic
+                Layout.fillWidth: true
+                Layout.preferredHeight: 340
+                tagModel: library.tags
+                aliases: library.tagAliases // match a tag by its aliases in the search
+                accent: win.accent
+            }
             QueryBuilder {
                 id: builder
+                visible: smartAlbumDialog.mode === "advanced" || !smartAlbumDialog.basic
                 Layout.fillWidth: true
                 library: library
                 accent: win.accent
@@ -2781,6 +2847,7 @@ ApplicationWindow {
                 }
             }
             Label {
+                visible: builder.visible
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 font.pixelSize: 12
@@ -2797,6 +2864,7 @@ ApplicationWindow {
                     enabled: builder.valid
                     onClicked: {
                         smartAlbumDialog.mode = "smart"
+                        smartAlbumDialog.basic = false // keep the built query in the builder
                         smartAlbumDialog.syncOk()
                         smartNameField.forceActiveFocus()
                     }

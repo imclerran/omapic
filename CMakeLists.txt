@@ -38,6 +38,7 @@ qt_add_qml_module(omapic
         qml/DetailPanel.qml
         qml/WheelScroller.qml
         qml/TagAutoField.qml
+        qml/TagPicker.qml
         qml/TagSuggestionPopup.qml
         qml/QueryBuilder.qml
         qml/TagInfoPopover.qml
