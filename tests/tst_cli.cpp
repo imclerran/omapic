@@ -9,7 +9,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QString>
@@ -50,6 +52,10 @@ private slots:
     void listCommandJson();
     void libraryChoice();
     void libraryOpenFailures();
+    void completionCommand();
+    void completionZsh();
+    void completionBash();
+    void completionFish();
     void resolveMediaForView();
     void slideshowIgnoresSavedSettings();
     void slideshowFlagsTurnOnOnlyTheirSetting();
@@ -67,6 +73,9 @@ private:
     QString path(const QString &rel) const { return m_dir->filePath(rel); }
     QString dbPath() const { return m_dir->filePath(QStringLiteral("library.db")); }
     void touch(const QString &p);
+    // Generate `shell`'s completion script and, when the shell is installed,
+    // have it check the syntax (`shell checkFlag script`); QSKIP otherwise.
+    void checkCompletionSyntax(const QString &shell, const QString &checkFlag);
 
     QTemporaryDir *m_dir = nullptr;
     int m_beach = -1, m_sunset = -1, m_people = -1, m_paris = -1, m_trip = -1, m_place = -1;
@@ -165,6 +174,9 @@ void TestCli::dispatchRecognisesSubcommandsOnly()
 {
     QVERIFY(cli::isSubcommand(QStringLiteral("query")));
     QVERIFY(cli::isSubcommand(QStringLiteral("slideshow")));
+    QVERIFY(cli::isSubcommand(QStringLiteral("completion")));
+    QVERIFY(!cli::isSubcommand(QStringLiteral("./completion")));
+    QVERIFY(cli::isHeadless(cli::Command::Completion));
     QVERIFY(!cli::isSubcommand(QStringLiteral("./query")));
     QVERIFY(!cli::isSubcommand(QStringLiteral("--")));
     QVERIFY(!cli::isSubcommand(QStringLiteral("photo.jpg")));
@@ -247,6 +259,7 @@ void TestCli::parseValidatesOptions()
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--counts"), QStringLiteral("x")}).error.isEmpty()); // lists only
     QVERIFY(!cli::parse({QStringLiteral("tags"), QStringLiteral("--count")}).error.isEmpty());                      // query only
     QVERIFY(!cli::parse({QStringLiteral("tags"), QStringLiteral("--counts"), QStringLiteral("--json")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("tags"), QStringLiteral("--tsv"), QStringLiteral("--counts")}).error.isEmpty());
     QVERIFY(!cli::parse({QStringLiteral("albums"), QStringLiteral("--json"), QStringLiteral("--jsonl")}).error.isEmpty());
     QVERIFY(cli::parse({QStringLiteral("categories"), QStringLiteral("--jsonl"), QStringLiteral("--include-disabled"), QStringLiteral("--all-copies")}).error.isEmpty());
     QVERIFY(!cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval"), QStringLiteral("0"), QStringLiteral("x")}).error.isEmpty());
@@ -504,6 +517,13 @@ void TestCli::listCommandCounts()
     // Categories count photos with any tag in the category (d.jpg has Paris).
     QCOMPARE(run({QStringLiteral("categories"), QStringLiteral("--counts")}, &out), cli::kExitMatches);
     QCOMPARE(out, QStringLiteral("Place\t1\n"));
+    // --tsv adds the tag's category / the album's kind, for the completion scripts.
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--tsv")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("beach\t2\t\nParis\t1\tPlace\npeople\t1\t\nsunset\t1\t\n"));
+    QCOMPARE(run({QStringLiteral("albums"), QStringLiteral("--tsv")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("Beachy\t1\tsmart album\nFavorites\t1\talbum\nTrip\t1\talbum\n"));
+    QCOMPARE(run({QStringLiteral("categories"), QStringLiteral("--tsv")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("Place\t1\n"));
     // The plain list is unchanged by the scope flags.
     QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--include-disabled")}, &out), cli::kExitMatches);
     QCOMPARE(out, QStringLiteral("beach\nParis\npeople\nsunset\n"));
@@ -719,6 +739,58 @@ void TestCli::slideshowFlagsTurnOnOnlyTheirSetting()
     QCOMPARE(fast.intervalMs, 500);
     QVERIFY(!fast.shuffle && !fast.shuffleFolders && !fast.fade && !fast.randomStart && !fast.loop);
 }
+
+void TestCli::completionCommand()
+{
+    QString out, err;
+    // The script goes to stdout without touching any library.
+    QCOMPARE(runRaw({QStringLiteral("completion"), QStringLiteral("zsh")}, &out, &err), cli::kExitMatches);
+    QVERIFY(out.startsWith(QStringLiteral("#compdef omapic")));
+    QVERIFY(err.isEmpty());
+    QVERIFY(!QFile::exists(dbPath()));
+    // Exactly one shell, from the three supported.
+    QVERIFY(cli::parse({QStringLiteral("completion")}).error.contains(QStringLiteral("zsh, bash or fish")));
+    QVERIFY(!cli::parse({QStringLiteral("completion"), QStringLiteral("ksh")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("completion"), QStringLiteral("zsh"), QStringLiteral("bash")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("completion"), QStringLiteral("--library=x"), QStringLiteral("zsh")}).error.isEmpty());
+    QCOMPARE(cli::parse({QStringLiteral("completion"), QStringLiteral("fish")}).shell, QStringLiteral("fish"));
+    QCOMPARE(runRaw({QStringLiteral("completion"), QStringLiteral("--help")}, &out), cli::kExitMatches);
+    QVERIFY(out.contains(QStringLiteral("Usage: omapic completion zsh|bash|fish")));
+    QVERIFY(cli::completionScript(QStringLiteral("ksh")).isEmpty());
+    // Every script knows every subcommand and option parse() accepts.
+    for (const QString &shell : {QStringLiteral("zsh"), QStringLiteral("bash"), QStringLiteral("fish")}) {
+        const QString script = cli::completionScript(shell);
+        QVERIFY2(script.size() > 1000, qPrintable(shell));
+        for (const QString &word : {QStringLiteral("query"), QStringLiteral("slideshow"), QStringLiteral("completion"),
+                                    QStringLiteral("include-disabled"), QStringLiteral("loop-videos"),
+                                    QStringLiteral("library"), QStringLiteral("tsv"), QStringLiteral("album:"),
+                                    QStringLiteral("cat:"), QStringLiteral("is:untagged"), QStringLiteral("date")})
+            QVERIFY2(script.contains(word), qPrintable(shell + QStringLiteral(" lacks ") + word));
+    }
+}
+
+void TestCli::checkCompletionSyntax(const QString &shell, const QString &checkFlag)
+{
+    const QString script = cli::completionScript(shell);
+    QVERIFY(!script.isEmpty());
+    const QString exe = QStandardPaths::findExecutable(shell);
+    if (exe.isEmpty())
+        QSKIP(qPrintable(shell + QStringLiteral(" is not installed; its script is generated but not syntax-checked")));
+    const QString file = path(QStringLiteral("completion.") + shell);
+    QFile f(file);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(script.toUtf8());
+    f.close();
+    QProcess p;
+    p.start(exe, {checkFlag, file});
+    QVERIFY(p.waitForFinished(30000));
+    QVERIFY2(p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0,
+             qPrintable(shell + QStringLiteral(": ") + QString::fromUtf8(p.readAllStandardError())));
+}
+
+void TestCli::completionZsh() { checkCompletionSyntax(QStringLiteral("zsh"), QStringLiteral("-n")); }
+void TestCli::completionBash() { checkCompletionSyntax(QStringLiteral("bash"), QStringLiteral("-n")); }
+void TestCli::completionFish() { checkCompletionSyntax(QStringLiteral("fish"), QStringLiteral("--no-execute")); }
 
 void TestCli::orderPlaylistShapes()
 {

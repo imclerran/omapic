@@ -25,7 +25,7 @@ target_link_libraries(omapic-core PUBLIC Qt6::Core Qt6::Sql)
 
 qt_add_executable(omapic
     src/main.cpp
-    src/cli.h src/cli.cpp
+    src/cli.h src/cli.cpp src/clicompletion.cpp
 )
 
 qt_add_qml_module(omapic
