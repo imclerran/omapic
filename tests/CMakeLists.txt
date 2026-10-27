@@ -12,6 +12,7 @@ find_package(exiv2 REQUIRED) # the sidecar reader parses XMP via exiv2
 # The pure-logic sources under test. Kept in sync by hand with CMakeLists.txt's
 # qt_add_qml_module SOURCES list; only the GUI/QML-free units belong here.
 add_library(omapic_logic STATIC
+    ${CMAKE_SOURCE_DIR}/src/cli.cpp
     ${CMAKE_SOURCE_DIR}/src/textmatch.h
     ${CMAKE_SOURCE_DIR}/src/mediascan.cpp
     ${CMAKE_SOURCE_DIR}/src/sidecar.cpp
@@ -40,6 +41,7 @@ endfunction()
 
 omapic_add_test(tst_textfold)
 omapic_add_test(tst_oql)
+omapic_add_test(tst_cli)
 omapic_add_test(tst_mediascan)
 omapic_add_test(tst_database)
 omapic_add_test(tst_photofiltermodel)

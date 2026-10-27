@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImageReader>
@@ -12,22 +13,53 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSettings>
 #include <QStringList>
+#include <QTextStream>
 #include <QUrl>
+#include <QVariantMap>
 
+#include "cli.h"
 #include "mediascan.h"
 #include "omarchytheme.h"
 #include "thumbnailprovider.h"
 
-int main(int argc, char *argv[])
+namespace {
+// The process-wide names QSettings and the data dirs key on; the same for the
+// gallery and the command-line tool so they read one config and one library.
+void setApplicationNames()
 {
-    QGuiApplication app(argc, argv);
-    QGuiApplication::setApplicationName(QStringLiteral("omapic"));
+    QCoreApplication::setApplicationName(QStringLiteral("omapic"));
     // So QSettings lands in ~/.config/omapic/ (not an "Unknown Organization"
     // folder) and groups values by category. The data and cache dirs are pinned
     // to Generic*Location + "/omapic" (see library.cpp / thumbnailprovider.cpp)
     // so setting this does not nest or move them.
-    QGuiApplication::setOrganizationName(QStringLiteral("omapic"));
+    QCoreApplication::setOrganizationName(QStringLiteral("omapic"));
+}
+}
+
+int main(int argc, char *argv[])
+{
+    // Dispatch on a subcommand before creating any application object: the
+    // read-only commands (query, tags, albums, categories) run on a
+    // QCoreApplication so they work without a display; view and slideshow fall
+    // through to the GUI below with their query already recognised. Subcommands
+    // win over file arguments — a file named "query" is opened with
+    // `omapic ./query` or `omapic -- query`.
+    QStringList rawArgs;
+    for (int i = 1; i < argc; ++i)
+        rawArgs.append(QString::fromLocal8Bit(argv[i]));
+    const cli::Options cliOpts = cli::parse(rawArgs);
+    if (cli::isHeadless(cliOpts.command)) {
+        QCoreApplication app(argc, argv);
+        setApplicationNames();
+        QTextStream out(stdout), err(stderr);
+        return cli::runHeadless(cliOpts, cli::defaultDatabasePath(), out, err);
+    }
+    const bool queryLaunch = cliOpts.command != cli::Command::None;
+
+    QGuiApplication app(argc, argv);
+    setApplicationNames();
     // Ties the window to omapic.desktop so Wayland compositors show the right
     // icon and name in docks, alt-tab, etc. (the app_id becomes "omapic").
     QGuiApplication::setDesktopFileName(QStringLiteral("omapic"));
@@ -53,10 +85,11 @@ int main(int argc, char *argv[])
     // (`omapic photo.jpg …`), so it can be the system's default image handler
     // without paying for the full gallery (no database, no scan, no worker).
     QStringList fileArgs;
-    {
+    if (!queryLaunch) {
         QCommandLineParser parser;
         parser.setApplicationDescription(
-            QStringLiteral("omapic — photo gallery, or a viewer when given files"));
+            QStringLiteral("omapic — photo gallery, or a viewer when given files.\n\n")
+            + cli::usage());
         parser.addHelpOption();
         parser.addVersionOption();
         parser.addPositionalArgument(QStringLiteral("files"),
@@ -66,11 +99,39 @@ int main(int argc, char *argv[])
         fileArgs = parser.positionalArguments();
     }
 
-    // Resolve the arguments to media URLs. A lone directory argument opens that
-    // folder's tree; otherwise each existing media file is taken in order.
+    // Resolve the arguments to media URLs. A query launch (`omapic view '<q>'`,
+    // `omapic slideshow '<q>'`) resolves the query against the library; the
+    // result set is the whole scope, so launchSinglePath stays false (S in the
+    // viewer must not expand to a photo's directory tree). Otherwise a lone
+    // directory argument opens that folder's tree, and each existing media file
+    // is taken in order.
     QList<QUrl> launchUrls;
     bool singlePath = false;
-    if (fileArgs.size() == 1 && QFileInfo(fileArgs.first()).isDir()) {
+    bool slideshowLaunch = false;
+    QVariantMap slideshowOptions;
+    if (queryLaunch) {
+        QTextStream err(stderr);
+        if (cliOpts.help) {
+            QTextStream(stdout) << cli::usage(cliOpts.command);
+            return cli::kExitMatches;
+        }
+        const int code = cli::resolveMedia(cliOpts, cli::defaultDatabasePath(), launchUrls, err);
+        if (code != cli::kExitMatches)
+            return code; // no window for an error or an empty result
+        if (cliOpts.command == cli::Command::Slideshow) {
+            slideshowLaunch = true;
+            QSettings saved; // the gallery's own settings file
+            const cli::SlideshowSettings s = cli::slideshowSettings(cliOpts, saved);
+            const int start = cli::orderPlaylist(launchUrls, s);
+            slideshowOptions = {
+                {QStringLiteral("intervalMs"), s.intervalMs},
+                {QStringLiteral("shuffle"), s.shuffle},
+                {QStringLiteral("fade"), s.fade},
+                {QStringLiteral("loop"), s.loop},
+                {QStringLiteral("startIndex"), start},
+            };
+        }
+    } else if (fileArgs.size() == 1 && QFileInfo(fileArgs.first()).isDir()) {
         const QString dir = QFileInfo(fileArgs.first()).absoluteFilePath();
         for (const QString &f : mediascan::collectSorted(dir))
             launchUrls.append(QUrl::fromLocalFile(f));
@@ -113,6 +174,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("launchUrls"),
                                               QVariant::fromValue(launchUrls));
     engine.rootContext()->setContextProperty(QStringLiteral("launchSinglePath"), singlePath);
+    engine.rootContext()->setContextProperty(QStringLiteral("launchSlideshow"), slideshowLaunch);
+    engine.rootContext()->setContextProperty(QStringLiteral("launchSlideshowOptions"), slideshowOptions);
+    engine.rootContext()->setContextProperty(QStringLiteral("launchFullscreen"), cliOpts.fullscreen);
     engine.rootContext()->setContextProperty(QStringLiteral("heifSupported"), heifSupported);
     engine.rootContext()->setContextProperty(QStringLiteral("avifSupported"), avifSupported);
     engine.addImageProvider(QStringLiteral("thumbs"), new ThumbnailProvider);

@@ -6,9 +6,12 @@ import QtQuick
 import QtQuick.Window
 import Omapic
 
-// Standalone viewer root for `omapic <file> […]`. No Library, no database — just
-// the PhotoViewer over the launch files, with a SlideshowView it can hand off to.
-// launchUrls / launchSinglePath are set as context properties by main.cpp.
+// Standalone viewer root for `omapic <file> […]` and for the query launches
+// (`omapic view '<query>'`, `omapic slideshow '<query>'`). No Library, no
+// database — just the PhotoViewer over the launch files, with a SlideshowView
+// it can hand off to (or, for a slideshow launch, start in straight away).
+// launchUrls / launchSinglePath / launchSlideshow / launchSlideshowOptions /
+// launchFullscreen are set as context properties by main.cpp.
 PhotoViewer {
     id: viewer
 
@@ -44,10 +47,25 @@ PhotoViewer {
         id: slideshow
         // Theme actions need the Library, which the standalone viewer doesn't
         // have, so they stay unconnected here (the menu items are no-ops).
+
+        // A slideshow launched from the command line is the whole session:
+        // leaving it (Esc) quits rather than dropping back to a viewer window
+        // that was never shown.
+        onVisibilityChanged: if (launchSlideshow && visibility === Window.Hidden) Qt.quit()
     }
 
     Component.onCompleted: {
+        if (launchSlideshow) {
+            const o = launchSlideshowOptions
+            slideshow.intervalMs = o.intervalMs
+            slideshow.shuffle = o.shuffle
+            slideshow.transitionMs = o.fade ? 280 : 0
+            slideshow.loop = o.loop
+            slideshow.sources = launchUrls
+            slideshow.startAt(o.startIndex, true)
+            return
+        }
         viewer.openAt(0)
-        viewer.visibility = Window.Windowed
+        viewer.visibility = launchFullscreen ? Window.FullScreen : Window.Windowed
     }
 }

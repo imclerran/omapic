@@ -114,6 +114,38 @@ bool Database::open(const QString &path, const QString &connectionName)
     return true;
 }
 
+Database::OpenStatus Database::openReadOnly(const QString &path, const QString &connectionName)
+{
+    // SQLite would create an empty file for a missing path; a library that
+    // doesn't exist yet is simply not openable here.
+    if (path != QStringLiteral(":memory:") && !QFile::exists(path))
+        return OpenStatus::CannotOpen;
+    m_connectionName = connectionName.isEmpty()
+        ? QLatin1String(QSqlDatabase::defaultConnection)
+        : connectionName;
+    m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
+    m_db.setDatabaseName(path);
+    if (!m_db.open())
+        return OpenStatus::CannotOpen;
+    {
+        QSqlQuery q(m_db);
+        q.exec(QStringLiteral("PRAGMA query_only = 1"));
+        q.exec(QStringLiteral("PRAGMA busy_timeout = 5000"));
+    }
+    const int version = userVersion();
+    if (version > kSchemaVersion) {
+        m_schemaTooNew = true;
+        m_db.close();
+        return OpenStatus::SchemaNewer;
+    }
+    if (version < kSchemaVersion) {
+        m_db.close();
+        return OpenStatus::SchemaOlder;
+    }
+    resolveReservedIds();
+    return OpenStatus::Ok;
+}
+
 int Database::currentSchemaVersion()
 {
     return kSchemaVersion;
@@ -705,6 +737,22 @@ void Database::ensureAlbumsCategory()
         m_albumCategoryId = sel.value(0).toInt();
 }
 
+void Database::resolveReservedIds()
+{
+    QSqlQuery c(m_db);
+    c.prepare(QStringLiteral("SELECT id FROM tag_categories WHERE name = ?"));
+    c.addBindValue(systemStoredName(QStringLiteral("Albums")));
+    c.exec();
+    if (c.next())
+        m_albumCategoryId = c.value(0).toInt();
+    QSqlQuery f(m_db);
+    f.prepare(QStringLiteral("SELECT id FROM tags WHERE name = ?"));
+    f.addBindValue(albumStoredName(QStringLiteral("Favorites")));
+    f.exec();
+    if (f.next())
+        m_favoritesTagId = f.value(0).toInt();
+}
+
 void Database::ensureFavoritesAlbum()
 {
     if (m_albumCategoryId < 0)
@@ -1185,7 +1233,7 @@ QString Database::nonSystemTagClause(const QString &alias) const
         .arg(alias);
 }
 
-QVector<Photo> Database::loadPhotos()
+QVector<Photo> Database::loadPhotos(bool activeOnly)
 {
     QHash<int, int> indexOf;
     QVector<Photo> photos;
@@ -1206,7 +1254,7 @@ QVector<Photo> Database::loadPhotos()
     q.exec(QStringLiteral(
                "SELECT p.id, p.path, p.taken_at, p.hash FROM photos p WHERE %1 "
                "ORDER BY p.added_at, p.id")
-               .arg(activeClause(QStringLiteral("p"))));
+               .arg(activeOnly ? activeClause(QStringLiteral("p")) : QStringLiteral("1")));
     while (q.next()) {
         Photo p;
         p.id = q.value(0).toInt();

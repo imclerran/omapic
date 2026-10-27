@@ -151,6 +151,7 @@ protected:
     // value (3 < 22 < 111), so numbered files sort as a person would expect, and
     // the rest of the name compares alphabetically. When folderFirst is on, photos
     // are grouped by containing folder (compared the same way) before file name.
+    // The comparison is photosort::lessThan, shared with the CLI.
     bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
 
 private:

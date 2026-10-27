@@ -13,6 +13,7 @@ A photo and video gallery for [Omarchy](https://omarchy.org), built around taggi
 - **Forgiving search** — find tags without worrying about case or accents ("cafe" finds "café").
 - **Slideshows** — from any filter, selection, or album, with folder-aware shuffle and intervals down to 0.1 s.
 - **Default image viewer** — `omapic photo.jpg` or `omapic <dir>` opens a lightweight viewer without loading your library.
+- **Command line** — `omapic query 'beach -people'` lists matching photos for scripts, and `omapic view` / `omapic slideshow` open a query in the viewer. See [Command line](#command-line).
 - **Omarchy integration** — follows your theme live. Add any photo to your wallpaper rotation, or generate a whole theme from it with [Aether](https://github.com/bjarneo/aether).
 - **Works on other Linux desktops too** — with reduced integration: set any photo as the wallpaper (via the desktop portal, or a supported wallpaper tool) and open files in your file manager. Omarchy- and Aether-specific actions simply hide when those aren't installed.
 - **HEIC and AVIF support**, plus video.
@@ -80,6 +81,47 @@ named "missing" term in its place (shown as `"name"`) that matches nothing —
 the query is never silently rewritten. A `"` can't appear in a name (it is the
 one character a query can't quote), so Omapic turns it into `“`/`”`.
 
+## Command line
+
+The gallery's library can be queried from a terminal, read-only, with the same
+[query language](#query-language-oql) smart albums use. It is safe to run while
+the gallery is open.
+
+```sh
+omapic query 'beach (sunset | sunrise) -people'   # one path per line
+omapic query --count is:untagged                   # just the number
+omapic query --json --sort date 'album:Trip'       # id, path, name, tags, takenAt, favorite, video
+omapic query -0 'cat:Place' | xargs -0 cp -t ~/places/
+omapic query --explain 'dark forest'               # how the query was read
+omapic tags | albums | categories                  # names, one per line (for completion)
+omapic view 'is:fav'                               # open the matches in the viewer
+omapic slideshow --interval 3 --shuffle 'beach'    # play them as a slideshow
+```
+
+`query`, `view` and `slideshow` share the scope and sort flags: by default the
+results are what the gallery's flat view shows — one copy per file content
+(`--all-copies` keeps duplicates), enabled folders only (`--include-disabled`
+adds the rest), files that exist on disk (missing ones are counted on stderr),
+in the grid's natural name order (`--sort name|date|tags`, `--reverse`; dates
+and tag counts read newest / most-tagged first). `slideshow` starts from the
+gallery's saved slideshow settings and applies `--interval S`, `--shuffle`,
+`--shuffle-folders`, `--crossfade` / `--no-crossfade`, `--start-random` and
+`--loop` on top; `--fullscreen` opens `view` full screen.
+
+Options go before the query. The first argument that isn't an option starts
+the query — so `omapic query -people` is the query `-people` — and `--` ends
+the options explicitly (`omapic query --count -- -people`). An unquoted query
+the shell splits into words is joined back with single spaces. Subcommands win
+over file arguments: open a file literally named `query` with `omapic ./query`
+or `omapic -- query`.
+
+Parse errors are shown with a caret under the offending span and "did you
+mean" suggestions, and a reading that depended on your tags (`dark forest`
+split into two tags because no tag has that name) is noted on stderr. Exit
+codes: 0 something matched, 1 nothing matched, 2 a usage or query error, 3 the
+library couldn't be opened. The tool never migrates the library: if it is older
+than the installed Omapic, launch the app once to upgrade it.
+
 ## Tag retention
 
 When a file leaves your library — a folder removed, a photo deleted, or a file
@@ -93,8 +135,8 @@ byte-identical, so most re-downloads from services that re-encode won't match.
 
 ## Tests
 
-The logic layer (the SQLite store, text folding, media scanning, and the gallery
-filter) has a [Qt Test](https://doc.qt.io/qt-6/qttest-index.html) suite under
+The logic layer (the SQLite store, text folding, the query engine, the command
+line, media scanning, and the gallery filter) has a [Qt Test](https://doc.qt.io/qt-6/qttest-index.html) suite under
 [`tests/`](tests/), run via CTest and exercised in CI on every push and pull
 request:
 

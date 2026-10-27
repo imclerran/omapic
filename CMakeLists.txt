@@ -18,12 +18,14 @@ add_library(omapic-core STATIC
     src/textfold.h src/textfold.cpp
     src/database.h src/database.cpp
     src/oql.h src/oqlsyntax.h src/oql.cpp src/oqlparser.cpp
+    src/photosort.h src/photosort.cpp
 )
 target_include_directories(omapic-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(omapic-core PUBLIC Qt6::Core Qt6::Sql)
 
 qt_add_executable(omapic
     src/main.cpp
+    src/cli.h src/cli.cpp
 )
 
 qt_add_qml_module(omapic
