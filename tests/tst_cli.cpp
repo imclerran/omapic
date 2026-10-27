@@ -235,10 +235,10 @@ void TestCli::optionsAnywhereBeforeDoubleDash()
     // Among several arguments, one that still holds whitespace was quoted in the
     // shell (which ate the quotes), so it is quoted in OQL — with a leading NOT
     // or a predicate key kept outside, and already-quoted text left alone.
-    o = cli::parse({QStringLiteral("query"), QStringLiteral("is:fav"), QStringLiteral("Raiden Shogun"),
-                    QStringLiteral("-dark forest"), QStringLiteral("album:Best of 2019"),
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("is:fav"), QStringLiteral("dark forest"),
+                    QStringLiteral("-red panda"), QStringLiteral("album:Best of 2019"),
                     QStringLiteral("\"dinner (2019)\""), QStringLiteral("cat:Place")});
-    QCOMPARE(o.query, QStringLiteral("is:fav \"Raiden Shogun\" -\"dark forest\" album:\"Best of 2019\" \"dinner (2019)\" cat:Place"));
+    QCOMPARE(o.query, QStringLiteral("is:fav \"dark forest\" -\"red panda\" album:\"Best of 2019\" \"dinner (2019)\" cat:Place"));
     // A lone argument is the whole query as typed, whitespace and all.
     o = cli::parse({QStringLiteral("query"), QStringLiteral("beach sunset | people")});
     QCOMPARE(o.query, QStringLiteral("beach sunset | people"));

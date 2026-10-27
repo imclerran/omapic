@@ -500,7 +500,7 @@ int runNameList(const Options &opts, Database &db, QTextStream &out)
 // --- Dispatch and parsing -------------------------------------------------------
 
 // One shell argument of a multi-argument query, with OQL quotes added when it
-// holds whitespace and none of its own: `-Raiden Shogun` → `-"Raiden Shogun"`,
+// holds whitespace and none of its own: `-dark forest` → `-"dark forest"`,
 // `album:Best of 2019` → `album:"Best of 2019"`. Anything else passes through.
 QString quoteShellWord(const QString &part)
 {
@@ -692,7 +692,7 @@ Options parse(const QStringList &args)
     }
     // An unquoted query the shell split arrives as several arguments. Among
     // several, an argument that still contains whitespace was quoted in the shell
-    // ("Raiden Shogun"), and the shell has already eaten those quotes — so quote
+    // ("dark forest"), and the shell has already eaten those quotes — so quote
     // it in OQL, or the parser would see a bare run of words and guess. A lone
     // argument is the whole query as typed.
     if (queryParts.size() > 1)
