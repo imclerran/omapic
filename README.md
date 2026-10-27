@@ -173,8 +173,10 @@ is the query `-people`. `--` ends the options, and everything after it is query
 text (`omapic query --count -- -people`). An unquoted query the shell splits
 into words is joined back with single spaces, and a word you shell-quoted
 (`omapic query is:fav "dark forest"`) is quoted in the query too, since the
-shell strips its quotes; a single argument is taken as the whole query as
-typed, so `omapic query 'beach "dark forest"'` works as well. Subcommands win over file
+shell strips its quotes. A single argument is taken as the whole query as
+typed, so `omapic query 'beach "dark forest"'` works as well — unless it is
+exactly one tag, album or category name (`omapic query "dark forest"` arrives
+as `dark forest`), which is read as that name. Subcommands win over file
 arguments: open a file literally named `query` with `omapic ./query` or
 `omapic -- query`.
 

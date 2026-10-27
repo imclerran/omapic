@@ -45,7 +45,10 @@
 // the query, because a term like `-0` is valid OQL (NOT the tag "0"); so is
 // `-people`, which starts the query. `--` ends option parsing and everything
 // after it is query text. Several query arguments (an unquoted query the shell
-// split) are joined with single spaces.
+// split) are joined with single spaces, and one that still holds whitespace
+// (shell-quoted, the quotes eaten) is quoted in OQL. A single argument is the
+// whole query as typed, unless it is exactly one known name — then it is that
+// name, quoted, since `omapic query "dark forest"` arrives as `dark forest`.
 //
 // Exit codes: 0 = matches (for --explain: the query parses), 1 = no matches,
 // 2 = parse or usage error, 3 = the library could not be opened (missing, needs

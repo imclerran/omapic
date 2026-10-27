@@ -200,20 +200,69 @@ struct Parsed {
     oql::Node tree; // expanded: no SmartAlbum references left
 };
 
+// Where the name starts in a query word: after a leading NOT run and an
+// album:/cat: key (an is: value never holds a name). The key's index in
+// kPredicates is returned through `key`, -1 when there is none.
+int nameStart(const QString &word, int *key = nullptr)
+{
+    int start = 0;
+    while (start < word.size() && word.at(start) == QLatin1Char('-'))
+        ++start;
+    const int k = oql::syntax::predicateKeyAt(word, start);
+    if (k >= 0 && oql::syntax::kPredicates[k].pred != oql::syntax::Predicate::Is)
+        start += int(qstrlen(oql::syntax::kPredicates[k].key)) + 1;
+    if (key)
+        *key = k;
+    return start;
+}
+
+// A lone query argument arrives as typed, minus the quotes the shell ate:
+// `omapic query "dark forest"` reaches us as `dark forest`, a bare run of
+// words the parser would read by longest match and note as a guess. When the
+// whole argument — after a leading NOT and a predicate key — is exactly one
+// known name, it was that quoted name, so it is quoted in OQL before parsing.
+// Anything else (several words, syntax, text already quoted) is still the
+// whole query as typed.
+QString quoteLoneName(const QString &query, const oql::Vocabulary &vocab)
+{
+    const QString trimmed = query.trimmed();
+    if (trimmed.contains(QLatin1Char('"')))
+        return query;
+    int key = -1;
+    const int start = nameStart(trimmed, &key);
+    const QString name = trimmed.mid(start).trimmed();
+    bool space = false;
+    for (const QChar c : name)
+        if (c.isSpace()) { space = true; break; }
+    if (!space)
+        return query;
+    QVector<oql::NameKind> kinds{oql::NameKind::Tag};
+    if (key >= 0)
+        kinds = oql::syntax::kPredicates[key].pred == oql::syntax::Predicate::Album
+                    ? QVector<oql::NameKind>{oql::NameKind::Album, oql::NameKind::SmartAlbum}
+                    : QVector<oql::NameKind>{oql::NameKind::Category};
+    const QString folded = oql::foldName(name);
+    for (const oql::NameKind kind : kinds)
+        if (vocab.resolve(kind, folded) >= 0)
+            return trimmed.left(start) + QLatin1Char('"') + name + QLatin1Char('"');
+    return query;
+}
+
 int parseQuery(const Options &opts, Database &db, QTextStream &err, Parsed &out)
 {
     oql::MapVocabulary vocab;
     db.fillVocabulary(vocab);
-    const oql::ParseResult parsed = oql::parse(opts.query, vocab);
+    const QString query = quoteLoneName(opts.query, vocab);
+    const oql::ParseResult parsed = oql::parse(query, vocab);
     if (!parsed.ok()) {
-        printParseError(parsed.error, opts.query, err);
+        printParseError(parsed.error, query, err);
         return kExitUsage;
     }
     // Readings that depended on the vocabulary are worth a warning: `dark forest`
     // was split only because no tag has that name. Under --strict they are errors.
     if (opts.strict && !parsed.notes.isEmpty()) {
         for (const oql::Note &n : parsed.notes)
-            printStrictNote(n, opts.query, err);
+            printStrictNote(n, query, err);
         return kExitUsage;
     }
     for (const oql::Note &n : parsed.notes)
@@ -232,9 +281,9 @@ int parseQuery(const Options &opts, Database &db, QTextStream &err, Parsed &out)
         if (!problems.isEmpty()) {
             for (const QString &p : problems) {
                 oql::Error e;
-                e.span = {0, int(opts.query.size())};
+                e.span = {0, int(query.size())};
                 e.message = p;
-                printParseError(e, opts.query, err);
+                printParseError(e, query, err);
             }
             return kExitUsage;
         }
@@ -513,12 +562,7 @@ QString quoteShellWord(const QString &part)
     if (!space)
         return part;
     // Keep a leading NOT and a predicate key outside the quotes.
-    int start = 0;
-    while (start < trimmed.size() && trimmed.at(start) == QLatin1Char('-'))
-        ++start;
-    const int key = oql::syntax::predicateKeyAt(trimmed, start);
-    if (key >= 0 && oql::syntax::kPredicates[key].pred != oql::syntax::Predicate::Is)
-        start += int(qstrlen(oql::syntax::kPredicates[key].key)) + 1;
+    const int start = nameStart(trimmed);
     const QString name = trimmed.mid(start).trimmed();
     if (name.isEmpty())
         return part;
