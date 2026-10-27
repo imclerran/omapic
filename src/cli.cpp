@@ -19,6 +19,7 @@
 
 #include "database.h"
 #include "oql.h"
+#include "oqlsyntax.h"
 #include "photo.h"
 #include "photosort.h"
 
@@ -498,6 +499,32 @@ int runNameList(const Options &opts, Database &db, QTextStream &out)
 
 // --- Dispatch and parsing -------------------------------------------------------
 
+// One shell argument of a multi-argument query, with OQL quotes added when it
+// holds whitespace and none of its own: `-Raiden Shogun` → `-"Raiden Shogun"`,
+// `album:Best of 2019` → `album:"Best of 2019"`. Anything else passes through.
+QString quoteShellWord(const QString &part)
+{
+    const QString trimmed = part.trimmed();
+    if (trimmed.isEmpty() || trimmed.contains(QLatin1Char('"')))
+        return part;
+    bool space = false;
+    for (const QChar c : trimmed)
+        if (c.isSpace()) { space = true; break; }
+    if (!space)
+        return part;
+    // Keep a leading NOT and a predicate key outside the quotes.
+    int start = 0;
+    while (start < trimmed.size() && trimmed.at(start) == QLatin1Char('-'))
+        ++start;
+    const int key = oql::syntax::predicateKeyAt(trimmed, start);
+    if (key >= 0 && oql::syntax::kPredicates[key].pred != oql::syntax::Predicate::Is)
+        start += int(qstrlen(oql::syntax::kPredicates[key].key)) + 1;
+    const QString name = trimmed.mid(start).trimmed();
+    if (name.isEmpty())
+        return part;
+    return trimmed.left(start) + QLatin1Char('"') + name + QLatin1Char('"');
+}
+
 bool isSubcommand(const QString &arg)
 {
     return commandFor(arg) != Command::None;
@@ -663,7 +690,14 @@ Options parse(const QStringList &args)
             o.shell = queryParts.first();
         return o;
     }
-    // An unquoted query the shell split arrives as several arguments.
+    // An unquoted query the shell split arrives as several arguments. Among
+    // several, an argument that still contains whitespace was quoted in the shell
+    // ("Raiden Shogun"), and the shell has already eaten those quotes — so quote
+    // it in OQL, or the parser would see a bare run of words and guess. A lone
+    // argument is the whole query as typed.
+    if (queryParts.size() > 1)
+        for (QString &part : queryParts)
+            part = quoteShellWord(part);
     o.query = queryParts.join(QLatin1Char(' ')).trimmed();
     if (takesQuery(o.command) && o.query.isEmpty())
         o.error = QStringLiteral("%1 needs a query").arg(commandName(o.command));
