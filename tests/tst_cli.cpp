@@ -4,12 +4,15 @@
 
 #include <QtTest>
 
+#include <QCoreApplication>
+
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QSqlDatabase>
@@ -55,6 +58,7 @@ private slots:
     void completionCommand();
     void completionZsh();
     void completionBash();
+    void completionBashCompletesInsideQuotes();
     void completionFish();
     void resolveMediaForView();
     void slideshowIgnoresSavedSettings();
@@ -767,6 +771,62 @@ void TestCli::completionCommand()
                                     QStringLiteral("cat:"), QStringLiteral("is:untagged"), QStringLiteral("date")})
             QVERIFY2(script.contains(word), qPrintable(shell + QStringLiteral(" lacks ") + word));
     }
+}
+
+void TestCli::completionBashCompletesInsideQuotes()
+{
+    // Drive the generated bash script the way readline would, with the current
+    // word opened by a quote the shell hasn't closed yet, against the seeded
+    // library (the script runs `omapic tags --tsv`, so the built binary must be
+    // on PATH and OMAPIC_LIBRARY names the library).
+    const QString bash = QStandardPaths::findExecutable(QStringLiteral("bash"));
+    if (bash.isEmpty())
+        QSKIP("bash is not installed");
+    const QString binDir = QCoreApplication::applicationDirPath() + QStringLiteral("/..");
+    if (!QFile::exists(binDir + QStringLiteral("/omapic")))
+        QSKIP("the omapic binary is not beside the tests");
+    seedLibrary();
+    const QString file = path(QStringLiteral("completion.bash"));
+    QFile f(file);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(cli::completionScript(QStringLiteral("bash")).toUtf8());
+    f.close();
+
+    auto complete = [&](const QStringList &words) {
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert(QStringLiteral("PATH"), binDir + QLatin1Char(':') + env.value(QStringLiteral("PATH")));
+        env.insert(QStringLiteral("OMAPIC_LIBRARY"), dbPath());
+        QStringList quoted;
+        for (const QString &w : words)
+            quoted.append(QLatin1Char('\'') + QString(w).replace(QLatin1Char('\''), QStringLiteral("'\\''")) + QLatin1Char('\''));
+        const QString script = QStringLiteral(
+            "source '%1'; COMP_WORDS=(%2); COMP_CWORD=%3; COMP_LINE=\"${COMP_WORDS[*]}\"; "
+            "COMP_POINT=${#COMP_LINE}; _omapic; printf '%s\\n' \"${COMPREPLY[@]}\"")
+            .arg(file, quoted.join(QLatin1Char(' ')), QString::number(words.size() - 1));
+        QProcess p;
+        p.setProcessEnvironment(env);
+        p.start(bash, {QStringLiteral("-c"), script});
+        if (!p.waitForFinished(30000))
+            return QStringList{QStringLiteral("<timeout>")};
+        return QString::fromUtf8(p.readAllStandardOutput()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    };
+
+    // Unquoted: backslash-escaped, as before.
+    QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("sun")}),
+             QStringList{QStringLiteral("sunset")});
+    // Inside a double quote: the quote is kept and closed.
+    QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("\"sun")}),
+             QStringList{QStringLiteral("\"sunset\"")});
+    QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("'sun")}),
+             QStringList{QStringLiteral("'sunset'")});
+    // A NOT or a predicate key before the quote stays outside it.
+    QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("-\"peo")}),
+             QStringList{QStringLiteral("-\"people\"")});
+    QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("album:\"Tr")}),
+             QStringList{QStringLiteral("album:\"Trip\"")});
+    // A quote around the whole word, NOT included.
+    QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("\"-peo")}),
+             QStringList{QStringLiteral("\"-people\"")});
 }
 
 void TestCli::checkCompletionSyntax(const QString &shell, const QString &checkFlag)
