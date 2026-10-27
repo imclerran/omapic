@@ -48,6 +48,7 @@ private slots:
     void queryOutputShapes();
     void queryExplainAndNotes();
     void queryStrict();
+    void queryLoneArgumentName();
     void queryParseErrorShowsCaret();
     void queryExpandsSmartAlbumReferences();
     void listCommands();
@@ -470,6 +471,42 @@ void TestCli::queryStrict()
     QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("album:Beachy")}, &out, &err), cli::kExitUsage);
     QVERIFY(err.contains(QStringLiteral("omapic: error: A smart album refers to the tag \"sunset\", which no longer exists")));
     QVERIFY(err.contains(QStringLiteral("\n  album:Beachy\n  ^^^^^^^^^^^^\n")));
+}
+
+void TestCli::queryLoneArgumentName()
+{
+    seedLibrary();
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("lone")));
+        db.ensureTag(QStringLiteral("dark forest"));
+        db.createAlbum(QStringLiteral("Best of 2019"));
+        db = Database();
+        QSqlDatabase::removeDatabase(QStringLiteral("lone"));
+    }
+    QString out, err;
+    // (The canonical form prints a name bare when it needs no quotes.)
+    // `omapic query "dark forest"` arrives as the lone argument `dark forest`
+    // (the shell ate the quotes). Exactly one known name is read as that name:
+    // no note, nothing for --strict to refuse.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("--explain"), QStringLiteral("dark forest")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("dark forest\n"));
+    QVERIFY(!err.contains(QStringLiteral("note:")));
+    // A leading NOT and a predicate key stay outside the quotes.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("--explain"), QStringLiteral("-dark forest")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("-dark forest\n"));
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("--explain"), QStringLiteral("album:Best of 2019")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("album:Best of 2019\n"));
+    // Names fold case like everywhere else.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("--explain"), QStringLiteral("Dark Forest")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("dark forest\n"));
+    // More than a name is still the whole query as typed: longest match, noted.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--explain"), QStringLiteral("dark forest sunset")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("dark forest sunset\n"));
+    QVERIFY(err.contains(QStringLiteral("note: \"dark forest\" is read as one tag")));
+    // Text that kept its quotes is left alone.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--strict"), QStringLiteral("--explain"), QStringLiteral("\"dark forest\"")}, &out, &err), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("dark forest\n"));
 }
 
 void TestCli::queryParseErrorShowsCaret()
