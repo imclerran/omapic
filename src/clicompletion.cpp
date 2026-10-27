@@ -225,10 +225,24 @@ _omapic_library() {
 }
 
 # Add each candidate that starts with the current word, quoted for the shell.
+# When the word was being typed inside a quote ("dinn, -"dark, album:"Best),
+# the quote is put back where it was and closed, so the insertion stays a
+# quoted name rather than a backslash-escaped one.
 _omapic_add() {
-  local c
+  local c body
   for c in "$@"; do
-    [[ $c == "$cur"* ]] && COMPREPLY+=( "$(printf '%q' "$c")" )
+    [[ $c == "$cur"* ]] || continue
+    if [[ -n $quote ]]; then
+      body=${c#"$qprefix"}
+      if [[ $quote == '"' ]]; then
+        body=${body//\\/\\\\}; body=${body//\"/\\\"}; body=${body//\$/\\\$}; body=${body//\`/\\\`}
+      else
+        body=${body//\'/\'\\\'\'}
+      fi
+      COMPREPLY+=( "$qprefix$quote$body$quote" )
+    else
+      COMPREPLY+=( "$(printf '%q' "$c")" )
+    fi
   done
 }
 
@@ -266,8 +280,16 @@ _omapic() {
     prev=${COMP_WORDS[COMP_CWORD-1]}
     cur=''
   fi
-  # Match against what was typed, without the backslashes that quote it.
+  # Match against what was typed, without the backslashes that quote it. A
+  # quote opened in the word ("dinn, -"dark, album:"Best) is remembered with
+  # the text before it, dropped for matching, and restored by _omapic_add.
   cur=${cur//\\/}
+  local quote='' qprefix=''
+  if [[ $cur == *[\"\']* ]]; then
+    qprefix=${cur%%[\"\']*}
+    quote=${cur:${#qprefix}:1}
+    cur=$qprefix${cur:${#qprefix}+1}
+  fi
 
   if (( COMP_CWORD == 1 )); then
     # A subcommand, or (when none matches) a file for the viewer.
@@ -402,7 +424,9 @@ end
 
 # One word of a query: a tag (after an optional NOT '-'), or a predicate.
 function __omapic_query_words
-    set -l cur (commandline -ct)
+    # The token as typed, minus any quote opened in it ("dinn, -"dark), so the
+    # prefix cases below still apply; fish matches and re-quotes the result.
+    set -l cur (string replace -a -- '"' '' (commandline -ct) | string replace -a -- "'" '')
     switch $cur
         case 'album:*'
             __omapic_names albums album:
