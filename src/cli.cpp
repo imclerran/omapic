@@ -69,13 +69,12 @@ const OptionSpec kOptions[] = {
     {"all-copies", 0, false, WithQuery, "", "Keep duplicate copies of the same content."},
     {"include-disabled", 0, false, WithQuery, "", "Include photos under disabled folders."},
     {"fullscreen", 0, false, Gui, "", "Open full screen."},
-    {"interval", 0, true, Slideshow_, "S", "Seconds per photo."},
+    {"interval", 0, true, Slideshow_, "S", "Seconds per photo (default 4)."},
     {"shuffle", 0, false, Slideshow_, "", "Shuffle the photos."},
     {"shuffle-folders", 0, false, Slideshow_, "", "Visit folders in random order (photos stay grouped)."},
-    {"crossfade", 0, false, Slideshow_, "", "Crossfade between photos."},
-    {"no-crossfade", 0, false, Slideshow_, "", "Cut between photos."},
+    {"crossfade", 0, false, Slideshow_, "", "Crossfade between photos instead of cutting."},
     {"start-random", 0, false, Slideshow_, "", "Start on a random photo."},
-    {"loop", 0, false, Slideshow_, "", "Loop videos."},
+    {"loop-videos", 0, false, Slideshow_, "", "Repeat a video until you move on."},
 };
 
 const OptionSpec *findOption(const QString &name, Command c)
@@ -360,12 +359,10 @@ Options parse(const QStringList &args)
             o.shuffleFolders = true;
         } else if (n == QLatin1String("crossfade")) {
             o.crossfade = true;
-        } else if (n == QLatin1String("no-crossfade")) {
-            o.crossfade = false;
         } else if (n == QLatin1String("start-random")) {
             o.startRandom = true;
-        } else if (n == QLatin1String("loop")) {
-            o.loop = true;
+        } else if (n == QLatin1String("loop-videos")) {
+            o.loopVideos = true;
         }
     }
     if (o.help)
@@ -427,8 +424,9 @@ QString usage(Command command)
     case Command::Categories: ts << "List every tag category name.\n"; break;
     case Command::View: ts << "Open the matching photos in the viewer.\n"; break;
     case Command::Slideshow:
-        ts << "Play the matching photos as a slideshow. The gallery's saved slideshow\n"
-              "settings apply unless a flag overrides them.\n";
+        ts << "Play the matching photos as a slideshow: 4 seconds per photo, in order, with\n"
+              "cuts between them, unless a flag says otherwise. The gallery's saved slideshow\n"
+              "settings are not consulted.\n";
         break;
     case Command::None: break;
     }
@@ -560,29 +558,15 @@ int resolveMedia(const Options &opts, const QString &dbPath, QList<QUrl> &urls, 
     return kExitMatches;
 }
 
-SlideshowSettings slideshowSettings(const Options &opts, QSettings &saved)
+SlideshowSettings slideshowSettings(const Options &opts)
 {
     SlideshowSettings s;
-    saved.beginGroup(QStringLiteral("slideshow"));
-    s.intervalMs = saved.value(QStringLiteral("intervalMs"), s.intervalMs).toInt();
-    s.shuffle = saved.value(QStringLiteral("shuffle"), s.shuffle).toBool();
-    s.shuffleFolders = saved.value(QStringLiteral("shuffleFolders"), s.shuffleFolders).toBool();
-    s.fade = saved.value(QStringLiteral("fade"), s.fade).toBool();
-    s.randomStart = saved.value(QStringLiteral("randomStart"), s.randomStart).toBool();
-    s.loop = saved.value(QStringLiteral("loop"), s.loop).toBool();
-    saved.endGroup();
-    if (opts.intervalSecs)
-        s.intervalMs = std::max(1, int(*opts.intervalSecs * 1000.0 + 0.5));
-    if (opts.shuffle)
-        s.shuffle = *opts.shuffle;
-    if (opts.shuffleFolders)
-        s.shuffleFolders = *opts.shuffleFolders;
-    if (opts.crossfade)
-        s.fade = *opts.crossfade;
-    if (opts.startRandom)
-        s.randomStart = *opts.startRandom;
-    if (opts.loop)
-        s.loop = *opts.loop;
+    s.intervalMs = std::max(1, int(opts.intervalSecs * 1000.0 + 0.5));
+    s.shuffle = opts.shuffle;
+    s.shuffleFolders = opts.shuffleFolders;
+    s.fade = opts.crossfade;
+    s.randomStart = opts.startRandom;
+    s.loop = opts.loopVideos;
     return s;
 }
 

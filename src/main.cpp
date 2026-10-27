@@ -13,7 +13,6 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
-#include <QSettings>
 #include <QStringList>
 #include <QTextStream>
 #include <QUrl>
@@ -120,8 +119,9 @@ int main(int argc, char *argv[])
             return code; // no window for an error or an empty result
         if (cliOpts.command == cli::Command::Slideshow) {
             slideshowLaunch = true;
-            QSettings saved; // the gallery's own settings file
-            const cli::SlideshowSettings s = cli::slideshowSettings(cliOpts, saved);
+            // From the flags alone: a query launch never reads the gallery's
+            // saved settings.
+            const cli::SlideshowSettings s = cli::slideshowSettings(cliOpts);
             const int start = cli::orderPlaylist(launchUrls, s);
             slideshowOptions = {
                 {QStringLiteral("intervalMs"), s.intervalMs},

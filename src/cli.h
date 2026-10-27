@@ -5,13 +5,10 @@
 #pragma once
 
 #include <QList>
-#include <QSettings>
 #include <QString>
 #include <QStringList>
 #include <QTextStream>
 #include <QUrl>
-
-#include <optional>
 
 // The command-line interface: `omapic query|tags|albums|categories` (headless,
 // read-only) and `omapic view|slideshow` (resolve a query, then open the
@@ -24,8 +21,13 @@
 //   omapic tags | albums | categories
 //   omapic view [scope/sort flags] [--fullscreen] '<query>'
 //   omapic slideshow [scope/sort flags] [--interval S] [--shuffle]
-//                    [--shuffle-folders] [--crossfade | --no-crossfade]
-//                    [--start-random] [--loop] [--fullscreen] '<query>'
+//                    [--shuffle-folders] [--crossfade] [--start-random]
+//                    [--loop-videos] [--fullscreen] '<query>'
+//
+// What the tool does depends only on its arguments and the library: it never
+// reads the gallery's saved settings (QSettings), which are incidental UI state.
+// The one piece of library state it honours is which folders are enabled,
+// because that lives in the database (see --include-disabled).
 //
 // Options come before the query. Option parsing stops at the first argument
 // that isn't a known option (so `omapic query -people` is a query), or at `--`.
@@ -57,13 +59,13 @@ struct Options {
     bool allCopies = false;       // keep duplicate copies (by content hash)
     bool includeDisabled = false; // include photos under disabled folders
     bool fullscreen = false;
-    // Slideshow flags; unset means "use the saved setting".
-    std::optional<double> intervalSecs;
-    std::optional<bool> shuffle;
-    std::optional<bool> shuffleFolders;
-    std::optional<bool> crossfade;
-    std::optional<bool> startRandom;
-    std::optional<bool> loop;
+    // Slideshow flags. Every behaviour is off unless its flag is given.
+    double intervalSecs = 4.0;
+    bool shuffle = false;
+    bool shuffleFolders = false;
+    bool crossfade = false;
+    bool startRandom = false;
+    bool loopVideos = false;
 };
 
 // True when `arg` names a subcommand. A file literally named "query" is opened
@@ -92,18 +94,18 @@ int runHeadless(const Options &opts, const QString &dbPath, QTextStream &out, QT
 // Returns the exit code; `urls` is filled only on kExitMatches.
 int resolveMedia(const Options &opts, const QString &dbPath, QList<QUrl> &urls, QTextStream &err);
 
-// The slideshow's effective settings: the gallery's saved ones (the
-// "slideshow" group of its QSettings) with the command-line flags applied on
-// top.
+// The slideshow's settings, from the command-line flags alone: 4 s per photo
+// and everything else off unless a flag turns it on. The gallery's saved
+// slideshow settings are never consulted.
 struct SlideshowSettings {
     int intervalMs = 4000;
     bool shuffle = false;
     bool shuffleFolders = false;
-    bool fade = true;
+    bool fade = false;
     bool randomStart = false;
-    bool loop = false;
+    bool loop = false; // loop videos
 };
-SlideshowSettings slideshowSettings(const Options &opts, QSettings &saved);
+SlideshowSettings slideshowSettings(const Options &opts);
 
 // Apply the shuffle / folder-shuffle / random-start settings to a playlist as
 // the gallery does, returning the index to start at. `seed` fixes the

@@ -23,7 +23,8 @@
 
 // The command-line interface: argument dispatch, the headless commands against a
 // temporary library (scope and sort defaults, output shapes, exit codes, parse
-// errors with carets), the read-only open, and the slideshow settings merge.
+// errors with carets), the read-only open, and the slideshow settings, which
+// come from the flags alone.
 class TestCli : public QObject {
     Q_OBJECT
 
@@ -46,7 +47,8 @@ private slots:
     void listCommands();
     void libraryOpenFailures();
     void resolveMediaForView();
-    void slideshowSettingsMergeFlagsOverSaved();
+    void slideshowIgnoresSavedSettings();
+    void slideshowFlagsTurnOnOnlyTheirSetting();
     void orderPlaylistShapes();
 
 private:
@@ -184,11 +186,11 @@ void TestCli::optionsStopAtFirstNonOption()
     o = cli::parse({QStringLiteral("query"), QStringLiteral("--sort"), QStringLiteral("date"), QStringLiteral("beach")});
     QCOMPARE(o.sort, QStringLiteral("date"));
     QCOMPARE(o.query, QStringLiteral("beach"));
-    o = cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval=2.5"), QStringLiteral("--no-crossfade"), QStringLiteral("beach")});
+    o = cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval=2.5"), QStringLiteral("--crossfade"), QStringLiteral("beach")});
     QVERIFY(o.error.isEmpty());
-    QCOMPARE(*o.intervalSecs, 2.5);
-    QCOMPARE(*o.crossfade, false);
-    QVERIFY(!o.shuffle.has_value());
+    QCOMPARE(o.intervalSecs, 2.5);
+    QVERIFY(o.crossfade);
+    QVERIFY(!o.shuffle);
 }
 
 void TestCli::parseValidatesOptions()
@@ -202,6 +204,9 @@ void TestCli::parseValidatesOptions()
     QVERIFY(!cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval"), QStringLiteral("0"), QStringLiteral("x")}).error.isEmpty());
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--shuffle"), QStringLiteral("x")}).error.isEmpty()); // slideshow-only
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--count=1"), QStringLiteral("x")}).error.isEmpty());
+    // The old --loop and --no-crossfade are plain unknown options now.
+    QVERIFY(cli::parse({QStringLiteral("slideshow"), QStringLiteral("--loop"), QStringLiteral("x")}).error.contains(QStringLiteral("Unknown option --loop")));
+    QVERIFY(cli::parse({QStringLiteral("slideshow"), QStringLiteral("--no-crossfade"), QStringLiteral("x")}).error.contains(QStringLiteral("Unknown option --no-crossfade")));
     // A usage error exits 2 and prints the usage.
     QString err;
     QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--bogus"), QStringLiteral("x")}, nullptr, &err), cli::kExitUsage);
@@ -218,6 +223,8 @@ void TestCli::helpAndUsage()
     QVERIFY(!out.contains(QStringLiteral("--shuffle")));
     QCOMPARE(run({QStringLiteral("slideshow"), QStringLiteral("-h")}, &out), cli::kExitMatches);
     QVERIFY(out.contains(QStringLiteral("--shuffle-folders")));
+    QVERIFY(out.contains(QStringLiteral("--loop-videos")));
+    QVERIFY(!out.contains(QStringLiteral("--no-crossfade")));
     QVERIFY(cli::usage().contains(QStringLiteral("omapic -- query")));
 }
 
@@ -247,6 +254,10 @@ void TestCli::queryScopeFlags()
 {
     seedLibrary();
     QString out;
+    // Folder state lives in the library, so it is honoured: off/e.jpg is under
+    // a disabled folder and stays out unless --include-disabled asks for it.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("beach")}, &out), cli::kExitMatches);
+    QVERIFY(!out.contains(QStringLiteral("off/e.jpg")));
     QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--all-copies"), QStringLiteral("beach")}, &out), cli::kExitMatches);
     QCOMPARE(out.split('\n', Qt::SkipEmptyParts).size(), 3); // a, b and the copy c
     QVERIFY(out.contains(QStringLiteral("sub/c.jpg")));
@@ -428,34 +439,61 @@ void TestCli::resolveMediaForView()
     QCOMPARE(cli::resolveMedia(cli::parse({QStringLiteral("view")}), dbPath(), urls, err), cli::kExitUsage);
 }
 
-void TestCli::slideshowSettingsMergeFlagsOverSaved()
+void TestCli::slideshowIgnoresSavedSettings()
 {
-    QSettings saved(path(QStringLiteral("omapic.conf")), QSettings::IniFormat);
-    saved.beginGroup(QStringLiteral("slideshow"));
-    saved.setValue(QStringLiteral("intervalMs"), 7000);
-    saved.setValue(QStringLiteral("shuffle"), true);
-    saved.setValue(QStringLiteral("fade"), false);
-    saved.setValue(QStringLiteral("loop"), true);
-    saved.endGroup();
-
-    // No flags: the saved settings (and the defaults for the unsaved ones).
-    cli::SlideshowSettings s = cli::slideshowSettings(cli::parse({QStringLiteral("slideshow"), QStringLiteral("x")}), saved);
-    QCOMPARE(s.intervalMs, 7000);
-    QVERIFY(s.shuffle);
+    // The gallery's settings file, with every slideshow behaviour turned on and
+    // a non-default interval, in the place QSettings would read it from.
+    QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, path(QStringLiteral("config")));
+    QCoreApplication::setOrganizationName(QStringLiteral("omapic"));
+    QCoreApplication::setApplicationName(QStringLiteral("omapic"));
+    {
+        QSettings saved;
+        saved.beginGroup(QStringLiteral("slideshow"));
+        saved.setValue(QStringLiteral("intervalMs"), 7000);
+        saved.setValue(QStringLiteral("shuffle"), true);
+        saved.setValue(QStringLiteral("shuffleFolders"), true);
+        saved.setValue(QStringLiteral("fade"), true);
+        saved.setValue(QStringLiteral("randomStart"), true);
+        saved.setValue(QStringLiteral("loop"), true);
+        saved.endGroup();
+        saved.sync();
+        QVERIFY(QFile::exists(saved.fileName()));
+    }
+    // A bare `slideshow x` is 4 s per photo with everything off regardless.
+    const cli::SlideshowSettings s = cli::slideshowSettings(cli::parse({QStringLiteral("slideshow"), QStringLiteral("x")}));
+    QCOMPARE(s.intervalMs, 4000);
+    QVERIFY(!s.shuffle);
     QVERIFY(!s.shuffleFolders);
     QVERIFY(!s.fade);
     QVERIFY(!s.randomStart);
-    QVERIFY(s.loop);
-    // Flags override what they name and leave the rest.
-    s = cli::slideshowSettings(cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval"), QStringLiteral("0.5"),
-                                           QStringLiteral("--crossfade"), QStringLiteral("--shuffle-folders"),
-                                           QStringLiteral("--start-random"), QStringLiteral("x")}), saved);
-    QCOMPARE(s.intervalMs, 500);
-    QVERIFY(s.shuffle);
-    QVERIFY(s.shuffleFolders);
-    QVERIFY(s.fade);
-    QVERIFY(s.randomStart);
-    QVERIFY(s.loop);
+    QVERIFY(!s.loop);
+}
+
+void TestCli::slideshowFlagsTurnOnOnlyTheirSetting()
+{
+    auto with = [](const QString &flag) {
+        return cli::slideshowSettings(cli::parse({QStringLiteral("slideshow"), flag, QStringLiteral("x")}));
+    };
+    const cli::SlideshowSettings none = with(QStringLiteral("--fullscreen"));
+    auto onlyDiffers = [&](const cli::SlideshowSettings &s, bool cli::SlideshowSettings::*field) {
+        return s.*field && !(none.*field)
+            && (field == &cli::SlideshowSettings::shuffle || s.shuffle == none.shuffle)
+            && (field == &cli::SlideshowSettings::shuffleFolders || s.shuffleFolders == none.shuffleFolders)
+            && (field == &cli::SlideshowSettings::fade || s.fade == none.fade)
+            && (field == &cli::SlideshowSettings::randomStart || s.randomStart == none.randomStart)
+            && (field == &cli::SlideshowSettings::loop || s.loop == none.loop)
+            && s.intervalMs == none.intervalMs;
+    };
+    QVERIFY(onlyDiffers(with(QStringLiteral("--shuffle")), &cli::SlideshowSettings::shuffle));
+    QVERIFY(onlyDiffers(with(QStringLiteral("--shuffle-folders")), &cli::SlideshowSettings::shuffleFolders));
+    QVERIFY(onlyDiffers(with(QStringLiteral("--crossfade")), &cli::SlideshowSettings::fade));
+    QVERIFY(onlyDiffers(with(QStringLiteral("--start-random")), &cli::SlideshowSettings::randomStart));
+    QVERIFY(onlyDiffers(with(QStringLiteral("--loop-videos")), &cli::SlideshowSettings::loop));
+    // --interval changes only the interval, rounded to whole milliseconds.
+    const cli::SlideshowSettings fast = cli::slideshowSettings(
+        cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval"), QStringLiteral("0.5"), QStringLiteral("x")}));
+    QCOMPARE(fast.intervalMs, 500);
+    QVERIFY(!fast.shuffle && !fast.shuffleFolders && !fast.fade && !fast.randomStart && !fast.loop);
 }
 
 void TestCli::orderPlaylistShapes()
