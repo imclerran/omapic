@@ -55,6 +55,8 @@ Item {
     property var extraRowsFn: null
     // Whether tag (and alias) rows are offered at all.
     property bool suggestTags: true
+    // A floor for the dropdown's width (it otherwise matches the field's).
+    property int suggestionMinWidth: 0
     // The entry rule. The default is the tag-name rule shared by every name
     // editor; a host that accepts syntax (the query builder) passes its own.
     property var validatorRegex: /([^|"\s]+( [^|"\s]+)* ?)?/
@@ -210,6 +212,7 @@ Item {
             parent: field
             rows: field.suggestions
             highlighted: field.highlighted
+            minimumWidth: root.suggestionMinWidth
             categoryColorFn: root.categoryColorFn
             aliases: root.aliases
             implications: root.implications

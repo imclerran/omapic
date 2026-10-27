@@ -638,6 +638,7 @@ Item {
                     implications: root.implications
                     categoryColorFn: root.colorFor
                     sampleFn: root.tagSampleFn
+                    suggestionMinWidth: 320 // the entry field is only as wide as its text
                     placeholderText: root.tokens.length === 0 ? qsTr("Type a tag, is:, album:, cat:, ( or -") : ""
                     // Syntax is typed here, so only '"' is barred (it can't be quoted).
                     validatorRegex: /[^"]*/

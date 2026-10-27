@@ -16,12 +16,16 @@ import QtQuick.Layouts
 // `categoryName` on the right), "album" / "category" (a name of that kind),
 // "predicate" (a key such as is:fav, with `detail` explaining it), "syntax"
 // (`( )`, "NOT…"; `detail` explains) or "split" (a correction offer; `detail`
-// lists the parts). Non-tag rows show a glyph instead of a dot.
+// lists the parts). Album rows show a small album glyph in place of the dot;
+// predicate and syntax rows speak for themselves and get neither.
 Popup {
     id: pop
 
     property var rows: []
     property int highlighted: -1
+    // The dropdown is as wide as the field it belongs to, but never narrower
+    // than this (the query builder's entry field is only as wide as its text).
+    property int minimumWidth: 0
     property var categoryColorFn: null  // function(colorSlot) -> color
     // For the info popover beside a highlighted tag row (see TagInfoPopover).
     property var aliases: []
@@ -37,11 +41,29 @@ Popup {
 
     y: parent ? parent.height : 0
     x: 0
-    width: parent ? parent.width : 200
+    width: Math.max(minimumWidth, parent ? parent.width : 200)
     padding: 1
     closePolicy: Popup.CloseOnPressOutsideParent | Popup.CloseOnEscape
 
     SystemPalette { id: sys }
+    // Paint from the application palette, not the inherited one: a popup nested
+    // in a dialog resolves against the window's palette, which the gtk3 platform
+    // theme stamps light at creation (see main.cpp / Main.qml), so without this
+    // the dropdown came up white inside the query-builder dialog while the same
+    // popup in the detail panel followed the theme.
+    palette.window: sys.window
+    palette.windowText: sys.windowText
+    palette.base: sys.base
+    palette.alternateBase: sys.alternateBase
+    palette.text: sys.text
+    palette.button: sys.button
+    palette.buttonText: sys.buttonText
+    palette.highlight: sys.highlight
+    palette.highlightedText: sys.highlightedText
+    palette.placeholderText: sys.placeholderText
+    palette.mid: sys.mid
+    palette.dark: sys.dark
+    palette.light: sys.light
 
     // The dot beside a tag row: the category's color, or the neutral grey for an
     // uncategorized tag (so every row carries a dot, aligned).
@@ -52,9 +74,6 @@ Popup {
     function glyphFor(row) {
         switch (row.kind) {
         case "album": return row.smart ? "◈" : "▣"
-        case "category": return "●"
-        case "predicate": return "∷"
-        case "syntax": return "⌘"
         case "split": return "⇢"
         default: return ""
         }
@@ -91,8 +110,11 @@ Popup {
                     radius: 5
                     color: pop.swatchColor(sg.modelData.colorSlot)
                 }
+                // Keeps the names aligned with the dotted rows when there is no dot.
                 Label {
                     visible: !sg.isTag && sg.modelData.kind !== "category"
+                    Layout.preferredWidth: 10
+                    horizontalAlignment: Text.AlignHCenter
                     text: pop.glyphFor(sg.modelData)
                     font.pixelSize: 12
                     color: sg.highlighted ? sg.palette.highlightedText : sg.palette.placeholderText
