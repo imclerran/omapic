@@ -1578,6 +1578,11 @@ ApplicationWindow {
         // Search toggles folder/album views between navigation (tiles) and flat results.
         function onSearchTextChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
     }
+    Connections {
+        target: library
+        // An applied advanced query narrows the folder and album tiles too.
+        function onAdvancedQueryChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
+    }
 
     // Changing the tag filter re-anchors the gallery to the top of the results.
     Connections {
@@ -2126,6 +2131,11 @@ ApplicationWindow {
                     // narrow its tags to the current match set when this is on.
                     onMatchAllChanged: { library.setMatchAll(matchAll); win.scrollGalleryToTop() }
                     Component.onCompleted: library.setMatchAll(matchAll)
+                    // The builder opens on the applied query, else on the selection
+                    // as `a b` / `a | b`.
+                    onAdvancedRequested: smartAlbumDialog.openAdvanced(
+                        library.advancedQuery !== "" ? library.advancedQuery
+                                                     : library.formatTagQuery(library.tags.selectedTagIds, matchAll))
                     // Tab cycle: tag filter → gallery; Shift+Tab → add-a-tag.
                     onTabForward: win.tabStepTo(2, true)
                     onTabBackward: win.tabStepTo(0, false)
@@ -2158,11 +2168,58 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: palette.base
 
+            // The applied advanced query, as a strip above the views so the
+            // narrowing is visible and can be edited or lifted from where it acts.
+            Rectangle {
+                id: queryBanner
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                visible: library.advancedQuery !== "" && !win.triageActive
+                height: visible ? bannerRow.implicitHeight + 8 : 0
+                color: Qt.alpha(win.accent, 0.14)
+
+                RowLayout {
+                    id: bannerRow
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 6
+                    spacing: 8
+                    Label {
+                        text: qsTr("Query")
+                        font.pixelSize: 12
+                        color: palette.placeholderText
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: library.advancedQuery
+                        elide: Text.ElideRight
+                        font.pixelSize: 12
+                        font.family: "monospace"
+                    }
+                    ToolButton {
+                        text: qsTr("Edit…")
+                        font.pixelSize: 12
+                        focusPolicy: Qt.NoFocus
+                        onClicked: smartAlbumDialog.openAdvanced(library.advancedQuery)
+                    }
+                    ToolButton {
+                        text: "✕"
+                        focusPolicy: Qt.NoFocus
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 500
+                        ToolTip.text: qsTr("Clear the query")
+                        onClicked: { library.clearAdvancedQuery(); win.scrollGalleryToTop() }
+                    }
+                }
+            }
+
             // The central region, keyed on the triage flag: the gallery (its four
             // views stacked, exactly one shown) or the triage view. A hidden page
             // neither paints nor gets key events.
             StackLayout {
                 anchors.fill: parent
+                anchors.topMargin: queryBanner.height
                 currentIndex: win.triageActive ? 1 : 0
 
                 Item {
@@ -2601,105 +2658,135 @@ ApplicationWindow {
         }
     }
 
-    // Create / edit a smart album: a name plus an OQL query that auto-populates
-    // in the Albums view. The tag picker covers the common case (a set of tags,
-    // all or any); "Edit as text" exposes the whole language for anything else —
-    // negation, grouping, is:/album:/cat:. editId 0 = create, else the smart
-    // album's UI id (prefilled from the library).
+    // The query builder dialog, in two roles: "Advanced…" from the filter
+    // sidebar (explore a query, see the live count, save it as a smart album),
+    // and the smart-album editor (name + query). editId 0 = create, else the
+    // smart album's UI id (prefilled from the library).
     Dialog {
         id: smartAlbumDialog
         property int editId: 0
-        // True while the query is being edited as OQL text rather than picked.
-        property bool textMode: false
-        // library.parseQuery(queryField.text): {ok, canonical, …} or {ok: false, message, …}
-        property var parsed: ({ ok: false })
-        title: editId > 0 ? qsTr("Edit smart album") : qsTr("New smart album")
+        // "advanced": no name yet, a "Save as smart album…" button; "smart": the
+        // name field and OK/Cancel.
+        property string mode: "smart"
+        title: mode === "advanced" ? qsTr("Advanced query")
+             : editId > 0 ? qsTr("Edit smart album") : qsTr("New smart album")
         anchors.centerIn: parent
         modal: true
-        width: Math.min(540, win.width - 48)
-        height: Math.min(600, win.height - 48)
-        standardButtons: Dialog.Ok | Dialog.Cancel
+        width: Math.min(640, win.width - 48)
+        // Height follows the content: the chip row grows as chips wrap, and the
+        // footer sits right under it.
+        standardButtons: mode === "advanced" ? Dialog.Close : (Dialog.Ok | Dialog.Cancel)
 
-        readonly property bool formValid:
-            smartNameField.text.trim().length > 0
-            && (textMode ? parsed.ok === true : smartPicker.selectedIds.length > 0)
+        // In "smart" mode the query is built either the basic way — a set of tag
+        // chips with the all/any switch (the default for a new album, and for an
+        // existing one whose query is a plain tag set) — or in the query builder
+        // ("Advanced"). The sidebar's Advanced… always uses the builder.
+        property bool basic: true
+        // The query as OQL text, whichever editor is showing.
+        readonly property string queryText: (mode === "smart" && basic)
+            ? library.formatTagQuery(smartPicker.selectedIds, smartPicker.matchAll) : builder.text
+        readonly property bool queryValid: (mode === "smart" && basic)
+            ? smartPicker.selectedIds.length > 0 : builder.valid
+        // What would stop the save (a duplicate name, a query that would make the
+        // album refer to itself), checked live so OK stays disabled and the reason
+        // shows under the name instead of the dialog closing and a toast appearing.
+        readonly property string saveProblem:
+            (mode === "smart" && queryValid && smartNameField.text.trim().length > 0)
+                ? library.smartAlbumProblem(editId, smartNameField.text, queryText) : ""
+        readonly property bool formValid: queryValid && smartNameField.text.trim().length > 0
+                                          && saveProblem === ""
         function syncOk() {
             const b = standardButton(Dialog.Ok)
             if (b) b.enabled = formValid
         }
-        function reparse() { parsed = library.parseQuery(queryField.text) }
-        // Switch between the picker and the text editor. Going to text seeds it
-        // with the picked set; coming back is only possible when the text is a
-        // plain tag set the picker can show.
-        function setTextMode(on) {
-            if (on === textMode)
+        onFormValidChanged: syncOk()
+        // Basic ⇄ Advanced. Going to the builder seeds it with the picked set; coming
+        // back is offered only while the built query is a plain tag set.
+        // Allowed while the built query is empty or a plain tag set.
+        readonly property bool canGoBasic: mode === "smart" && !basic
+            && (builder.empty || (builder.valid && library.parseQuery(builder.text).simple === true))
+        function setBasic(on) {
+            if (on === basic)
                 return
             if (on) {
-                queryField.text = library.formatTagQuery(smartPicker.selectedIds, smartPicker.matchAll)
-                reparse()
-                textMode = true
-                queryField.forceActiveFocus()
-                return
-            }
-            reparse()
-            if (parsed.ok && parsed.simple) {
-                smartPicker.setSelection(parsed.tags, parsed.matchAll)
-                textMode = false
-            } else if (parsed.ok) {
-                win.toast(qsTr("This query uses more than the tag picker can show; keep editing it as text"))
+                if (builder.empty) {
+                    smartPicker.clear()
+                    basic = true
+                    return
+                }
+                const p = library.parseQuery(builder.text)
+                if (!p.ok || !p.simple)
+                    return
+                smartPicker.setSelection(p.tags, p.matchAll)
+                basic = true
             } else {
-                win.toast(qsTr("Fix the query first (or clear it) to go back to the tag picker"))
+                builder.setQueryText(library.formatTagQuery(smartPicker.selectedIds, smartPicker.matchAll))
+                basic = false
+                builder.focusInput()
             }
         }
-        onFormValidChanged: syncOk()
+        function openAdvanced(text) {
+            mode = "advanced"
+            basic = false
+            editId = 0
+            open()
+            builder.setQueryText(text)
+            smartNameField.text = ""
+            builder.focusInput()
+        }
+        // Apply the built query to the gallery (advanced mode) and close.
+        function applyQuery() {
+            if (!builder.valid)
+                return
+            const err = library.setAdvancedQuery(builder.text)
+            if (err.length > 0) {
+                win.toast(err)
+                return
+            }
+            win.scrollGalleryToTop()
+            close()
+        }
         onOpened: {
+            if (mode === "advanced")
+                return
             if (editId > 0) {
                 const sa = library.smartAlbum(editId)
                 smartNameField.text = sa.name
-                queryField.text = sa.text
+                builder.setQueryText(sa.text)
+                // A plain tag set opens in the basic editor; anything else needs the builder.
                 if (sa.simple) {
                     smartPicker.setSelection(sa.tags, sa.matchAll)
-                    textMode = false
+                    basic = true
                 } else {
                     smartPicker.clear()
-                    textMode = true
+                    basic = false
                 }
             } else {
                 smartNameField.text = ""
                 smartPicker.clear()
-                queryField.text = ""
-                textMode = false
+                builder.clear()
+                basic = true
             }
-            reparse()
             syncOk()
             smartNameField.forceActiveFocus()
         }
+        onClosed: { mode = "smart"; basic = true; builder.clear(); smartPicker.clear() }
         onAccepted: {
+            if (mode !== "smart")
+                return
             const name = smartNameField.text.trim()
-            if (name.length === 0)
+            if (name.length === 0 || !queryValid)
                 return
             // Library emits albumsChanged on success, which refreshes the tiles.
-            if (textMode) {
-                const err = library.saveSmartAlbumQuery(editId, name, queryField.text)
-                if (err.length > 0)
-                    win.toast(err)
-                return
-            }
-            if (smartPicker.selectedIds.length === 0)
-                return
-            if (editId > 0) {
-                if (!library.updateSmartAlbum(editId, name, smartPicker.selectedIds, smartPicker.matchAll))
-                    win.toast(qsTr("Another smart album already uses that name"))
-            } else {
-                if (library.createSmartAlbum(name, smartPicker.selectedIds, smartPicker.matchAll) < 0)
-                    win.toast(qsTr("A smart album already uses that name"))
-            }
+            const err = library.saveSmartAlbumQuery(editId, name, queryText)
+            if (err.length > 0)
+                win.toast(err)
         }
 
-        ColumnLayout {
-            anchors.fill: parent
+        contentItem: ColumnLayout {
             spacing: 8
             RowLayout {
+                visible: smartAlbumDialog.mode === "smart"
                 Layout.fillWidth: true
                 spacing: 8
                 TextField {
@@ -2708,74 +2795,96 @@ ApplicationWindow {
                     placeholderText: qsTr("Smart album name")
                     // Same name rules as tags and albums (see TagAutoField).
                     validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
+                    onAccepted: if (smartAlbumDialog.formValid) smartAlbumDialog.accept()
                     ClearButton { field: smartNameField }
                 }
                 Button {
-                    text: smartAlbumDialog.textMode ? qsTr("Use tag picker") : qsTr("Edit as text")
-                    onClicked: smartAlbumDialog.setTextMode(!smartAlbumDialog.textMode)
+                    text: smartAlbumDialog.basic ? qsTr("Advanced") : qsTr("Basic")
+                    enabled: smartAlbumDialog.basic || smartAlbumDialog.canGoBasic
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 500
+                    ToolTip.text: smartAlbumDialog.basic
+                                  ? qsTr("Build the query with NOT, OR, groups and predicates")
+                                  : (enabled ? qsTr("Back to picking tags")
+                                             : qsTr("The basic editor can only show a plain set of tags"))
+                    onClicked: smartAlbumDialog.setBasic(!smartAlbumDialog.basic)
                 }
             }
+            Label {
+                visible: smartAlbumDialog.saveProblem !== ""
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: "#e06c75"
+                text: smartAlbumDialog.saveProblem
+            }
+            // Basic: the tag chips with the all/any switch.
             TagPicker {
                 id: smartPicker
-                visible: !smartAlbumDialog.textMode
+                visible: smartAlbumDialog.mode === "smart" && smartAlbumDialog.basic
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.preferredHeight: 340
                 tagModel: library.tags
                 aliases: library.tagAliases // match a tag by its aliases in the search
                 accent: win.accent
             }
-            // The text editor: the query in OQL, with the parser's verdict below
-            // it — the canonical reading when it parses, else the error, its
-            // position, and any "did you mean" suggestions.
-            ColumnLayout {
-                visible: smartAlbumDialog.textMode
+            QueryBuilder {
+                id: builder
+                visible: smartAlbumDialog.mode === "advanced" || !smartAlbumDialog.basic
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 6
-                TextField {
-                    id: queryField
-                    Layout.fillWidth: true
-                    placeholderText: qsTr("e.g. beach (sunset | sunrise) -people")
-                    font.family: "monospace"
-                    onTextEdited: smartAlbumDialog.reparse()
-                    onAccepted: if (smartAlbumDialog.formValid) smartAlbumDialog.accept()
-                    ClearButton { field: queryField }
+                library: library
+                accent: win.accent
+                tagSampleFn: win.tagSampleFn
+                // tagSuggestions() is a call, not a property, so refresh it on the
+                // library's tag signal rather than binding to it once.
+                tags: library.tagSuggestions()
+                Connections {
+                    target: library
+                    function onTagsChanged() { builder.tags = library.tagSuggestions() }
                 }
-                Label {
-                    Layout.fillWidth: true
-                    visible: queryField.text.trim().length > 0
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 12
-                    readonly property var p: smartAlbumDialog.parsed
-                    readonly property bool failed: p.ok !== true
-                    color: failed ? "#e06c75" : appPalette.text
-                    // Monospace so the caret line lines up under the query.
-                    font.family: failed && p.length > 0 ? "monospace" : Qt.application.font.family
-                    text: {
-                        const p = smartAlbumDialog.parsed
-                        if (p.ok === true)
-                            return qsTr("Reads as: %1").arg(p.canonical)
-                        let msg = p.message || ""
-                        if (p.length > 0) {
-                            // A caret line under the span, as the CLI prints it.
-                            const q = queryField.text
-                            msg += "\n" + q + "\n" + " ".repeat(p.start) + "^".repeat(Math.max(1, p.length))
-                        }
-                        if (p.suggestions && p.suggestions.length > 0)
-                            msg += "\n" + qsTr("Did you mean: %1").arg(p.suggestions.join(", "))
-                        return msg
+                aliases: library.tagAliases
+                implications: library.tagImplications
+                // Enter on an empty field: save (smart mode) or apply (advanced).
+                onSubmitted: {
+                    if (smartAlbumDialog.mode === "smart" && smartAlbumDialog.formValid)
+                        smartAlbumDialog.accept()
+                    else if (smartAlbumDialog.mode === "advanced")
+                        smartAlbumDialog.applyQuery()
+                }
+            }
+            Label {
+                visible: builder.visible
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: appPalette.placeholderText
+                text: qsTr("Tab or Enter commits a chip (Space doesn't — names can contain spaces). "
+                         + "Type ( for a group, - for NOT, | for OR, is: / album: / cat: for predicates. "
+                         + "NOT binds tightest, then OR, then AND.")
+            }
+            RowLayout {
+                visible: smartAlbumDialog.mode === "advanced"
+                Layout.fillWidth: true
+                Button {
+                    text: qsTr("Save as smart album…")
+                    enabled: builder.valid
+                    onClicked: {
+                        smartAlbumDialog.mode = "smart"
+                        smartAlbumDialog.basic = false // keep the built query in the builder
+                        smartAlbumDialog.syncOk()
+                        smartNameField.forceActiveFocus()
                     }
                 }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 12
-                    color: appPalette.placeholderText
-                    text: qsTr("Space is AND, | is OR, a leading - is NOT, ( ) groups, \"…\" quotes a name. "
-                             + "Predicates: is:fav, is:untagged, album:<name>, cat:<name>. "
-                             + "NOT binds tightest, then OR, then AND.")
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: qsTr("Apply")
+                    enabled: builder.valid
+                    highlighted: true
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 500
+                    ToolTip.text: qsTr("Show only the photos matching this query (Enter)")
+                    onClicked: smartAlbumDialog.applyQuery()
                 }
-                Item { Layout.fillHeight: true }
             }
         }
     }
@@ -3105,15 +3214,18 @@ ApplicationWindow {
         closePolicy: Popup.NoAutoClose
         padding: 12
 
+        // Painted from the application palette: a popup in the overlay inherits
+        // the window's stale (gtk3-stamped) palette, which left the text unreadable
+        // on some themes.
         background: Rectangle {
-            color: palette.window
+            color: appPalette.window
             radius: 8
-            border.color: palette.mid
+            border.color: appPalette.mid
         }
 
         Label {
             id: toastLabel
-            color: palette.windowText
+            color: appPalette.windowText
             font.pixelSize: 13
         }
 

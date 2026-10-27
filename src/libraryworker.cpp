@@ -40,9 +40,9 @@ void LibraryWorker::initialize()
 }
 
 void LibraryWorker::loadFacetTags(const QString &folderScope, const QList<int> &selected,
-                                  bool matchAll)
+                                  bool matchAll, const QList<int> &scopeIds, bool scoped)
 {
-    emit facetTagsReady(m_db.facetTags(folderScope, selected, matchAll));
+    emit facetTagsReady(m_db.facetTags(folderScope, selected, matchAll, scopeIds, scoped));
 }
 
 void LibraryWorker::runMigration()

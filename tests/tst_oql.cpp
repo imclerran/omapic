@@ -50,6 +50,7 @@ private slots:
     void evaluateLeaves();
     void evaluateOperators();
 
+    void tokenizeFlatReading();
     void tagSetConversions();
     void jsonRoundTrip();
     void referencedIdsAndRewrites();
@@ -616,6 +617,70 @@ void TestOql::evaluateOperators()
     // Degenerate operators: an empty AND/OR never matches.
     QVERIFY(!matches(Node::andOf({}), {Beach}, ctx));
     QVERIFY(!matches(Node::orOf({}), {Beach}, ctx));
+}
+
+void TestOql::tokenizeFlatReading()
+{
+    auto kinds = [](const QVector<Token> &ts) {
+        QString s;
+        for (const Token &t : ts) {
+            if (t.negated) s += '-';
+            switch (t.kind) {
+            case Token::Tag: s += 'T'; break;
+            case Token::Predicate: s += 'P'; break;
+            case Token::Open: s += '('; break;
+            case Token::Close: s += ')'; break;
+            case Token::Or: s += '|'; break;
+            case Token::Unknown: s += '?'; break;
+            }
+        }
+        return s;
+    };
+    // Terms, groups and bars in order; `-` folds into what follows it.
+    QVector<Token> ts = tokenize(QStringLiteral("beach -(sunset | sunrise) -is:fav album:Trip cat:Place"), m_vocab);
+    QCOMPARE(kinds(ts), QStringLiteral("T-(T|T)-PPP"));
+    QCOMPARE(ts.at(0).id, int(Beach));
+    QCOMPARE(ts.at(0).name, QStringLiteral("beach"));
+    QCOMPARE(ts.at(1).span.start, 6);
+    QCOMPARE(ts.at(1).span.length, 2); // "-(" is one negated open token
+    QCOMPARE(ts.at(6).name, QStringLiteral("is"));
+    QCOMPARE(ts.at(6).value, QStringLiteral("fav"));
+    QVERIFY(ts.at(6).negated);
+    QCOMPARE(ts.at(7).nameKind, NameKind::Album);
+    QCOMPARE(ts.at(7).id, kAlbumTrip);
+    QCOMPARE(ts.at(7).value, QStringLiteral("Trip"));
+    QCOMPARE(ts.at(8).nameKind, NameKind::Category);
+    QCOMPARE(ts.at(8).value, QStringLiteral("Place"));
+    // Longest match, quotes, aliases and multi-word album names, as the parser.
+    ts = tokenize(QStringLiteral("dinner (2019) \"(untitled)\" forests album:best of 2019 x"), m_vocab);
+    QCOMPARE(kinds(ts), QStringLiteral("TTTPT"));
+    QCOMPARE(ts.at(0).id, int(Dinner2019));
+    QCOMPARE(ts.at(1).id, int(Untitled));
+    QCOMPARE(ts.at(2).name, QStringLiteral("forest"));
+    QCOMPARE(ts.at(3).nameKind, NameKind::SmartAlbum);
+    QCOMPARE(ts.at(3).span.length, 18); // "album:best of 2019"
+    QCOMPARE(ts.at(4).id, int(X));
+    ts = tokenize(QStringLiteral("dark forest"), m_vocabDF);
+    QCOMPARE(kinds(ts), QStringLiteral("T"));
+    ts = tokenize(QStringLiteral("dark forest"), m_vocab);
+    QCOMPARE(kinds(ts), QStringLiteral("TT"));
+    // Unknown names are kept, with their raw text, rather than stopping the read.
+    ts = tokenize(QStringLiteral("beach zzz -yyy \"qqq\" is:it album:Nope cat:\"Nope\""), m_vocab);
+    QCOMPARE(kinds(ts), QStringLiteral("T?-?????"));
+    QCOMPARE(ts.at(1).name, QStringLiteral("zzz"));
+    QCOMPARE(ts.at(2).name, QStringLiteral("yyy"));
+    QVERIFY(ts.at(2).negated);
+    QCOMPARE(ts.at(2).span.start, 10);
+    QCOMPARE(ts.at(3).name, QStringLiteral("\"qqq\""));
+    QCOMPARE(ts.at(4).name, QStringLiteral("is:it"));
+    QCOMPARE(ts.at(5).name, QStringLiteral("album:Nope"));
+    QCOMPARE(ts.at(6).name, QStringLiteral("cat:\"Nope\""));
+    // A `-` with nothing to negate is a stray unknown token; so is an unclosed quote.
+    ts = tokenize(QStringLiteral("beach - | -) --sunset \"open"), m_vocab);
+    QCOMPARE(kinds(ts), QStringLiteral("T?|?)?-T?"));
+    QCOMPARE(ts.at(1).name, QStringLiteral("-"));
+    QCOMPARE(ts.last().name, QStringLiteral("\"open"));
+    QVERIFY(tokenize(QStringLiteral("   "), m_vocab).isEmpty());
 }
 
 void TestOql::tagSetConversions()

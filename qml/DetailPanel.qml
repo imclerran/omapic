@@ -479,93 +479,20 @@ Rectangle {
                 Keys.onTabPressed: (event) => { suggestionPopup.close(); root.tabForward(); event.accepted = true }
                 Keys.onBacktabPressed: (event) => { suggestionPopup.close(); root.tabBackward(); event.accepted = true }
 
-                Popup {
+                // The shared suggestion dropdown (TagSuggestionPopup), with the
+                // tag-info popover to the right of it — the detail panel is docked
+                // left, so the gallery, and the room, is on that side.
+                TagSuggestionPopup {
                     id: suggestionPopup
-                    y: tagInput.height
-                    x: 0
-                    width: tagInput.width
-                    padding: 1
-                    closePolicy: Popup.CloseOnPressOutsideParent | Popup.CloseOnEscape
-
-                    contentItem: ListView {
-                        id: suggestionList
-                        implicitHeight: Math.min(tagInput.suggestions.length, 8) * 32
-                        model: tagInput.suggestions
-                        clip: true
-                        currentIndex: tagInput.highlighted
-
-                        delegate: ItemDelegate {
-                            id: suggestion
-                            required property int index
-                            required property var modelData
-                            // Whether this row's name is cut off, so the info panel
-                            // knows to surface the full name.
-                            readonly property bool nameTruncated: nameLabel.truncated
-                            width: ListView.view.width
-                            height: 32
-                            highlighted: index === tagInput.highlighted
-                            hoverEnabled: true
-                            // Hovering a row highlights it too, so the mouse drives
-                            // the selection and its info panel, not just the keyboard.
-                            onHoveredChanged: if (hovered) tagInput.highlighted = index
-                            onClicked: tagInput.commit(modelData.name)
-
-                            contentItem: RowLayout {
-                                spacing: 8
-                                // Category swatch — the category's color, or the
-                                // neutral grey for an uncategorized tag.
-                                Rectangle {
-                                    width: 10
-                                    height: 10
-                                    radius: 5
-                                    color: suggestion.modelData.colorSlot >= 0
-                                           ? root.categoryColor(suggestion.modelData.colorSlot)
-                                           : sys.mid
-                                }
-                                Label {
-                                    id: nameLabel
-                                    Layout.fillWidth: true
-                                    text: suggestion.modelData.name
-                                    elide: Text.ElideRight
-                                    // Custom contentItem loses the delegate's
-                                    // automatic highlight recoloring, so track it
-                                    // explicitly — otherwise the name is unreadable
-                                    // on the highlight background in many themes.
-                                    color: suggestion.highlighted ? suggestion.palette.highlightedText
-                                                                   : suggestion.palette.text
-                                }
-                                Label {
-                                    visible: suggestion.modelData.categoryName !== ""
-                                    text: suggestion.modelData.categoryName
-                                    font.pixelSize: 11
-                                    color: suggestion.highlighted ? suggestion.palette.highlightedText
-                                                                  : suggestion.palette.placeholderText
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Detail for the highlighted suggestion — the full name, aliases,
-                // and the tags it will also apply — shown to the LEFT of the
-                // dropdown (the detail panel hugs the window's right edge). Appears
-                // only when there's something the row can't show.
-                TagInfoPopover {
-                    id: tagInfoPopover
                     parent: tagInput
-                    preferredY: suggestionPopup.y
-                    // To the right of the dropdown (the detail panel is docked left,
-                    // so the gallery — and the room — is on that side).
-                    x: suggestionPopup.width + 6
+                    rows: tagInput.suggestions
+                    highlighted: tagInput.highlighted
                     categoryColorFn: root.categoryColor
                     aliases: root.aliasList
                     implications: root.implicationList
                     sampleFn: root.tagSampleFn
-                    active: suggestionPopup.visible && tagInput.highlighted >= 0
-                            && tagInput.highlighted < tagInput.suggestions.length
-                    tagName: active ? tagInput.suggestions[tagInput.highlighted].name : ""
-                    nameTruncated: suggestionList.currentItem
-                                   ? suggestionList.currentItem.nameTruncated : false
+                    onHovered: (index) => tagInput.highlighted = index
+                    onPicked: (row) => tagInput.commit(row.name)
                 }
             }
             Button {

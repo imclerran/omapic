@@ -35,10 +35,12 @@ qt_add_qml_module(omapic
         qml/Main.qml
         qml/PhotoDelegate.qml
         qml/TagSidebar.qml
-        qml/TagPicker.qml
         qml/DetailPanel.qml
         qml/WheelScroller.qml
         qml/TagAutoField.qml
+        qml/TagPicker.qml
+        qml/TagSuggestionPopup.qml
+        qml/QueryBuilder.qml
         qml/TagInfoPopover.qml
         qml/SlideshowView.qml
         qml/PhotoViewer.qml
@@ -56,6 +58,7 @@ qt_add_qml_module(omapic
         src/photomodel.h src/photomodel.cpp
         src/photofiltermodel.h src/photofiltermodel.cpp
         src/textmatch.h
+        src/clipboard.h
         src/photometadata.h src/photometadata.cpp
         src/tagmodel.h src/tagmodel.cpp
         src/library.h src/library.cpp

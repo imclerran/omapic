@@ -77,6 +77,10 @@ class Library : public QObject {
     // How many removed files still have tags remembered (for the settings stats).
     Q_PROPERTY(int rememberedRemovedCount READ rememberedRemovedCount
                    NOTIFY rememberedRemovedCountChanged)
+    // The free OQL query currently applied to the gallery (the builder's Apply),
+    // in canonical text; empty when none. It narrows every view on top of the
+    // sidebar selection and the search, and the album tiles honour it too.
+    Q_PROPERTY(QString advancedQuery READ advancedQuery NOTIFY advancedQueryChanged)
 
 public:
     enum RenameResult {
@@ -121,6 +125,11 @@ public:
     int tagRetentionDays() const { return m_tagRetentionDays; }
     void setTagRetentionDays(int days);
     int rememberedRemovedCount() const { return m_db.rememberedRemovedCount(); }
+    QString advancedQuery() const { return m_advancedText; }
+    // Apply query text to the gallery; returns an empty string, or the parse
+    // error. clearAdvancedQuery lifts it.
+    Q_INVOKABLE QString setAdvancedQuery(const QString &text);
+    Q_INVOKABLE void clearAdvancedQuery();
 
     Q_INVOKABLE void importDirectory(const QUrl &dir);
     Q_INVOKABLE void removeFolder(int folderId);
@@ -292,6 +301,21 @@ public:
     // string on success, else a message to show (a parse error, a duplicate name,
     // or a query that would make the album refer to itself).
     Q_INVOKABLE QString saveSmartAlbumQuery(int albumId, const QString &name, const QString &text);
+    // What would stop that save, checked live so the dialog can disable OK and
+    // say why before anything is attempted: an empty string when it would go
+    // through, else the same message saveSmartAlbumQuery would return.
+    Q_INVOKABLE QString smartAlbumProblem(int albumId, const QString &name, const QString &text) const;
+    // The flat chip reading of query text (oql::tokenize), for the query builder:
+    // a list of {type: tag|pred|open|close|or|bad, negated, name, id, kind
+    // (album|smart|category for pred), value, colorSlot, categoryName, start,
+    // length}. Unknown names come back as `bad` tokens with their raw text.
+    Q_INVOKABLE QVariantList tokenizeQuery(const QString &text) const;
+    // How many photos of the flat view (active, one per content) match the query
+    // text; -1 when it doesn't parse. The builder's live count.
+    Q_INVOKABLE int queryMatchCount(const QString &text) const;
+    // The names the builder offers after album: and cat: — every album and smart
+    // album as {name, smart}, every user category as {name, colorSlot}.
+    Q_INVOKABLE QVariantMap queryVocabulary() const;
 
     // --- Context-menu actions (operate on one or many selected photos) ---
     // Drop the photos from the library only; the files on disk are left untouched.
@@ -342,6 +366,7 @@ signals:
     void autoWriteSidecarsChanged();
     void tagRetentionDaysChanged();
     void rememberedRemovedCountChanged();
+    void advancedQueryChanged();
     // A sidecar export finished: counts of files written and failures, for a toast.
     void sidecarsExported(int written, int failed);
 
@@ -354,7 +379,8 @@ signals:
     void requestAddTagToPhotos(const QList<int> &photoIds, const QString &name);
     void requestRemoveTagFromPhotos(const QList<int> &photoIds, int tagId);
     void requestSidecarFlush();
-    void requestFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
+    void requestFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll,
+                          const QList<int> &scopeIds, bool scoped);
     void requestResample();
 
 private:
@@ -440,6 +466,12 @@ private:
 
     oql::EvalContext m_evalContext;
     QHash<int, oql::Node> m_smartTrees; // smart album id -> expanded query (see rebuildQueryState)
+    oql::Node m_advancedRoot;           // the applied free query, unexpanded (re-expanded with the trees)
+    oql::Node m_advancedTree;           // its expansion against the current smart-album trees
+    QString m_advancedText;             // its canonical text; empty = none applied
+    // The photos the applied query matches (every active photo, copies included,
+    // as the sidebar counts them), for scoping the facet tags; empty when none.
+    QList<int> advancedScopeIds() const;
 
     QThread m_workerThread;
     LibraryWorker *m_worker = nullptr;

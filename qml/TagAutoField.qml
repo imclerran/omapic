@@ -13,12 +13,17 @@ import Omapic // TextMatch singleton (accent-/case-insensitive folding)
 // Type to filter `tags` by substring; `text` holds the current value, which the
 // caller resolves to a tag by name. `accepted()` fires on Enter when no
 // suggestion is highlighted (i.e. the user committed the typed text).
+//
+// Hosts with more to offer than tags (the query builder) can narrow what part
+// of the text is matched (filterFn), add rows of their own (extraRowsFn),
+// switch tag rows off (suggestTags), relax the validator, and hear about every
+// picked row (rowPicked). The defaults keep the plain tag-entry behaviour.
 Item {
     id: root
 
     property var tags: []                 // candidates: [{ name, colorSlot, categoryName }]
     // Tag aliases: [{ aliasName, tagName, colorSlot }]. Typing an alias surfaces
-    // its canonical tag as a match (shown as the tag itself) and fills it on
+    // its canonical tag as a match (shown as "alias → tag") and fills it on
     // selection, so an alias resolves here too. Empty disables alias matching.
     property var aliases: []
     // Tag implications: [{ antecedentName, consequentName, consequentColorSlot,
@@ -39,7 +44,30 @@ Item {
     property string placeholderText: ""
     property var categoryColorFn: null    // function(colorSlot) -> color, optional
     property alias text: field.text
+    property alias cursorPosition: field.cursorPosition
+    property alias textField: field
+    // function(text) -> the part of the text to match tags against; null matches
+    // the whole (trimmed) text. The builder uses it to match only what follows
+    // "album:" / "cat:".
+    property var filterFn: null
+    // function(text, query) -> rows to show before the tag rows ({kind, name, …}
+    // as TagSuggestionPopup describes); null adds none.
+    property var extraRowsFn: null
+    // Whether tag (and alias) rows are offered at all.
+    property bool suggestTags: true
+    // A floor for the dropdown's width (it otherwise matches the field's).
+    property int suggestionMinWidth: 0
+    // The field's own ✕ (clears the typed text). A host with a wider notion of
+    // "clear" — the query builder clears the whole query — turns it off.
+    property bool showClearButton: true
+    // The entry rule. The default is the tag-name rule shared by every name
+    // editor; a host that accepts syntax (the query builder) passes its own.
+    property var validatorRegex: /([^|"\s]+( [^|"\s]+)* ?)?/
     signal accepted()
+    // A suggestion row was picked (by Enter or a click), of any kind. A "tag" row
+    // also fills the text (and, with commitOnPick, fires accepted()); the host
+    // handles every other kind itself.
+    signal rowPicked(var row)
     // Every key press reaching the field that no dedicated handler (Up/Down,
     // Return, Escape) consumed, before the text input itself sees it. A host that
     // treats a chord such as Ctrl+→ as a command sets event.accepted = true to keep
@@ -52,70 +80,81 @@ Item {
     implicitWidth: 180
     implicitHeight: field.implicitHeight
 
-    SystemPalette { id: sys }
+    readonly property bool popupOpen: pop.visible
+    readonly property var highlightedRow: pop.currentRow
 
-    // The dot shown beside a suggestion: the category's color, or the neutral grey
-    // for an uncategorized tag (so every row carries a dot, aligned).
-    function swatchColor(slot) {
-        return (root.categoryColorFn && slot !== undefined && slot >= 0)
-               ? root.categoryColorFn(slot) : sys.mid
-    }
     function clear() { field.text = ""; field.suggestions = []; pop.close() }
     function focusInput() { field.forceActiveFocus() }
+    function refreshSuggestions() { field.refresh() }
+    function closeSuggestions() { pop.close() }
 
     TextField {
         id: field
         anchors.fill: parent
         placeholderText: root.placeholderText
-        // The name rules, enforced on entry (the backend sanitizes as a safety
-        // net): no '|' (the XMP sidecar hierarchy separator), no '"' (the query
-        // language's quote, which has no escape), and no leading or doubled
-        // whitespace (names are trimmed and single-spaced).
-        validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
+        // Name rules (the backend sanitizes as a safety net): no '|' (the XMP
+        // sidecar hierarchy separator), no '"' (the query language's quote, which
+        // has no escape), no leading or doubled whitespace.
+        validator: RegularExpressionValidator { regularExpression: root.validatorRegex }
 
         property var suggestions: []
         property int highlighted: -1
 
         function refresh() {
-            const q = TextMatch.fold(text.trim())
+            const raw = root.filterFn ? root.filterFn(text) : text
+            const q = TextMatch.fold((raw || "").trim())
             highlighted = -1
-            if (q === "") { suggestions = []; pop.close(); return }
             const out = []
             const seen = ({}) // folded canonical name -> index in `out`, deduped
             let exact = -1    // index of an exact (name or alias) match, to pre-highlight
 
-            const excluded = root.excludeNames || []
-            // Tags whose name contains the query (folded, so "cafe" finds "café").
-            for (let i = 0; i < root.tags.length; ++i) {
-                if (excluded.indexOf(root.tags[i].name.toLowerCase()) !== -1)
-                    continue
-                const ln = TextMatch.fold(root.tags[i].name)
-                if (ln.indexOf(q) === -1)
-                    continue
-                if (!(ln in seen) && out.length < 8) {
-                    seen[ln] = out.length
-                    out.push(root.tags[i])
+            if (root.extraRowsFn) {
+                const extra = root.extraRowsFn(text, q) || []
+                for (let e = 0; e < extra.length; ++e) {
+                    out.push(extra[e])
+                    if (extra[e].exact && exact < 0)
+                        exact = out.length - 1
                 }
-                if (ln === q && (ln in seen))
-                    exact = seen[ln]
             }
-            // A typed alias resolves to its canonical tag. Show the canonical tag
-            // itself (same name/color/category) — never a second row for a tag
-            // already listed, and pre-highlight it when the alias is an exact match.
-            for (let i = 0; i < root.aliases.length; ++i) {
-                const a = root.aliases[i]
-                if (excluded.indexOf((a.tagName || "").toLowerCase()) !== -1)
-                    continue // canonical already excluded
-                const af = TextMatch.fold(a.aliasName)
-                if (af.indexOf(q) === -1)
-                    continue
-                const cn = TextMatch.fold(a.tagName)
-                if (!(cn in seen) && out.length < 8) {
-                    seen[cn] = out.length
-                    out.push({ name: a.tagName, colorSlot: a.colorSlot, categoryName: a.categoryName })
+            if (q === "" && out.length === 0) { suggestions = []; pop.close(); return }
+
+            const excluded = root.excludeNames || []
+            if (root.suggestTags && q !== "") {
+                const limit = out.length + 8
+                // Tags whose name contains the query (folded, so "cafe" finds "café").
+                for (let i = 0; i < root.tags.length; ++i) {
+                    if (excluded.indexOf(root.tags[i].name.toLowerCase()) !== -1)
+                        continue
+                    const ln = TextMatch.fold(root.tags[i].name)
+                    if (ln.indexOf(q) === -1)
+                        continue
+                    if (!(ln in seen) && out.length < limit) {
+                        seen[ln] = out.length
+                        out.push({ kind: "tag", name: root.tags[i].name, colorSlot: root.tags[i].colorSlot,
+                                   categoryName: root.tags[i].categoryName })
+                    }
+                    if (ln === q && (ln in seen))
+                        exact = seen[ln]
                 }
-                if (af === q && (cn in seen))
-                    exact = seen[cn]
+                // A typed alias resolves to its canonical tag. Show the canonical tag
+                // (as "alias → tag", same color/category) — never a second row for a
+                // tag already listed — and pre-highlight it on an exact alias.
+                for (let i = 0; i < root.aliases.length; ++i) {
+                    const a = root.aliases[i]
+                    if (excluded.indexOf((a.tagName || "").toLowerCase()) !== -1)
+                        continue // canonical already excluded
+                    const af = TextMatch.fold(a.aliasName)
+                    if (af.indexOf(q) === -1)
+                        continue
+                    const cn = TextMatch.fold(a.tagName)
+                    if (!(cn in seen) && out.length < limit) {
+                        seen[cn] = out.length
+                        out.push({ kind: "tag", name: a.tagName, via: a.aliasName, colorSlot: a.colorSlot,
+                                   categoryName: a.categoryName })
+                    }
+                    if (af === q && (cn in seen))
+                        exact = seen[cn]
+                }
             }
 
             // Surface the exact match at the top, pre-highlighted — as though the
@@ -127,14 +166,19 @@ Item {
             suggestions = out
             if (out.length > 0) pop.open(); else pop.close()
         }
-        function pick(name) {
-            text = name; suggestions = []; pop.close()
+        function pick(row) {
+            if ((row.kind || "tag") !== "tag") {
+                root.rowPicked(row)
+                return
+            }
+            text = row.name; suggestions = []; pop.close()
+            root.rowPicked(row) // a host may replace the text here (the builder clears it)
             if (root.commitOnPick)
                 root.accepted()
         }
         function commit(event) {
             if (pop.visible && highlighted >= 0 && highlighted < suggestions.length) {
-                pick(suggestions[highlighted].name)
+                pick(suggestions[highlighted])
                 event.accepted = true
             } else {
                 pop.close()
@@ -145,7 +189,7 @@ Item {
         onTextEdited: refresh()
         onActiveFocusChanged: if (!activeFocus) pop.close()
 
-        ClearButton { field: field }
+        ClearButton { field: field; visible: active && root.showClearButton }
 
         Keys.onDownPressed: if (suggestions.length > 0)
                                 highlighted = Math.min(highlighted + 1, suggestions.length - 1)
@@ -166,77 +210,18 @@ Item {
         // otherwise eat — Ctrl+←/→ (word movement), Ctrl+Z (undo), Ctrl+Delete.
         Keys.onPressed: (event) => root.commandKeyPressed(event)
 
-        Popup {
+        TagSuggestionPopup {
             id: pop
-            y: field.height
-            x: 0
-            width: field.width
-            padding: 1
-            closePolicy: Popup.CloseOnPressOutsideParent | Popup.CloseOnEscape
-
-            contentItem: ListView {
-                id: sugList
-                implicitHeight: Math.min(field.suggestions.length, 8) * 32
-                model: field.suggestions
-                clip: true
-                currentIndex: field.highlighted
-
-                delegate: ItemDelegate {
-                    id: sg
-                    required property int index
-                    required property var modelData
-                    readonly property bool nameTruncated: sgName.truncated
-                    width: ListView.view.width
-                    height: 32
-                    highlighted: index === field.highlighted
-                    hoverEnabled: true
-                    // A click picks the row; it must not pull focus off the field.
-                    focusPolicy: Qt.NoFocus
-                    onHoveredChanged: if (hovered) field.highlighted = index
-                    onClicked: field.pick(sg.modelData.name)
-
-                    contentItem: RowLayout {
-                        spacing: 8
-                        Rectangle {
-                            width: 10
-                            height: 10
-                            radius: 5
-                            color: root.swatchColor(sg.modelData.colorSlot)
-                        }
-                        Label {
-                            id: sgName
-                            Layout.fillWidth: true
-                            text: sg.modelData.name
-                            elide: Text.ElideRight
-                            // Track the highlight so the name stays readable (see
-                            // the suggestion-contrast fix on the detail panel).
-                            color: sg.highlighted ? sg.palette.highlightedText : sg.palette.text
-                        }
-                        Label {
-                            visible: (sg.modelData.categoryName || "") !== ""
-                            text: sg.modelData.categoryName || ""
-                            font.pixelSize: 11
-                            color: sg.highlighted ? sg.palette.highlightedText : sg.palette.placeholderText
-                        }
-                    }
-                }
-            }
-        }
-
-        // Detail for the highlighted suggestion (full name, aliases, implications),
-        // to the right of the dropdown — helps tell similar tag names apart.
-        TagInfoPopover {
             parent: field
-            preferredY: pop.y
-            x: pop.width + 6
+            rows: field.suggestions
+            highlighted: field.highlighted
+            minimumWidth: root.suggestionMinWidth
+            categoryColorFn: root.categoryColorFn
             aliases: root.aliases
             implications: root.implications
-            categoryColorFn: root.categoryColorFn
             sampleFn: root.sampleFn
-            active: pop.visible && field.highlighted >= 0
-                    && field.highlighted < field.suggestions.length
-            tagName: active ? field.suggestions[field.highlighted].name : ""
-            nameTruncated: sugList.currentItem ? sugList.currentItem.nameTruncated : false
+            onHovered: (index) => field.highlighted = index
+            onPicked: (row) => field.pick(row)
         }
     }
 }

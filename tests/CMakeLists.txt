@@ -6,7 +6,7 @@
 # a second static library so the tests can link them directly, without the QML
 # engine or any GUI. Run them with `ctest` from the build directory.
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Test Core Sql Qml Gui)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Test Core Sql Qml Gui Quick QuickControls2)
 find_package(exiv2 REQUIRED) # the sidecar reader parses XMP via exiv2
 
 # The pure-logic sources under test. Kept in sync by hand with CMakeLists.txt's
@@ -42,6 +42,15 @@ endfunction()
 omapic_add_test(tst_textfold)
 omapic_add_test(tst_oql)
 omapic_add_test(tst_cli)
+
+# The query builder test loads qml/QueryBuilder.qml from the source tree into a
+# QQmlEngine and types into it, so it needs Qt Quick (and a window, offscreen).
+qt_add_executable(tst_querybuilder tst_querybuilder.cpp ${CMAKE_SOURCE_DIR}/src/clipboard.h)
+set_target_properties(tst_querybuilder PROPERTIES AUTOMOC ON)
+target_compile_definitions(tst_querybuilder PRIVATE OMAPIC_QML_DIR="${CMAKE_SOURCE_DIR}/qml")
+target_link_libraries(tst_querybuilder PRIVATE omapic_logic Qt6::Test Qt6::Quick Qt6::QuickControls2)
+add_test(NAME tst_querybuilder COMMAND tst_querybuilder)
+set_tests_properties(tst_querybuilder PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 omapic_add_test(tst_mediascan)
 omapic_add_test(tst_database)
 omapic_add_test(tst_photofiltermodel)

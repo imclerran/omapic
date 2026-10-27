@@ -79,6 +79,7 @@ private slots:
     void loadTagsListsActiveTagsWithTotalCount();
     void activeTagsCountsOverActiveSetOnly();
     void activeTagsFolderScopeRestrictsToSubtree();
+    void facetTagsPhotoScopeRestrictsToGivenPhotos();
     void tagSamplePathsScoreCandidatesOverActiveSet();
     void pickTagSamplesGreedyCoverageWithFavoriteBonus();
     void coOccurringTagsNarrowsBySelection();
@@ -888,6 +889,13 @@ void TestDatabase::activePhotoPathsFilteredByTags()
              QStringList{QStringLiteral("/p/2.jpg")});
     // A single-tag filter.
     QCOMPARE(m_db->activePhotoPaths({dog}, false).size(), 2);
+    // A photo scope (the applied advanced query) narrows both forms; an empty
+    // scope in force is no photo at all.
+    QCOMPARE(m_db->activePhotoPaths({}, true, {p1, p3}, true),
+             (QStringList{QStringLiteral("/p/1.jpg"), QStringLiteral("/p/3.jpg")}));
+    QCOMPARE(m_db->activePhotoPaths({dog, park}, false, {p1, p3}, true).size(), 2);
+    QCOMPARE(m_db->activePhotoPaths({dog}, false, {p3}, true).size(), 0);
+    QVERIFY(m_db->activePhotoPaths({}, true, {}, true).isEmpty());
     // Empty selection falls back to the whole active set.
     QCOMPARE(m_db->activePhotoPaths({}, true).size(), 3);
 }
@@ -947,6 +955,43 @@ void TestDatabase::activeTagsCountsOverActiveSetOnly()
     m_db->setFolderEnabled(folder, false);
     QCOMPARE(countsByName(m_db->activeTags()).value(QStringLiteral("x")), 1);
     QCOMPARE(countsByName(m_db->loadTags()).value(QStringLiteral("x")), 2);
+}
+
+void TestDatabase::facetTagsPhotoScopeRestrictsToGivenPhotos()
+{
+    // The gallery's applied advanced query hands the sidebar the ids of the
+    // photos it matches; tags and counts come from those photos only.
+    m_db->insertFolder(QStringLiteral("/lib"));
+    const int a = m_db->insertPhoto(QStringLiteral("/lib/a.jpg"), QString());
+    const int b = m_db->insertPhoto(QStringLiteral("/lib/b.jpg"), QString());
+    const int c = m_db->insertPhoto(QStringLiteral("/lib/sub/c.jpg"), QString());
+    const int beach = m_db->ensureTag(QStringLiteral("beach"));
+    const int sunset = m_db->ensureTag(QStringLiteral("sunset"));
+    const int people = m_db->ensureTag(QStringLiteral("people"));
+    m_db->linkPhotoTag(a, beach);
+    m_db->linkPhotoTag(b, beach);
+    m_db->linkPhotoTag(b, sunset);
+    m_db->linkPhotoTag(c, people);
+    m_db->linkPhotoTag(c, beach);
+
+    QHash<QString, int> counts = countsByName(m_db->activeTags(QString(), {a, b}, true));
+    QCOMPARE(counts.value(QStringLiteral("beach")), 2);
+    QCOMPARE(counts.value(QStringLiteral("sunset")), 1);
+    QVERIFY(!counts.contains(QStringLiteral("people")));
+    // An empty scope that is in force means no photos at all...
+    QVERIFY(m_db->activeTags(QString(), {}, true).isEmpty());
+    // ...while not scoping is the whole active set.
+    QCOMPARE(countsByName(m_db->activeTags(QString(), {}, false)).value(QStringLiteral("beach")), 3);
+    // It stacks with the folder scope and the match-all drill-down.
+    QCOMPARE(countsByName(m_db->activeTags(QStringLiteral("/lib/sub"), {a, b}, true)).size(), 0);
+    counts = countsByName(m_db->facetTags(QString(), {beach}, true, {b, c}, true));
+    QCOMPARE(counts.value(QStringLiteral("beach")), 2);
+    QCOMPARE(counts.value(QStringLiteral("sunset")), 1);
+    QCOMPARE(counts.value(QStringLiteral("people")), 1);
+    // A selected tag outside the scope stays listed (count 0) so it can be deselected.
+    counts = countsByName(m_db->facetTags(QString(), {people}, true, {a}, true));
+    QVERIFY(counts.contains(QStringLiteral("people")));
+    QCOMPARE(counts.value(QStringLiteral("people")), 0);
 }
 
 void TestDatabase::activeTagsFolderScopeRestrictsToSubtree()

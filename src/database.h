@@ -52,16 +52,21 @@ public:
     QVector<TagInfo> loadTags();         // tags with >=1 active-folder photo, total count (tag manager)
     // Tags applying to >=1 active photo, with active counts. When folderScope is
     // non-empty, restricts to photos at or under that directory (the folder-view
-    // tag filter, scoped to the current folder and its subfolders).
-    QVector<TagInfo> activeTags(const QString &folderScope = {});
+    // tag filter, scoped to the current folder and its subfolders). With `scoped`,
+    // further restricts to the photos in `scopeIds` (the gallery's applied
+    // advanced query; an empty scoped list means no photo at all).
+    QVector<TagInfo> activeTags(const QString &folderScope = {}, const QList<int> &scopeIds = {},
+                                bool scoped = false);
     // Tags on the active photos that carry ALL of `selected` (faceted drill-down),
     // counted over that matching set. Used for the "match all" filter sidebar.
-    QVector<TagInfo> coOccurringTags(const QList<int> &selected, const QString &folderScope = {});
+    QVector<TagInfo> coOccurringTags(const QList<int> &selected, const QString &folderScope = {},
+                                     const QList<int> &scopeIds = {}, bool scoped = false);
     // The finished filter-sidebar tag list: the active (or match-all co-occurring)
     // set, with any still-selected tag kept visible, sorted by name. Wraps the two
     // queries above so the same computation can run on the GUI or the worker thread
     // (the latter keeps the ~150ms DB work off the launch path).
-    QVector<TagInfo> facetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
+    QVector<TagInfo> facetTags(const QString &folderScope, const QList<int> &selected, bool matchAll,
+                               const QList<int> &scopeIds = {}, bool scoped = false);
     QStringList allTagNames();           // tag names relevant to the active set, for autocomplete
     QVector<FolderInfo> loadFolders(); // registered library folders, with photo counts + enabled
 
@@ -310,7 +315,10 @@ public:
     // Same, restricted to photos matching a tag selection (matchAll = must carry
     // every selected tag; otherwise any). Empty selection returns all active
     // paths. Lets the folder view show only folders holding the filtered photos.
-    QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll);
+    // With `scoped`, also restricted to the photos in `scopeIds` (the gallery's
+    // applied advanced query), as the facet queries are.
+    QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll,
+                                 const QList<int> &scopeIds = {}, bool scoped = false);
 
     // --- Tag samples (the tag-popover thumbnails) ---
     // Up to `limit` paths of active photos carrying `tagId`, chosen so the set
@@ -343,6 +351,10 @@ private:
     // SQL boolean (for the given photos-table alias) that is true when a photo is
     // in the active set: an orphan, or under at least one enabled folder.
     QString activeClause(const QString &alias) const;
+    // SQL fragment (" AND p.id IN (…)", or " AND 0" for an empty scope) that
+    // restricts the photos-table alias `p` to `scopeIds`; empty when not scoped.
+    // The ids are interpolated (they are integers), so no binds are involved.
+    static QString photoScopeClause(const QList<int> &scopeIds, bool scoped);
     // SQL boolean (for the given tags-table alias) that is true for a user-visible
     // tag: one not in a reserved (system) category. Used to keep album/favorites
     // tags out of every tag list, autocomplete, and the detail panel.

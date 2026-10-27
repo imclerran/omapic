@@ -1032,10 +1032,21 @@ QStringList Database::activePhotoPaths()
     return paths;
 }
 
-QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matchAll)
+QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matchAll,
+                                       const QList<int> &scopeIds, bool scoped)
 {
-    if (selectedTags.isEmpty())
+    if (selectedTags.isEmpty() && !scoped)
         return activePhotoPaths();
+    const QString scope = photoScopeClause(scopeIds, scoped);
+    if (selectedTags.isEmpty()) {
+        QStringList paths;
+        QSqlQuery q(QStringLiteral("SELECT p.path FROM photos p WHERE %1%2 ORDER BY p.path")
+                        .arg(activeClause(QStringLiteral("p")), scope),
+                    m_db);
+        while (q.next())
+            paths.append(q.value(0).toString());
+        return paths;
+    }
 
     QStringList ph;
     for (int i = 0; i < selectedTags.size(); ++i)
@@ -1051,10 +1062,10 @@ QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matc
     QStringList paths;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
-                  "SELECT p.path FROM photos p WHERE %1 AND p.id IN ("
+                  "SELECT p.path FROM photos p WHERE %1%4 AND p.id IN ("
                   "  SELECT pt.photo_id FROM photo_tags pt WHERE pt.tag_id IN (%2)%3) "
                   "ORDER BY p.path")
-                  .arg(activeClause(QStringLiteral("p")), inList, having));
+                  .arg(activeClause(QStringLiteral("p")), inList, having, scope));
     for (int id : selectedTags)
         q.addBindValue(id);
     q.exec();
@@ -1367,7 +1378,21 @@ QVector<TagInfo> Database::loadTags()
     return tags;
 }
 
-QVector<TagInfo> Database::activeTags(const QString &folderScope)
+QString Database::photoScopeClause(const QList<int> &scopeIds, bool scoped)
+{
+    if (!scoped)
+        return {};
+    if (scopeIds.isEmpty())
+        return QStringLiteral(" AND 0");
+    QStringList ids;
+    ids.reserve(scopeIds.size());
+    for (int id : scopeIds)
+        ids.append(QString::number(id));
+    return QStringLiteral(" AND p.id IN (%1)").arg(ids.join(QLatin1Char(',')));
+}
+
+QVector<TagInfo> Database::activeTags(const QString &folderScope, const QList<int> &scopeIds,
+                                      bool scoped)
 {
     // Tags that apply to at least one photo in the active (shown) set, counted
     // over that set only. Drives the filter sidebar and tag autocomplete.
@@ -1377,9 +1402,10 @@ QVector<TagInfo> Database::activeTags(const QString &folderScope)
     //
     // folderScope (folder view) additionally restricts the active photos to those
     // at or under that directory — the subtree prefix match mirrors activeClause.
-    const QString scope = folderScope.isEmpty()
+    const QString scope = (folderScope.isEmpty()
         ? QString()
-        : QStringLiteral(" AND substr(p.path, 1, length(?) + 1) = ? || '/'");
+        : QStringLiteral(" AND substr(p.path, 1, length(?) + 1) = ? || '/'"))
+        + photoScopeClause(scopeIds, scoped);
     QVector<TagInfo> tags;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
@@ -1411,11 +1437,12 @@ QVector<TagInfo> Database::activeTags(const QString &folderScope)
     return tags;
 }
 
-QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QString &folderScope)
+QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QString &folderScope,
+                                           const QList<int> &scopeIds, bool scoped)
 {
     QVector<TagInfo> tags;
     if (selected.isEmpty())
-        return activeTags(folderScope);
+        return activeTags(folderScope, scopeIds, scoped);
 
     QStringList ph;
     for (int i = 0; i < selected.size(); ++i)
@@ -1425,9 +1452,10 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QSt
     // The folder-view scope restricts the active photos to a directory subtree;
     // its bind lives in the active_photos CTE, which precedes the selected-tag
     // placeholders in the SQL, so it is bound first.
-    const QString scope = folderScope.isEmpty()
+    const QString scope = (folderScope.isEmpty()
         ? QString()
-        : QStringLiteral(" AND substr(p.path, 1, length(?) + 1) = ? || '/'");
+        : QStringLiteral(" AND substr(p.path, 1, length(?) + 1) = ? || '/'"))
+        + photoScopeClause(scopeIds, scoped);
 
     // Matching photos: active photos that carry every selected tag. Then return
     // the tags present on those photos, counted over that matching set.
@@ -1469,22 +1497,23 @@ QVector<TagInfo> Database::coOccurringTags(const QList<int> &selected, const QSt
 }
 
 QVector<TagInfo> Database::facetTags(const QString &folderScope, const QList<int> &selected,
-                                     bool matchAll)
+                                     bool matchAll, const QList<int> &scopeIds, bool scoped)
 {
-    const QVector<TagInfo> active = activeTags(folderScope);
+    const QVector<TagInfo> active = activeTags(folderScope, scopeIds, scoped);
     QHash<int, TagInfo> activeById;
     for (const TagInfo &t : active)
         activeById.insert(t.id, t);
-    // A selected tag whose photos are all outside the current folder scope won't be
-    // in `active`; pull it from the unscoped active set so it stays deselectable.
-    if (!folderScope.isEmpty() && !selected.isEmpty()) {
+    // A selected tag whose photos are all outside the current folder or query
+    // scope won't be in `active`; pull it from the unscoped active set so it
+    // stays deselectable.
+    if ((!folderScope.isEmpty() || scoped) && !selected.isEmpty()) {
         for (const TagInfo &t : activeTags())
             if (!activeById.contains(t.id))
                 activeById.insert(t.id, t);
     }
 
-    QVector<TagInfo> tags =
-        (matchAll && !selected.isEmpty()) ? coOccurringTags(selected, folderScope) : active;
+    QVector<TagInfo> tags = (matchAll && !selected.isEmpty())
+        ? coOccurringTags(selected, folderScope, scopeIds, scoped) : active;
 
     // Keep a selected tag visible even once it no longer applies to any active
     // photo, so an incompatible match-all pick stays deselectable (count 0).

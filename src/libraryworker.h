@@ -37,7 +37,8 @@ public slots:
     void flushSidecars();                     // write queued photos' XMP sidecars
     // Compute the filter-sidebar tag list off the GUI thread (the ~150ms query
     // would otherwise freeze the window right after launch).
-    void loadFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll);
+    void loadFacetTags(const QString &folderScope, const QList<int> &selected, bool matchAll,
+                       const QList<int> &scopeIds, bool scoped);
     // Re-fingerprint large whole-file-hashed files with the sampled scheme.
     void resampleHashes();
 
