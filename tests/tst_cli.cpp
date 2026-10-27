@@ -236,6 +236,16 @@ void TestCli::optionsAnywhereBeforeDoubleDash()
     // An unquoted query the shell split is joined with single spaces.
     o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("(sunset"), QStringLiteral("|"), QStringLiteral("sunrise)")});
     QCOMPARE(o.query, QStringLiteral("beach (sunset | sunrise)"));
+    // Among several arguments, one that still holds whitespace was quoted in the
+    // shell (which ate the quotes), so it is quoted in OQL — with a leading NOT
+    // or a predicate key kept outside, and already-quoted text left alone.
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("is:fav"), QStringLiteral("dark forest"),
+                    QStringLiteral("-red panda"), QStringLiteral("album:Best of 2019"),
+                    QStringLiteral("\"dinner (2019)\""), QStringLiteral("cat:Place")});
+    QCOMPARE(o.query, QStringLiteral("is:fav \"dark forest\" -\"red panda\" album:\"Best of 2019\" \"dinner (2019)\" cat:Place"));
+    // A lone argument is the whole query as typed, whitespace and all.
+    o = cli::parse({QStringLiteral("query"), QStringLiteral("beach sunset | people")});
+    QCOMPARE(o.query, QStringLiteral("beach sunset | people"));
     // Values: separate or inline.
     o = cli::parse({QStringLiteral("query"), QStringLiteral("--sort"), QStringLiteral("date"), QStringLiteral("beach")});
     QCOMPARE(o.sort, QStringLiteral("date"));
