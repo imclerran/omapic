@@ -16,10 +16,11 @@
 // application object; everything here runs on omapic-core only, so the tests
 // drive it against a temporary library.
 //
-//   omapic query [--count | --json | -0] [--explain] [--strict]
+//   omapic query [--count | --json | --jsonl | -0] [--explain] [--strict]
 //                [--sort name|date|tags] [--reverse] [--all-copies]
 //                [--include-disabled] '<query>'
-//   omapic tags | albums | categories
+//   omapic tags | albums | categories [--counts | --json | --jsonl]
+//                [--all-copies] [--include-disabled]
 //   omapic view [scope/sort flags] [--strict] [--fullscreen] '<query>'
 //   omapic slideshow [scope/sort flags] [--interval S] [--shuffle]
 //                    [--shuffle-folders] [--crossfade] [--start-random]
@@ -49,7 +50,11 @@
 namespace cli {
 
 enum class Command { None, Query, Tags, Albums, Categories, View, Slideshow };
-enum class Output { Paths, Count, Json, Nul };
+// How a headless command prints. Plain is one path (query) or one name (tags,
+// albums, categories) per line; Count and Nul are query's, Counts is the name
+// lists' (name, tab, photo count); Json (an indented array) and Jsonl (one
+// compact object per line) are shared.
+enum class Output { Plain, Count, Json, Jsonl, Nul, Counts };
 
 constexpr int kExitMatches = 0;
 constexpr int kExitNoMatches = 1;
@@ -62,7 +67,7 @@ struct Options {
     QString error;   // non-empty: a usage error (exit 2) with this message
     QString query;   // the joined query text
     QString library; // --library <path>; empty when not given
-    Output output = Output::Paths;
+    Output output = Output::Plain;
     bool explain = false;
     // Refuse any reading that depended on the library's names (every oql::Note)
     // and any smart-album expansion problem, instead of noting it on stderr.

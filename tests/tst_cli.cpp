@@ -46,6 +46,8 @@ private slots:
     void queryParseErrorShowsCaret();
     void queryExpandsSmartAlbumReferences();
     void listCommands();
+    void listCommandCounts();
+    void listCommandJson();
     void libraryChoice();
     void libraryOpenFailures();
     void resolveMediaForView();
@@ -200,7 +202,7 @@ void TestCli::optionsAnywhereBeforeDoubleDash()
     // Short options only count before the query: `-0` after it is OQL (NOT "0").
     o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("-0")});
     QVERIFY(o.error.isEmpty());
-    QCOMPARE(o.output, cli::Output::Paths);
+    QCOMPARE(o.output, cli::Output::Plain);
     QCOMPARE(o.query, QStringLiteral("beach -0"));
     o = cli::parse({QStringLiteral("query"), QStringLiteral("-0"), QStringLiteral("beach")});
     QCOMPARE(o.output, cli::Output::Nul);
@@ -210,7 +212,7 @@ void TestCli::optionsAnywhereBeforeDoubleDash()
     QCOMPARE(o.output, cli::Output::Count);
     QCOMPARE(o.query, QStringLiteral("-people"));
     o = cli::parse({QStringLiteral("query"), QStringLiteral("--"), QStringLiteral("--count")});
-    QCOMPARE(o.output, cli::Output::Paths);
+    QCOMPARE(o.output, cli::Output::Plain);
     QCOMPARE(o.query, QStringLiteral("--count"));
     o = cli::parse({QStringLiteral("query"), QStringLiteral("beach"), QStringLiteral("--"), QStringLiteral("--bogus")});
     QVERIFY(o.error.isEmpty());
@@ -237,6 +239,16 @@ void TestCli::parseValidatesOptions()
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--sort"), QStringLiteral("size"), QStringLiteral("x")}).error.isEmpty());
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--sort")}).error.isEmpty());    // missing value
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--count"), QStringLiteral("--json"), QStringLiteral("x")}).error.isEmpty());
+    // --jsonl is one shape among the others; the list commands have their own.
+    QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--jsonl"), QStringLiteral("--json"), QStringLiteral("x")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--jsonl"), QStringLiteral("--count"), QStringLiteral("x")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("-0"), QStringLiteral("--jsonl"), QStringLiteral("x")}).error.isEmpty());
+    QVERIFY(cli::parse({QStringLiteral("query"), QStringLiteral("--jsonl"), QStringLiteral("x")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--counts"), QStringLiteral("x")}).error.isEmpty()); // lists only
+    QVERIFY(!cli::parse({QStringLiteral("tags"), QStringLiteral("--count")}).error.isEmpty());                      // query only
+    QVERIFY(!cli::parse({QStringLiteral("tags"), QStringLiteral("--counts"), QStringLiteral("--json")}).error.isEmpty());
+    QVERIFY(!cli::parse({QStringLiteral("albums"), QStringLiteral("--json"), QStringLiteral("--jsonl")}).error.isEmpty());
+    QVERIFY(cli::parse({QStringLiteral("categories"), QStringLiteral("--jsonl"), QStringLiteral("--include-disabled"), QStringLiteral("--all-copies")}).error.isEmpty());
     QVERIFY(!cli::parse({QStringLiteral("slideshow"), QStringLiteral("--interval"), QStringLiteral("0"), QStringLiteral("x")}).error.isEmpty());
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--shuffle"), QStringLiteral("x")}).error.isEmpty()); // slideshow-only
     QVERIFY(!cli::parse({QStringLiteral("query"), QStringLiteral("--count=1"), QStringLiteral("x")}).error.isEmpty());
@@ -353,12 +365,27 @@ void TestCli::queryOutputShapes()
     QCOMPARE(a.value(QStringLiteral("favorite")).toBool(), true);
     QCOMPARE(a.value(QStringLiteral("video")).toBool(), false);
     QCOMPARE(a.value(QStringLiteral("tags")).toArray(), QJsonArray{QStringLiteral("beach")}); // album tags hidden
-    QVERIFY(a.value(QStringLiteral("takenAt")).isString());
+    // takenAt is UTC with a Z suffix (a.jpg was taken 3000 s into 1970).
+    QCOMPARE(a.value(QStringLiteral("takenAt")).toString(), QStringLiteral("1970-01-01T00:50:00Z"));
     const QJsonObject b = arr.last().toObject();
     QCOMPARE(b.value(QStringLiteral("tags")).toArray(), (QJsonArray{QStringLiteral("beach"), QStringLiteral("sunset")}));
     // An undated photo has a null takenAt.
     QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--json"), QStringLiteral("people")}, &out), cli::kExitMatches);
     QVERIFY(QJsonDocument::fromJson(out.toUtf8()).array().first().toObject().value(QStringLiteral("takenAt")).isNull());
+
+    // --jsonl: the same objects, one compact one per line.
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--jsonl"), QStringLiteral("beach")}, &out), cli::kExitMatches);
+    const QStringList lines = out.split('\n', Qt::SkipEmptyParts);
+    QCOMPARE(lines.size(), 2);
+    QVERIFY(out.endsWith('\n'));
+    for (const QString &line : lines) {
+        QVERIFY(!line.contains(QStringLiteral(": ")));
+        QVERIFY(QJsonDocument::fromJson(line.toUtf8()).isObject());
+    }
+    QCOMPARE(QJsonDocument::fromJson(lines.first().toUtf8()).object(), a);
+    QCOMPARE(QJsonDocument::fromJson(lines.last().toUtf8()).object(), b);
+    QCOMPARE(run({QStringLiteral("query"), QStringLiteral("--jsonl"), QStringLiteral("sunset people")}, &out), cli::kExitNoMatches);
+    QVERIFY(out.isEmpty());
 }
 
 void TestCli::queryExplainAndNotes()
@@ -455,6 +482,77 @@ void TestCli::listCommands()
     QCOMPARE(out, QStringLiteral("Beachy\nFavorites\nTrip\n"));
     QCOMPARE(run({QStringLiteral("categories")}, &out), cli::kExitMatches);
     QCOMPARE(out, QStringLiteral("Place\n"));
+}
+
+void TestCli::listCommandCounts()
+{
+    seedLibrary();
+    QString out;
+    // --counts: name, tab, photos in query's default scope. beach is on a, b
+    // (c is a duplicate copy, gone.jpg is missing, off/e.jpg is disabled).
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--counts")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("beach\t2\nParis\t1\npeople\t1\nsunset\t1\n"));
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--counts"), QStringLiteral("--include-disabled")}, &out), cli::kExitMatches);
+    QVERIFY(out.startsWith(QStringLiteral("beach\t3\n")));
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--counts"), QStringLiteral("--all-copies")}, &out), cli::kExitMatches);
+    QVERIFY(out.startsWith(QStringLiteral("beach\t3\n")));
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--counts"), QStringLiteral("--all-copies"), QStringLiteral("--include-disabled")}, &out), cli::kExitMatches);
+    QVERIFY(out.startsWith(QStringLiteral("beach\t4\n")));
+    // Albums: Favorites and Trip hold a.jpg; the smart album Beachy matches b.jpg.
+    QCOMPARE(run({QStringLiteral("albums"), QStringLiteral("--counts")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("Beachy\t1\nFavorites\t1\nTrip\t1\n"));
+    // Categories count photos with any tag in the category (d.jpg has Paris).
+    QCOMPARE(run({QStringLiteral("categories"), QStringLiteral("--counts")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("Place\t1\n"));
+    // The plain list is unchanged by the scope flags.
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--include-disabled")}, &out), cli::kExitMatches);
+    QCOMPARE(out, QStringLiteral("beach\nParis\npeople\nsunset\n"));
+}
+
+void TestCli::listCommandJson()
+{
+    seedLibrary();
+    QString out;
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--json")}, &out), cli::kExitMatches);
+    const QJsonArray tags = QJsonDocument::fromJson(out.toUtf8()).array();
+    QCOMPARE(tags.size(), 4);
+    const QJsonObject beach = tags.at(0).toObject();
+    QCOMPARE(beach.value(QStringLiteral("name")).toString(), QStringLiteral("beach"));
+    QVERIFY(beach.value(QStringLiteral("category")).isNull());
+    QCOMPARE(beach.value(QStringLiteral("count")).toInt(), 2);
+    QCOMPARE(beach.value(QStringLiteral("aliases")).toArray(), QJsonArray{QStringLiteral("seaside")});
+    const QJsonObject paris = tags.at(1).toObject();
+    QCOMPARE(paris.value(QStringLiteral("name")).toString(), QStringLiteral("Paris"));
+    QCOMPARE(paris.value(QStringLiteral("category")).toString(), QStringLiteral("Place"));
+    QCOMPARE(paris.value(QStringLiteral("count")).toInt(), 1);
+    QCOMPARE(paris.value(QStringLiteral("aliases")).toArray(), QJsonArray{});
+
+    // --jsonl: one object per line, the same fields; the scope flags apply.
+    QCOMPARE(run({QStringLiteral("tags"), QStringLiteral("--jsonl"), QStringLiteral("--include-disabled")}, &out), cli::kExitMatches);
+    const QStringList lines = out.split('\n', Qt::SkipEmptyParts);
+    QCOMPARE(lines.size(), 4);
+    QJsonObject first = QJsonDocument::fromJson(lines.first().toUtf8()).object();
+    QCOMPARE(first.value(QStringLiteral("name")).toString(), QStringLiteral("beach"));
+    QCOMPARE(first.value(QStringLiteral("count")).toInt(), 3);
+
+    QCOMPARE(run({QStringLiteral("albums"), QStringLiteral("--jsonl")}, &out), cli::kExitMatches);
+    const QStringList albums = out.split('\n', Qt::SkipEmptyParts);
+    QCOMPARE(albums.size(), 3);
+    const QJsonObject beachy = QJsonDocument::fromJson(albums.at(0).toUtf8()).object();
+    QCOMPARE(beachy.value(QStringLiteral("name")).toString(), QStringLiteral("Beachy"));
+    QCOMPARE(beachy.value(QStringLiteral("smart")).toBool(), true);
+    QCOMPARE(beachy.value(QStringLiteral("count")).toInt(), 1);
+    QCOMPARE(beachy.value(QStringLiteral("query")).toString(), QStringLiteral("beach sunset"));
+    const QJsonObject trip = QJsonDocument::fromJson(albums.at(2).toUtf8()).object();
+    QCOMPARE(trip.value(QStringLiteral("name")).toString(), QStringLiteral("Trip"));
+    QCOMPARE(trip.value(QStringLiteral("smart")).toBool(), false);
+    QCOMPARE(trip.value(QStringLiteral("count")).toInt(), 1);
+    QVERIFY(trip.value(QStringLiteral("query")).isNull());
+
+    QCOMPARE(run({QStringLiteral("categories"), QStringLiteral("--json")}, &out), cli::kExitMatches);
+    const QJsonArray cats = QJsonDocument::fromJson(out.toUtf8()).array();
+    QCOMPARE(cats.size(), 1);
+    QCOMPARE(cats.first().toObject(), (QJsonObject{{QStringLiteral("name"), QStringLiteral("Place")}, {QStringLiteral("count"), 1}}));
 }
 
 void TestCli::libraryChoice()
