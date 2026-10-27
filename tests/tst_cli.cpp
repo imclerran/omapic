@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QDeadlineTimer>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QSettings>
@@ -59,6 +60,7 @@ private slots:
     void completionZsh();
     void completionBash();
     void completionBashCompletesInsideQuotes();
+    void completionBashInsertsThroughReadline();
     void completionFish();
     void resolveMediaForView();
     void slideshowIgnoresSavedSettings();
@@ -824,19 +826,107 @@ void TestCli::completionBashCompletesInsideQuotes()
     // Unquoted: backslash-escaped, as before.
     QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("sun")}),
              QStringList{QStringLiteral("sunset")});
-    // Inside a double quote: the quote is kept and closed.
+    // Inside a quote: readline keeps what is before and including the opening
+    // quote and replaces the rest, so the candidate is the rest of the name
+    // plus the closing quote.
     QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("\"sun")}),
-             QStringList{QStringLiteral("\"sunset\"")});
+             QStringList{QStringLiteral("sunset\"")});
     QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("'sun")}),
-             QStringList{QStringLiteral("'sunset'")});
-    // A NOT or a predicate key before the quote stays outside it.
+             QStringList{QStringLiteral("sunset'")});
+    // A NOT or a predicate key before the quote stays on the line, outside it.
     QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("-\"peo")}),
-             QStringList{QStringLiteral("-\"people\"")});
+             QStringList{QStringLiteral("people\"")});
     QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("album:\"Tr")}),
-             QStringList{QStringLiteral("album:\"Trip\"")});
+             QStringList{QStringLiteral("Trip\"")});
     // A quote around the whole word, NOT included.
     QCOMPARE(complete({QStringLiteral("omapic"), QStringLiteral("query"), QStringLiteral("\"-peo")}),
-             QStringList{QStringLiteral("\"-people\"")});
+             QStringList{QStringLiteral("-people\"")});
+}
+
+void TestCli::completionBashInsertsThroughReadline()
+{
+    // The reply strings above are only half the story: readline decides which
+    // part of the line they replace. For a word typed inside an open quote it
+    // replaces the text after the quote, so a reply that repeats what is before
+    // it (`album:"Trip"` for `album:"Tr`) lands as `album:"album:"Trip"`. Drive
+    // a real interactive bash on a pty (through script(1)) and read the line
+    // back after Tab, via a key bound to echo $READLINE_LINE. Every step waits
+    // for the shell's echo rather than a timer, so a slow machine only makes
+    // the test slower.
+    const QString bash = QStandardPaths::findExecutable(QStringLiteral("bash"));
+    const QString script = QStandardPaths::findExecutable(QStringLiteral("script"));
+    if (bash.isEmpty() || script.isEmpty())
+        QSKIP("bash or script(1) is not installed");
+    const QString binDir = QCoreApplication::applicationDirPath() + QStringLiteral("/..");
+    if (!QFile::exists(binDir + QStringLiteral("/omapic")))
+        QSKIP("the omapic binary is not beside the tests");
+    seedLibrary();
+    const QString file = path(QStringLiteral("completion.bash"));
+    QFile f(file);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(cli::completionScript(QStringLiteral("bash")).toUtf8());
+    f.close();
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PATH"), binDir + QLatin1Char(':') + env.value(QStringLiteral("PATH")));
+    env.insert(QStringLiteral("OMAPIC_LIBRARY"), dbPath());
+    env.insert(QStringLiteral("TERM"), QStringLiteral("dumb"));
+    env.remove(QStringLiteral("INPUTRC"));
+    QProcess p;
+    p.setProcessEnvironment(env);
+    p.setProcessChannelMode(QProcess::MergedChannels);
+    p.start(script, {QStringLiteral("-qfec"), bash + QStringLiteral(" --norc --noprofile -i"), QStringLiteral("/dev/null")});
+    QVERIFY(p.waitForStarted(10000));
+
+    QByteArray seen;
+    // Wait until `marker` shows up in the output after `from`, and return the
+    // index just past it; -1 on timeout.
+    auto waitFor = [&](const QByteArray &marker, qsizetype from) -> qsizetype {
+        QDeadlineTimer deadline(15000);
+        while (!deadline.hasExpired()) {
+            const qsizetype at = seen.indexOf(marker, from);
+            if (at >= 0)
+                return at + marker.size();
+            if (p.state() != QProcess::Running)
+                break;
+            p.waitForReadyRead(200);
+            seen += p.readAll();
+        }
+        return -1;
+    };
+    qsizetype pos = waitFor("$ ", 0); // bash's default prompt ends so
+    QVERIFY2(pos >= 0, "no prompt from the interactive shell");
+    p.write("PS1='P$ '; source '" + file.toUtf8() + "'; bind 'set bell-style none'; "
+            "bind -x '\"\\C-p\": echo \"LINE=[$READLINE_LINE]\"'; echo READY\n");
+    pos = waitFor("READY", pos);
+    QVERIFY2(pos >= 0, "the completion script did not load");
+
+    // Type `typed`, press Tab, read the line back, then clear it (Ctrl-U).
+    auto lineAfterTab = [&](const QByteArray &typed) {
+        p.write(typed);
+        pos = waitFor(typed, pos); // readline echoes what was typed
+        if (pos < 0)
+            return QByteArray("<typed text not echoed>");
+        p.write("\t\x10");
+        pos = waitFor("LINE=[", pos);
+        if (pos < 0)
+            return QByteArray("<no line after Tab>");
+        const qsizetype end = waitFor("]", pos);
+        if (end < 0)
+            return QByteArray("<unterminated line>");
+        const QByteArray line = seen.mid(pos, end - 1 - pos);
+        p.write("\x15");
+        return line;
+    };
+    QCOMPARE(lineAfterTab("omapic query peo"), QByteArray("omapic query people "));
+    QCOMPARE(lineAfterTab("omapic query \"peo"), QByteArray("omapic query \"people\" "));
+    QCOMPARE(lineAfterTab("omapic query 'peo"), QByteArray("omapic query 'people' "));
+    QCOMPARE(lineAfterTab("omapic query -\"peo"), QByteArray("omapic query -\"people\" "));
+    QCOMPARE(lineAfterTab("omapic query \"-peo"), QByteArray("omapic query \"-people\" "));
+    QCOMPARE(lineAfterTab("omapic query album:\"Tr"), QByteArray("omapic query album:\"Trip\" "));
+    QCOMPARE(lineAfterTab("omapic query is:fav cat:\"Pl"), QByteArray("omapic query is:fav cat:\"Place\" "));
+    p.write("exit\n");
+    QVERIFY(p.waitForFinished(10000));
 }
 
 void TestCli::checkCompletionSyntax(const QString &shell, const QString &checkFlag)

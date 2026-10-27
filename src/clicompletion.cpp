@@ -226,8 +226,10 @@ _omapic_library() {
 
 # Add each candidate that starts with the current word, quoted for the shell.
 # When the word was being typed inside a quote ("dinn, -"dark, album:"Best),
-# the quote is put back where it was and closed, so the insertion stays a
-# quoted name rather than a backslash-escaped one.
+# readline replaces only the text after the opening quote, so the candidate
+# is emitted from there: the rest of the name and the closing quote. What is
+# before the quote (a NOT, a predicate key) and the quote itself stay as typed,
+# and the insertion is a quoted name rather than a backslash-escaped one.
 _omapic_add() {
   local c body
   for c in "$@"; do
@@ -239,7 +241,7 @@ _omapic_add() {
       else
         body=${body//\'/\'\\\'\'}
       fi
-      COMPREPLY+=( "$qprefix$quote$body$quote" )
+      COMPREPLY+=( "$body$quote" )
     else
       COMPREPLY+=( "$(printf '%q' "$c")" )
     fi
