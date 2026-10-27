@@ -84,6 +84,7 @@ Item {
     Component.onCompleted: refreshVocab()
     Connections {
         target: root.library
+        ignoreUnknownSignals: true // a stand-in library (tests) may not have these
         function onAlbumsChanged() { root.refreshVocab() }
         function onCategoriesChanged() { root.refreshVocab() }
     }
