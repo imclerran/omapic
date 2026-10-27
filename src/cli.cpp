@@ -63,7 +63,8 @@ const OptionSpec kOptions[] = {
     {"count", 0, false, Query_, "", "Print only the number of matches."},
     {"json", 0, false, Query_, "", "Print matches as JSON objects."},
     {"0", '0', false, Query_, "", "Separate paths with NUL instead of newline (for xargs -0)."},
-    {"explain", 0, false, Query_, "", "Print the canonical form of the query instead of matches."},
+    {"explain", 0, false, Query_, "", "Print how the query was read instead of matches (exit 0 when it parses)."},
+    {"strict", 0, false, WithQuery, "", "Refuse a reading that depends on your tag names or a broken smart album."},
     {"sort", 0, true, WithQuery, "name|date|tags", "Order, as the gallery sorts: name (default), date, tags."},
     {"reverse", 0, false, WithQuery, "", "Reverse the order."},
     {"all-copies", 0, false, WithQuery, "", "Keep duplicate copies of the same content."},
@@ -140,11 +141,87 @@ void printParseError(const oql::Error &e, const QString &query, QTextStream &err
         err << "  did you mean: " << e.suggestions.join(QStringLiteral(", ")) << '\n';
 }
 
-// The query pipeline shared by `query`, `view` and `slideshow`: parse against
-// the library, evaluate every photo (in the flat view's scope), drop files
-// missing from disk, and order the rest as the grid would.
-struct Resolved {
+// Under --strict, a reading that depended on the vocabulary is an error in the
+// same shape as a parse error, with a hint on how to pin the names down.
+void printStrictNote(const oql::Note &n, const QString &query, QTextStream &err)
+{
+    oql::Error e;
+    e.span = n.span;
+    e.message = n.message;
+    printParseError(e, query, err);
+    err << "  hint: quote the names you mean, e.g. \"dark forest\" for one tag or\n"
+           "  \"dark\" \"forest\" for two (--strict refuses to guess)\n";
+}
+
+// Every Missing term in a tree (a tag, album or category a smart album still
+// mentions but that no longer exists), described for an error message.
+void collectMissing(const oql::Node &n, QStringList &out)
+{
+    if (n.kind == oql::NodeKind::Missing) {
+        const char *what = n.was == oql::NameKind::Category ? "category"
+            : n.was == oql::NameKind::Tag ? "tag" : "album";
+        out.append(QStringLiteral("A smart album refers to the %1 \"%2\", which no longer exists")
+                       .arg(QLatin1String(what), n.name));
+    }
+    for (const oql::Node &c : n.children)
+        collectMissing(c, out);
+}
+
+// The query pipeline shared by `query`, `view` and `slideshow`, in two steps.
+// First the text is parsed against the library and smart-album references are
+// expanded (all --explain needs); then every photo in the flat view's scope is
+// evaluated, files missing from disk are dropped, and the rest are ordered as
+// the grid would.
+struct Parsed {
     QString canonical;
+    oql::Node tree; // expanded: no SmartAlbum references left
+};
+
+int parseQuery(const Options &opts, Database &db, QTextStream &err, Parsed &out)
+{
+    oql::MapVocabulary vocab;
+    db.fillVocabulary(vocab);
+    const oql::ParseResult parsed = oql::parse(opts.query, vocab);
+    if (!parsed.ok()) {
+        printParseError(parsed.error, opts.query, err);
+        return kExitUsage;
+    }
+    // Readings that depended on the vocabulary are worth a warning: `dark forest`
+    // was split only because no tag has that name. Under --strict they are errors.
+    if (opts.strict && !parsed.notes.isEmpty()) {
+        for (const oql::Note &n : parsed.notes)
+            printStrictNote(n, opts.query, err);
+        return kExitUsage;
+    }
+    for (const oql::Note &n : parsed.notes)
+        err << "omapic: note: " << n.message << '\n';
+    out.canonical = oql::format(parsed.root, vocab);
+
+    // Smart-album references expand to the referenced album's current tree.
+    const QHash<int, oql::Node> stored = db.smartAlbumQueries();
+    QStringList problems;
+    out.tree = oql::expand(parsed.root, [&stored](int id) -> const oql::Node * {
+        const auto it = stored.constFind(id);
+        return it == stored.constEnd() ? nullptr : &it.value();
+    }, &problems);
+    if (opts.strict) {
+        collectMissing(out.tree, problems);
+        if (!problems.isEmpty()) {
+            for (const QString &p : problems) {
+                oql::Error e;
+                e.span = {0, int(opts.query.size())};
+                e.message = p;
+                printParseError(e, opts.query, err);
+            }
+            return kExitUsage;
+        }
+    }
+    for (const QString &p : problems)
+        err << "omapic: warning: " << p << '\n';
+    return kExitMatches;
+}
+
+struct Resolved {
     QVector<Photo> photos;
     int missing = 0;
 };
@@ -158,31 +235,8 @@ photosort::Mode sortMode(const QString &key)
     return photosort::Mode::Name;
 }
 
-int resolveQuery(const Options &opts, Database &db, QTextStream &err, Resolved &out)
+int resolveQuery(const Options &opts, Database &db, const oql::Node &tree, QTextStream &err, Resolved &out)
 {
-    oql::MapVocabulary vocab;
-    db.fillVocabulary(vocab);
-    const oql::ParseResult parsed = oql::parse(opts.query, vocab);
-    if (!parsed.ok()) {
-        printParseError(parsed.error, opts.query, err);
-        return kExitUsage;
-    }
-    // Readings that depended on the vocabulary are worth a warning: `dark forest`
-    // was split only because no tag has that name.
-    for (const oql::Note &n : parsed.notes)
-        err << "omapic: note: " << n.message << '\n';
-    out.canonical = oql::format(parsed.root, vocab);
-
-    // Smart-album references expand to the referenced album's current tree.
-    const QHash<int, oql::Node> stored = db.smartAlbumQueries();
-    QStringList problems;
-    const oql::Node tree = oql::expand(parsed.root, [&stored](int id) -> const oql::Node * {
-        const auto it = stored.constFind(id);
-        return it == stored.constEnd() ? nullptr : &it.value();
-    }, &problems);
-    for (const QString &p : problems)
-        err << "omapic: warning: " << p << '\n';
-
     const oql::EvalContext ctx = db.evalContext();
     for (const Photo &p : db.loadPhotos(/*activeOnly=*/!opts.includeDisabled)) {
         if (p.isDuplicate && !opts.allCopies)
@@ -267,25 +321,29 @@ Options parse(const QStringList &args)
     if (o.command == Command::None)
         return o;
 
-    // Options first, then the query. The first argument that isn't a known
-    // option (`-people` included) starts the query, as does `--`; an unknown
-    // `--long` option is a usage error rather than silently part of the query.
+    // Long options are recognised anywhere before `--`, even after the query
+    // has started, so `query beach --count` works; an unknown `--long` argument
+    // is a usage error rather than silently part of the query. Short options
+    // (-0, -h) count only before the query, because `-0` is valid OQL (NOT the
+    // tag "0") and `-people` starts a query. After `--` everything is query text.
     QStringList queryParts;
-    bool inOptions = true;
+    bool literal = false;
     int shapes = 0; // --count / --json / -0 given
     for (int i = 1; i < args.size(); ++i) {
         const QString a = args.at(i);
-        if (!inOptions) {
+        if (literal) {
             queryParts.append(a);
             continue;
         }
         if (a == QStringLiteral("--")) {
-            inOptions = false;
+            literal = true;
             continue;
         }
+        const bool isLong = a.startsWith(QStringLiteral("--")) && a.size() > 2;
+        const bool isShort = !isLong && queryParts.isEmpty() && a.startsWith(QLatin1Char('-')) && a.size() == 2;
         QString name, value;
         bool hasValue = false;
-        if (a.startsWith(QStringLiteral("--")) && a.size() > 2) {
+        if (isLong) {
             name = a.mid(2);
             const int eq = name.indexOf(QLatin1Char('='));
             if (eq >= 0) {
@@ -293,16 +351,15 @@ Options parse(const QStringList &args)
                 name = name.left(eq);
                 hasValue = true;
             }
-        } else if (a.startsWith(QLatin1Char('-')) && a.size() == 2) {
+        } else if (isShort) {
             name = a.mid(1);
         }
         const OptionSpec *spec = name.isEmpty() ? nullptr : findOption(name, o.command);
         if (!spec) {
-            if (a.startsWith(QStringLiteral("--")) && a.size() > 2) {
-                o.error = QStringLiteral("Unknown option %1 (put -- before a query that starts with --)").arg(a);
+            if (isLong) {
+                o.error = QStringLiteral("Unknown option %1 (put -- before the query if it is query text)").arg(a);
                 return o;
             }
-            inOptions = false;
             queryParts.append(a);
             continue;
         }
@@ -331,6 +388,8 @@ Options parse(const QStringList &args)
             ++shapes;
         } else if (n == QLatin1String("explain")) {
             o.explain = true;
+        } else if (n == QLatin1String("strict")) {
+            o.strict = true;
         } else if (n == QLatin1String("sort")) {
             if (value != QStringLiteral("name") && value != QStringLiteral("date") && value != QStringLiteral("tags")) {
                 o.error = QStringLiteral("--sort takes name, date or tags, not \"%1\"").arg(value);
@@ -395,11 +454,11 @@ QString usage(Command command)
               "       omapic slideshow [options] '<query>' play the matches as a slideshow\n"
               "\n"
               "Subcommands win over file arguments: open a file named \"query\" with\n"
-              "`omapic ./query` or `omapic -- query`. Options go before the query; the first\n"
-              "argument that isn't an option starts it (so `omapic query -people` is a query),\n"
-              "and `--` ends the options explicitly. Run `omapic <subcommand> --help` for its\n"
-              "options. Exit codes: 0 matches, 1 no matches, 2 usage or query error, 3 the\n"
-              "library could not be opened.\n";
+              "`omapic ./query` or `omapic -- query`. Long options go anywhere before `--`\n"
+              "(`omapic query beach --count`); short ones (-0, -h) only before the query, so\n"
+              "`omapic query -people` is a query. Everything after `--` is query text. Run\n"
+              "`omapic <subcommand> --help` for its options. Exit codes: 0 matches, 1 no\n"
+              "matches, 2 usage or query error, 3 the library could not be opened.\n";
         return s;
     }
     const QString name = commandName(command);
@@ -505,14 +564,16 @@ int runHeadless(const Options &opts, const QString &dbPath, QTextStream &out, QT
         return names.isEmpty() ? kExitNoMatches : kExitMatches;
     }
 
-    Resolved r;
-    const int code = resolveQuery(opts, db, err, r);
-    if (code == kExitUsage)
-        return code;
+    Parsed q;
+    if (parseQuery(opts, db, err, q) != kExitMatches)
+        return kExitUsage;
     if (opts.explain) {
-        out << r.canonical << '\n';
-        return code;
+        // How the query was read; whether anything matches is beside the point.
+        out << q.canonical << '\n';
+        return kExitMatches;
     }
+    Resolved r;
+    const int code = resolveQuery(opts, db, q.tree, err, r);
     switch (opts.output) {
     case Output::Count:
         out << r.photos.size() << '\n';
@@ -546,11 +607,14 @@ int resolveMedia(const Options &opts, const QString &dbPath, QList<QUrl> &urls, 
     const int opened = openLibrary(db, dbPath, err);
     if (opened != kExitMatches)
         return opened;
+    Parsed q;
+    if (parseQuery(opts, db, err, q) != kExitMatches)
+        return kExitUsage;
     Resolved r;
-    const int code = resolveQuery(opts, db, err, r);
+    const int code = resolveQuery(opts, db, q.tree, err, r);
     if (code != kExitMatches) {
         if (code == kExitNoMatches)
-            err << "omapic: nothing matches " << r.canonical << '\n';
+            err << "omapic: nothing matches " << q.canonical << '\n';
         return code;
     }
     for (const Photo &p : r.photos)

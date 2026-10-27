@@ -16,10 +16,11 @@
 // application object; everything here runs on omapic-core only, so the tests
 // drive it against a temporary library.
 //
-//   omapic query [--count | --json | -0] [--explain] [--sort name|date|tags]
-//                [--reverse] [--all-copies] [--include-disabled] '<query>'
+//   omapic query [--count | --json | -0] [--explain] [--strict]
+//                [--sort name|date|tags] [--reverse] [--all-copies]
+//                [--include-disabled] '<query>'
 //   omapic tags | albums | categories
-//   omapic view [scope/sort flags] [--fullscreen] '<query>'
+//   omapic view [scope/sort flags] [--strict] [--fullscreen] '<query>'
 //   omapic slideshow [scope/sort flags] [--interval S] [--shuffle]
 //                    [--shuffle-folders] [--crossfade] [--start-random]
 //                    [--loop-videos] [--fullscreen] '<query>'
@@ -29,14 +30,17 @@
 // The one piece of library state it honours is which folders are enabled,
 // because that lives in the database (see --include-disabled).
 //
-// Options come before the query. Option parsing stops at the first argument
-// that isn't a known option (so `omapic query -people` is a query), or at `--`.
-// Several remaining arguments (an unquoted query the shell split) are joined
-// with single spaces.
+// A subcommand's long options are recognised anywhere before `--`, before or
+// after the query has started (`omapic query beach --count`); an unknown
+// `--long` argument is a usage error. Short options (-0, -h) count only before
+// the query, because a term like `-0` is valid OQL (NOT the tag "0"); so is
+// `-people`, which starts the query. `--` ends option parsing and everything
+// after it is query text. Several query arguments (an unquoted query the shell
+// split) are joined with single spaces.
 //
-// Exit codes: 0 = matches, 1 = no matches, 2 = parse or usage error, 3 = the
-// library could not be opened (missing, needs the app to upgrade it, or newer
-// than this build).
+// Exit codes: 0 = matches (for --explain: the query parses), 1 = no matches,
+// 2 = parse or usage error, 3 = the library could not be opened (missing, needs
+// the app to upgrade it, or newer than this build).
 namespace cli {
 
 enum class Command { None, Query, Tags, Albums, Categories, View, Slideshow };
@@ -54,6 +58,9 @@ struct Options {
     QString query;   // the joined query text
     Output output = Output::Paths;
     bool explain = false;
+    // Refuse any reading that depended on the library's names (every oql::Note)
+    // and any smart-album expansion problem, instead of noting it on stderr.
+    bool strict = false;
     QString sort = QStringLiteral("name"); // name | date | tags
     bool reverse = false;
     bool allCopies = false;       // keep duplicate copies (by content hash)
