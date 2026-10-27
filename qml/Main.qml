@@ -1578,6 +1578,11 @@ ApplicationWindow {
         // Search toggles folder/album views between navigation (tiles) and flat results.
         function onSearchTextChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
     }
+    Connections {
+        target: library
+        // An applied advanced query narrows the folder and album tiles too.
+        function onAdvancedQueryChanged() { win.pruneSelection(); win.refreshFolderEntries(); win.refreshAlbumEntries() }
+    }
 
     // Changing the tag filter re-anchors the gallery to the top of the results.
     Connections {

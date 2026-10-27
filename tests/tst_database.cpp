@@ -889,6 +889,13 @@ void TestDatabase::activePhotoPathsFilteredByTags()
              QStringList{QStringLiteral("/p/2.jpg")});
     // A single-tag filter.
     QCOMPARE(m_db->activePhotoPaths({dog}, false).size(), 2);
+    // A photo scope (the applied advanced query) narrows both forms; an empty
+    // scope in force is no photo at all.
+    QCOMPARE(m_db->activePhotoPaths({}, true, {p1, p3}, true),
+             (QStringList{QStringLiteral("/p/1.jpg"), QStringLiteral("/p/3.jpg")}));
+    QCOMPARE(m_db->activePhotoPaths({dog, park}, false, {p1, p3}, true).size(), 2);
+    QCOMPARE(m_db->activePhotoPaths({dog}, false, {p3}, true).size(), 0);
+    QVERIFY(m_db->activePhotoPaths({}, true, {}, true).isEmpty());
     // Empty selection falls back to the whole active set.
     QCOMPARE(m_db->activePhotoPaths({}, true).size(), 3);
 }

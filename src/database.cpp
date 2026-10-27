@@ -1032,10 +1032,21 @@ QStringList Database::activePhotoPaths()
     return paths;
 }
 
-QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matchAll)
+QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matchAll,
+                                       const QList<int> &scopeIds, bool scoped)
 {
-    if (selectedTags.isEmpty())
+    if (selectedTags.isEmpty() && !scoped)
         return activePhotoPaths();
+    const QString scope = photoScopeClause(scopeIds, scoped);
+    if (selectedTags.isEmpty()) {
+        QStringList paths;
+        QSqlQuery q(QStringLiteral("SELECT p.path FROM photos p WHERE %1%2 ORDER BY p.path")
+                        .arg(activeClause(QStringLiteral("p")), scope),
+                    m_db);
+        while (q.next())
+            paths.append(q.value(0).toString());
+        return paths;
+    }
 
     QStringList ph;
     for (int i = 0; i < selectedTags.size(); ++i)
@@ -1051,10 +1062,10 @@ QStringList Database::activePhotoPaths(const QList<int> &selectedTags, bool matc
     QStringList paths;
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
-                  "SELECT p.path FROM photos p WHERE %1 AND p.id IN ("
+                  "SELECT p.path FROM photos p WHERE %1%4 AND p.id IN ("
                   "  SELECT pt.photo_id FROM photo_tags pt WHERE pt.tag_id IN (%2)%3) "
                   "ORDER BY p.path")
-                  .arg(activeClause(QStringLiteral("p")), inList, having));
+                  .arg(activeClause(QStringLiteral("p")), inList, having, scope));
     for (int id : selectedTags)
         q.addBindValue(id);
     q.exec();

@@ -591,11 +591,13 @@ void Library::updateFolderRoots()
 QVariantList Library::folderEntries(const QString &path) const
 {
     QVariantList out;
-    // When a tag filter is active, build the tiles from only the matching photos,
-    // so the folder view shows only folders that contain the selected tags.
+    // When a tag filter or an advanced query is active, build the tiles from only
+    // the matching photos, so the folder view shows only folders that contain them
+    // (and their mosaics show only them).
     const QList<int> selTags = m_tags->selectedTagIds();
-    const bool filtering = !selTags.isEmpty();
-    const QStringList paths = m_db.activePhotoPaths(selTags, m_matchAll);
+    const bool advanced = !m_advancedText.isEmpty();
+    const bool filtering = !selTags.isEmpty() || advanced;
+    const QStringList paths = m_db.activePhotoPaths(selTags, m_matchAll, advancedScopeIds(), advanced);
 
     // A folder tile, with the count of active photos at or under `dir` and the
     // first (by path) up-to-4 of them for the cover mosaic.
@@ -676,7 +678,9 @@ QStringList Library::folderSlideshowSources(const QStringList &folderPaths,
                                             const QVariantList &photoIds) const
 {
     QStringList out;
-    const QStringList active = m_db.activePhotoPaths(); // sorted by path
+    // Sorted by path; narrowed to the applied advanced query, as the tiles are.
+    const bool advanced = !m_advancedText.isEmpty();
+    const QStringList active = m_db.activePhotoPaths({}, true, advancedScopeIds(), advanced);
     for (const QString &dir : folderPaths) {
         const QString prefix = dir + QLatin1Char('/');
         for (const QString &p : active) {

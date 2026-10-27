@@ -315,7 +315,10 @@ public:
     // Same, restricted to photos matching a tag selection (matchAll = must carry
     // every selected tag; otherwise any). Empty selection returns all active
     // paths. Lets the folder view show only folders holding the filtered photos.
-    QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll);
+    // With `scoped`, also restricted to the photos in `scopeIds` (the gallery's
+    // applied advanced query), as the facet queries are.
+    QStringList activePhotoPaths(const QList<int> &selectedTags, bool matchAll,
+                                 const QList<int> &scopeIds = {}, bool scoped = false);
 
     // --- Tag samples (the tag-popover thumbnails) ---
     // Up to `limit` paths of active photos carrying `tagId`, chosen so the set
