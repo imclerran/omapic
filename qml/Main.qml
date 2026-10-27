@@ -2702,12 +2702,18 @@ ApplicationWindow {
         onFormValidChanged: syncOk()
         // Basic ⇄ Advanced. Going to the builder seeds it with the picked set; coming
         // back is offered only while the built query is a plain tag set.
-        readonly property bool canGoBasic: mode === "smart" && !basic && builder.valid
-                                           && library.parseQuery(builder.text).simple === true
+        // Allowed while the built query is empty or a plain tag set.
+        readonly property bool canGoBasic: mode === "smart" && !basic
+            && (builder.empty || (builder.valid && library.parseQuery(builder.text).simple === true))
         function setBasic(on) {
             if (on === basic)
                 return
             if (on) {
+                if (builder.empty) {
+                    smartPicker.clear()
+                    basic = true
+                    return
+                }
                 const p = library.parseQuery(builder.text)
                 if (!p.ok || !p.simple)
                     return
