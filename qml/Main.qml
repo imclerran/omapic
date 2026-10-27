@@ -2595,8 +2595,9 @@ ApplicationWindow {
                 id: albumNameField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Album name")
-                // '|' is the sidecar hierarchy separator; not allowed in names.
-                validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
+                // Name rules: no '|' (sidecar separator), no '"' (query quote),
+                // no leading/doubled whitespace. See TagAutoField.
+                validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
                 onAccepted: newAlbumDialog.accept()
                 ClearButton { field: albumNameField }
             }
@@ -2656,6 +2657,8 @@ ApplicationWindow {
                 id: smartNameField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Smart album name")
+                // Same name rules as tags and albums (see TagAutoField).
+                validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
                 ClearButton { field: smartNameField }
             }
             TagPicker {

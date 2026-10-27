@@ -4,7 +4,7 @@
 
 #include <QtTest>
 
-#include "textfold.h"
+#include "textmatch.h"
 
 // foldText backs every accent-/case-insensitive search and autocomplete in the
 // app (C++ filter and the QML TextMatch singleton), so a regression here would

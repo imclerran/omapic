@@ -352,9 +352,23 @@ private:
     void migrate_12_to_13(); // replace '|' with '/' in tag/category names (non-additive)
     void migrate_13_to_14(); // clear videos' mtime dates so creation_time is re-read (additive)
     void migrate_14_to_15(); // tag_aliases table (additive)
+    void migrate_15_to_16(); // strip '"' / collapse whitespace in names (non-additive)
     // True when any tag or category name contains '|' (so the rename above would
     // actually change rows). Gates the pre-migration backup.
     bool namesContainPipe();
+    // True when any tag, category or smart-album name differs from its sanitized
+    // form (migrate_15_to_16 would change rows). Gates that step's backup.
+    bool namesNeedNormalizing();
+    // (id, name) of the rows of `table` whose name sanitizeName would change.
+    QVector<QPair<int, QString>> rowsNeedingNormalizing(
+        const QString &table, const QString &idColumn = QStringLiteral("id"),
+        const QString &nameColumn = QStringLiteral("name"));
+    // Rename each listed tag / category to its sanitized name, merging it into an
+    // existing row of that name when there is one (tags via mergeTagInto,
+    // categories by reassigning their tags). Shared by the '|' and the quote /
+    // whitespace migrations.
+    void normalizeNameRows(const QVector<QPair<int, QString>> &tags,
+                           const QVector<QPair<int, QString>> &cats);
     // True when migrate_8_to_9 would actually move rows (a legacy bare "Albums"
     // system category is present). Gates the pre-migration backup so a fresh
     // library isn't backed up pointlessly.

@@ -21,7 +21,7 @@ namespace {
 // and add a matching migrate_(N)_to_(N+1) step for every schema change. A library
 // with a higher version than this is refused by open() (it was written by a newer
 // Omapic). See runMigrations.
-constexpr int kSchemaVersion = 15;
+constexpr int kSchemaVersion = 16;
 
 // Album tags are stored under a reserved, namespaced prefix so an album named
 // "Destiny" can't collide with a user tag "Destiny" (tag names are globally
@@ -42,15 +42,32 @@ QString systemDisplayName(const QString &stored)
     return stored.startsWith(kSystemPrefix) ? stored.mid(kSystemPrefix.size()) : stored;
 }
 
-// '|' is the hierarchy separator in the XMP sidecar (Category|Tag), so it must
-// never appear in a tag or category name or it would corrupt the exported
-// hierarchy. Replace it with '/' on the way in; the editor also rejects it, and
-// a migration converts any pre-existing names.
+// The characters and shapes a tag, category or album name may not have, fixed
+// on the way in (the editors reject them too, and migrations convert any
+// pre-existing names):
+//  - '|' is the hierarchy separator in the XMP sidecar (Category|Tag), so it
+//    would corrupt the exported hierarchy: replaced with '/'.
+//  - '"' is the one character the OQL query language can't quote (a quoted
+//    name has no escape), so it would make a name unwritable in a query:
+//    replaced with the typographic quotes “ ” (opening after whitespace, '('
+//    or at the start; closing elsewhere).
+//  - Runs of whitespace collapse to a single space and the ends are trimmed,
+//    so a query's longest-match name resolution (which folds whitespace the
+//    same way) can never tell two names apart by spacing alone.
+// Everything else stays legal — spaces, parentheses, colons, a leading '-' or
+// '(' — because the query language quotes around them and a ban would break
+// sidecar round-trips with other tools' keywords.
 QString sanitizeName(const QString &name)
 {
     QString s = name;
     s.replace(QLatin1Char('|'), QLatin1Char('/'));
-    return s;
+    for (int i = 0; i < s.size(); ++i) {
+        if (s.at(i) != QLatin1Char('"'))
+            continue;
+        const bool opening = i == 0 || s.at(i - 1).isSpace() || s.at(i - 1) == QLatin1Char('(');
+        s[i] = opening ? QChar(0x201C) : QChar(0x201D); // “ or ”
+    }
+    return s.simplified();
 }
 }
 
@@ -139,6 +156,7 @@ bool Database::runMigrations(int fromVersion)
         {13, &Database::migrate_12_to_13, &Database::namesContainPipe},
         {14, &Database::migrate_13_to_14, nullptr},
         {15, &Database::migrate_14_to_15, nullptr},
+        {16, &Database::migrate_15_to_16, &Database::namesNeedNormalizing},
     };
     for (const Step &s : steps) {
         if (s.target <= fromVersion)
@@ -398,14 +416,26 @@ void Database::migrate_12_to_13()
     // appear in a tag or category name. Replace it with '/', merging any name that
     // would collide (case-insensitively, since the name columns are COLLATE NOCASE)
     // into the existing row rather than hitting the UNIQUE constraint.
-
-    // Tags. Collect the offenders first (the loop rewrites the table).
-    QVector<QPair<int, QString>> tags;
+    QVector<QPair<int, QString>> tags, cats;
     {
         QSqlQuery q(QStringLiteral("SELECT id, name FROM tags WHERE name LIKE '%|%'"), m_db);
         while (q.next())
             tags.append({q.value(0).toInt(), q.value(1).toString()});
     }
+    {
+        QSqlQuery q(QStringLiteral(
+            "SELECT id, name FROM tag_categories WHERE name LIKE '%|%'"), m_db);
+        while (q.next())
+            cats.append({q.value(0).toInt(), q.value(1).toString()});
+    }
+    normalizeNameRows(tags, cats);
+}
+
+void Database::normalizeNameRows(const QVector<QPair<int, QString>> &tags,
+                                 const QVector<QPair<int, QString>> &cats)
+{
+    // Tags: rename each to its sanitized form, or fold it into the tag that
+    // already has that name.
     for (const auto &t : tags) {
         const int oldId = t.first;
         const QString target = sanitizeName(t.second);
@@ -434,13 +464,6 @@ void Database::migrate_12_to_13()
 
     // Categories. Only tags.category_id references a category, so the merge is
     // just reassigning that column.
-    QVector<QPair<int, QString>> cats;
-    {
-        QSqlQuery q(QStringLiteral(
-            "SELECT id, name FROM tag_categories WHERE name LIKE '%|%'"), m_db);
-        while (q.next())
-            cats.append({q.value(0).toInt(), q.value(1).toString()});
-    }
     for (const auto &c : cats) {
         const int oldId = c.first;
         const QString target = sanitizeName(c.second);
@@ -500,6 +523,76 @@ void Database::migrate_14_to_15()
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE)"));
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tag_aliases_tag ON tag_aliases(tag_id)"));
+}
+
+QVector<QPair<int, QString>> Database::rowsNeedingNormalizing(const QString &table,
+                                                              const QString &idColumn,
+                                                              const QString &nameColumn)
+{
+    QVector<QPair<int, QString>> out;
+    QSqlQuery q(QStringLiteral("SELECT %1, %2 FROM %3").arg(idColumn, nameColumn, table), m_db);
+    while (q.next()) {
+        const QString name = q.value(1).toString();
+        if (sanitizeName(name) != name)
+            out.append({q.value(0).toInt(), name});
+    }
+    return out;
+}
+
+bool Database::namesNeedNormalizing()
+{
+    return !rowsNeedingNormalizing(QStringLiteral("tags")).isEmpty()
+        || !rowsNeedingNormalizing(QStringLiteral("tag_categories")).isEmpty()
+        || !rowsNeedingNormalizing(QStringLiteral("smart_albums")).isEmpty()
+        || !rowsNeedingNormalizing(QStringLiteral("tag_aliases"), QStringLiteral("rowid"),
+                                   QStringLiteral("alias_name")).isEmpty();
+}
+
+void Database::migrate_15_to_16()
+{
+    // Non-additive: the OQL query language (oql.h) resolves names by longest
+    // match with whitespace folded, and quotes a name with '"' when it must, so a
+    // name may no longer contain '"' or runs of whitespace (see sanitizeName).
+    // Rewrite every tag (albums included — they are tags), category and smart
+    // album name to its sanitized form, merging tags and categories whose new
+    // name collides with an existing row exactly as the '|' migration did.
+    normalizeNameRows(rowsNeedingNormalizing(QStringLiteral("tags")),
+                      rowsNeedingNormalizing(QStringLiteral("tag_categories")));
+    // Smart albums reference nothing by name, so a collision just needs a
+    // distinct name: append " (2)", " (3)", … until it is unique.
+    for (const auto &sa : rowsNeedingNormalizing(QStringLiteral("smart_albums"))) {
+        const QString base = sanitizeName(sa.second);
+        QString target = base;
+        for (int n = 2;; ++n) {
+            QSqlQuery sel(m_db);
+            sel.prepare(QStringLiteral("SELECT 1 FROM smart_albums WHERE name = ? AND id <> ?"));
+            sel.addBindValue(target);
+            sel.addBindValue(sa.first);
+            sel.exec();
+            if (!sel.next())
+                break;
+            target = QStringLiteral("%1 (%2)").arg(base).arg(n);
+        }
+        QSqlQuery ren(m_db);
+        ren.prepare(QStringLiteral("UPDATE smart_albums SET name = ? WHERE id = ?"));
+        ren.addBindValue(target);
+        ren.addBindValue(sa.first);
+        ren.exec();
+    }
+    // Aliases are plain redirects, so one whose sanitized name is already taken
+    // (by another alias or by a tag) is simply dropped.
+    for (const auto &a : rowsNeedingNormalizing(QStringLiteral("tag_aliases"), QStringLiteral("rowid"),
+                                                QStringLiteral("alias_name"))) {
+        const QString target = sanitizeName(a.second);
+        const bool taken = aliasExists(target) || tagIdByName(target) >= 0;
+        QSqlQuery q(m_db);
+        q.prepare(taken ? QStringLiteral("DELETE FROM tag_aliases WHERE rowid = ?")
+                        : QStringLiteral("UPDATE tag_aliases SET alias_name = ? WHERE rowid = ?"));
+        if (!taken)
+            q.addBindValue(target);
+        q.addBindValue(a.first);
+        q.exec();
+    }
 }
 
 bool Database::legacyAlbumsNeedRename()
@@ -2308,7 +2401,7 @@ int Database::tagCategoryId(int tagId)
 
 int Database::createAlbum(const QString &name)
 {
-    const QString trimmed = name.trimmed();
+    const QString trimmed = sanitizeName(name);
     if (trimmed.isEmpty() || m_albumCategoryId < 0)
         return -1;
     // Albums are stored under the namespaced "_album:" prefix, so they never
@@ -2375,7 +2468,7 @@ SmartAlbumInfo Database::smartAlbum(int id)
 
 int Database::createSmartAlbum(const QString &name, const QList<int> &tagIds, bool matchAll)
 {
-    const QString trimmed = name.trimmed();
+    const QString trimmed = sanitizeName(name);
     if (trimmed.isEmpty() || tagIds.isEmpty())
         return -1;
     beginTransaction();
@@ -2402,7 +2495,7 @@ int Database::createSmartAlbum(const QString &name, const QList<int> &tagIds, bo
 
 bool Database::updateSmartAlbum(int id, const QString &name, const QList<int> &tagIds, bool matchAll)
 {
-    const QString trimmed = name.trimmed();
+    const QString trimmed = sanitizeName(name);
     if (trimmed.isEmpty() || tagIds.isEmpty())
         return false;
     beginTransaction();

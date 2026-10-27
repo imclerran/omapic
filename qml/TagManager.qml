@@ -326,8 +326,9 @@ Dialog {
                 id: field
                 Layout.fillWidth: true
                 selectByMouse: true
-                // '|' is the sidecar hierarchy separator; not allowed in names.
-                validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
+                // Name rules: no '|' (sidecar separator), no '"' (query quote),
+                // no leading/doubled whitespace. See TagAutoField.
+                validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
                 onAccepted: renameDialog.apply()
                 ClearButton { field: field }
             }
@@ -404,8 +405,9 @@ Dialog {
                 Layout.fillWidth: true
                 selectByMouse: true
                 placeholderText: qsTr("Category name (e.g. Place, Event, Artist)")
-                // '|' is the sidecar hierarchy separator; not allowed in names.
-                validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
+                // Name rules: no '|' (sidecar separator), no '"' (query quote),
+                // no leading/doubled whitespace. See TagAutoField.
+                validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
                 onAccepted: newCategoryDialog.apply()
                 ClearButton { field: newField }
             }
@@ -1235,8 +1237,8 @@ Dialog {
                         id: aliasField
                         Layout.fillWidth: true
                         placeholderText: qsTr("alias…")
-                        // '|' is the sidecar hierarchy separator, barred from names.
-                        validator: RegularExpressionValidator { regularExpression: /[^|]*/ }
+                        // Name rules: no '|', no '"', no leading/doubled whitespace.
+                        validator: RegularExpressionValidator { regularExpression: /([^|"\s]+( [^|"\s]+)* ?)?/ }
                         onTextEdited: aliasesTab.confirmPending = false
                         onAccepted: aliasRow.submit()
                     }

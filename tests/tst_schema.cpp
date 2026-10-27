@@ -38,6 +38,7 @@ private slots:
     void convertsPipeNamesAndMergesCollisions();
     void clearsVideoDatesForCreationTimeReread();
     void upgradesToV15AddsTagAliases();
+    void normalizesQuotesAndWhitespaceInNames();
 
 private:
     // Count rows in orphaned_hashes matching `hash` (-1 if the table is absent).
@@ -437,6 +438,86 @@ void TestSchema::upgradesToV15AddsTagAliases()
         QVERIFY(backupFiles().isEmpty()); // additive step → no backup
     }
     QSqlDatabase::removeDatabase(QStringLiteral("c_v15"));
+}
+
+void TestSchema::normalizesQuotesAndWhitespaceInNames()
+{
+    // Seed names the API would now sanitize via raw SQL, then rewind to v15 so
+    // the v16 normalization genuinely runs. Covers: a '"' becoming typographic
+    // quotes, whitespace runs collapsing, a tag whose cleaned name collides with
+    // an existing tag (merged), a category collision (tags reassigned), a smart
+    // album collision (suffixed), an alias collision (dropped), and album tags
+    // (which are tags under the "_album:" prefix).
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_seed16")));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_seed16"));
+
+    execRaw(dbPath(), QStringLiteral(
+        "INSERT INTO photos(id, path) VALUES (1, '/a.jpg');"
+        "INSERT INTO photos(id, path) VALUES (2, '/b.jpg');"
+        "INSERT INTO tags(id, name) VALUES (10, 'say \"hi\" (\"there\")');"
+        "INSERT INTO tags(id, name) VALUES (11, 'dark   forest');"
+        "INSERT INTO tags(id, name) VALUES (12, 'dark forest');"
+        "INSERT INTO tags(id, name) VALUES (13, '_album:Trip  2019');"
+        "INSERT INTO photo_tags(photo_id, tag_id) VALUES (1, 11);"
+        "INSERT INTO photo_tags(photo_id, tag_id) VALUES (2, 12);"
+        "INSERT INTO tag_categories(id, name, color_slot, system) VALUES (20, 'Place  ', 0, 0);"
+        "INSERT INTO tag_categories(id, name, color_slot, system) VALUES (21, 'Place', 1, 0);"
+        "INSERT INTO tags(id, name, category_id) VALUES (14, 'paris', 20);"
+        "INSERT INTO smart_albums(id, name, match_all) VALUES (30, 'Best \"of\"', 1);"
+        "INSERT INTO smart_albums(id, name, match_all) VALUES (31, 'Best “of”', 1);"
+        "INSERT INTO tag_aliases(alias_name, tag_id) VALUES ('woods  ', 12);"
+        "INSERT INTO tag_aliases(alias_name, tag_id) VALUES ('woods', 12);"
+        "INSERT INTO tag_aliases(alias_name, tag_id) VALUES ('the  forest', 12);"
+        "PRAGMA user_version = 15;"));
+
+    {
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v16")));
+        QCOMPARE(readUserVersion(dbPath()), Database::currentSchemaVersion());
+
+        // Quotes became typographic, opening after whitespace / '(' and closing
+        // elsewhere; nothing else in the name changed.
+        QCOMPARE(db.tagName(10), QString::fromUtf8("say \u201chi\u201d (\u201cthere\u201d)"));
+        // The collapsed name collided with tag 12 and was merged into it.
+        QVERIFY(db.tagName(11).isEmpty());
+        const int forest = db.tagIdByName(QStringLiteral("dark forest"));
+        QCOMPARE(forest, 12);
+        QVERIFY(db.photoTagIds(1).contains(forest));
+        QVERIFY(db.photoTagIds(2).contains(forest));
+        // Album tags are normalized like any tag.
+        QCOMPARE(db.tagName(13), QStringLiteral("_album:Trip 2019"));
+        // The category collision reassigned its tags to the surviving row.
+        QCOMPARE(db.categoryName(20), QString());
+        QCOMPARE(db.tagCategoryId(14), 21);
+        // The smart album collision got a distinct suffixed name.
+        QCOMPARE(db.smartAlbum(30).name, QString::fromUtf8("Best \u201cof\u201d (2)"));
+        QCOMPARE(db.smartAlbum(31).name, QString::fromUtf8("Best \u201cof\u201d"));
+        // The duplicate alias was dropped, the other cleaned.
+        const QVector<AliasInfo> aliases = db.loadAliases();
+        QStringList names;
+        for (const AliasInfo &a : aliases)
+            names.append(a.aliasName);
+        names.sort();
+        QCOMPARE(names, QStringList({QStringLiteral("the forest"), QStringLiteral("woods")}));
+
+        // Rows changed, so the non-additive step wrote a backup.
+        QVERIFY(!backupFiles().isEmpty());
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v16"));
+
+    // A library whose names are already clean takes no backup for this step.
+    {
+        execRaw(dbPath(), QStringLiteral("PRAGMA user_version = 15;"));
+        for (const QString &f : backupFiles())
+            QFile::remove(m_dir->filePath(f));
+        Database db;
+        QVERIFY(db.open(dbPath(), QStringLiteral("c_v16b")));
+        QVERIFY(backupFiles().isEmpty());
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("c_v16b"));
 }
 
 QTEST_GUILESS_MAIN(TestSchema)
