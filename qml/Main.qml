@@ -2748,7 +2748,13 @@ ApplicationWindow {
                 library: library
                 accent: win.accent
                 tagSampleFn: win.tagSampleFn
+                // tagSuggestions() is a call, not a property, so refresh it on the
+                // library's tag signal rather than binding to it once.
                 tags: library.tagSuggestions()
+                Connections {
+                    target: library
+                    function onTagsChanged() { builder.tags = library.tagSuggestions() }
+                }
                 aliases: library.tagAliases
                 implications: library.tagImplications
                 // Enter on an empty field: save (smart mode) or apply (advanced).

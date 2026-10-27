@@ -74,7 +74,19 @@ Item {
         return pal[slot % pal.length]
     }
     function focusInput() { if (root.rawMode) rawField.forceActiveFocus(); else input.focusInput() }
-    readonly property var vocab: root.library ? root.library.queryVocabulary() : ({ albums: [], categories: [] })
+    // The album and category names offered after album: / cat:. A function call
+    // registers no binding dependency, so this is re-fetched explicitly whenever
+    // the library's albums or categories change (a smart album saved a moment
+    // ago must be offered at once).
+    property var vocab: ({ albums: [], categories: [] })
+    function refreshVocab() { root.vocab = root.library ? root.library.queryVocabulary() : { albums: [], categories: [] } }
+    onLibraryChanged: refreshVocab()
+    Component.onCompleted: refreshVocab()
+    Connections {
+        target: root.library
+        function onAlbumsChanged() { root.refreshVocab() }
+        function onCategoriesChanged() { root.refreshVocab() }
+    }
 
     // --- loading / reading the query ---
     function setQueryText(t) {
