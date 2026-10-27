@@ -130,10 +130,15 @@ results are what the gallery's flat view shows — one copy per file content
 (`--all-copies` keeps duplicates), enabled folders only (`--include-disabled`
 adds the rest), files that exist on disk (missing ones are counted on stderr),
 in the grid's natural name order (`--sort name|date|tags`, `--reverse`; dates
-and tag counts read newest / most-tagged first). `slideshow` starts from the
-gallery's saved slideshow settings and applies `--interval S`, `--shuffle`,
-`--shuffle-folders`, `--crossfade` / `--no-crossfade`, `--start-random` and
-`--loop` on top; `--fullscreen` opens `view` full screen.
+and tag counts read newest / most-tagged first). `slideshow` shows each photo
+for 4 seconds, in order, with cuts between them, unless a flag says otherwise:
+`--interval S`, `--shuffle`, `--shuffle-folders`, `--crossfade`,
+`--start-random` and `--loop-videos`; `--fullscreen` opens `view` full screen.
+
+The command line depends only on its arguments and the library. It never reads
+the gallery's saved settings, so a command behaves the same whatever was last
+clicked in the app; the one piece of library state it honours is which folders
+are enabled, because that is part of the library itself.
 
 Options go before the query. The first argument that isn't an option starts
 the query — so `omapic query -people` is the query `-people` — and `--` ends
