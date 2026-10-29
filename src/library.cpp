@@ -1775,19 +1775,36 @@ QVariantList Library::commonTags(const QVariantList &photoIds) const
 {
     QHash<int, int> counts;
     QHash<int, TagInfo> infos;
+    int n = 0; // photos actually counted, so "on every photo" means count == n
     for (const QVariant &v : photoIds) {
         const int pid = v.toInt();
         if (pid < 0)
             continue;
+        ++n;
         for (const TagInfo &t : m_db.photoTags(pid)) {
             counts[t.id] += 1;
             infos[t.id] = t;
         }
     }
 
+    // Order: tags on every selected photo before partial ones, then by category
+    // (alphabetical, uncategorized last, as the tag-info popover groups them),
+    // then by name within a category. For a single photo every tag is "full",
+    // so the first key is a no-op there.
     QList<int> ids = counts.keys();
     std::sort(ids.begin(), ids.end(), [&](int a, int b) {
-        return infos.value(a).name.compare(infos.value(b).name, Qt::CaseInsensitive) < 0;
+        const bool fullA = counts.value(a) == n;
+        const bool fullB = counts.value(b) == n;
+        if (fullA != fullB)
+            return fullA;
+        const TagInfo &ta = infos[a];
+        const TagInfo &tb = infos[b];
+        if (ta.categoryName.isEmpty() != tb.categoryName.isEmpty())
+            return tb.categoryName.isEmpty();
+        const int cat = ta.categoryName.compare(tb.categoryName, Qt::CaseInsensitive);
+        if (cat != 0)
+            return cat < 0;
+        return ta.name.compare(tb.name, Qt::CaseInsensitive) < 0;
     });
 
     QVariantList out;

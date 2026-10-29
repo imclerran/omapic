@@ -206,6 +206,8 @@ public:
     // folderSlideshowSources so selected album tiles play like selected folders.
     Q_INVOKABLE QStringList albumSlideshowSources(const QVariantList &albumIds,
                                                   const QVariantList &photoIds) const;
+    // Every tag on any of `photoIds`, with how many of them carry it, ordered
+    // tags-on-all first, then by category (uncategorized last), then by name.
     Q_INVOKABLE QVariantList commonTags(const QVariantList &photoIds) const;
     Q_INVOKABLE QStringList allTagNames() const;
     // Tags relevant to the active set as {name, colorSlot, categoryName}, for the
