@@ -553,8 +553,10 @@ void Library::updateSearchAliases()
 
 QVariantList Library::tagAliases() const
 {
+    // Aliases shown in the tag manager: those of tags with at least one photo in
+    // an active folder, as the tag list and the association list are scoped.
     QVariantList out;
-    for (const AliasInfo &a : m_db.loadAliases()) {
+    for (const AliasInfo &a : m_db.loadAliases(/*activeOnly=*/true)) {
         out.append(QVariantMap{
             {QStringLiteral("aliasName"), a.aliasName},
             {QStringLiteral("tagId"), a.tagId},
@@ -1284,19 +1286,24 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
 
 QVariantList Library::albums() const
 {
+    return albumTiles(/*narrowed=*/true);
+}
+
+QVariantList Library::albumTiles(bool narrowed) const
+{
     const QVector<AlbumInfo> metas = m_db.albumTags();        // Favorites first, then name
     const QVector<SmartAlbumInfo> smart = m_db.smartAlbums(); // by name
 
     // Count members (and gather up-to-4 cover thumbs) per album over the active
-    // photo set, honoring the current tag filter — so album tiles narrow exactly
-    // like folder tiles. A regular album's membership is a plain tagIds test; a
-    // smart album's is its expanded query tree. Both are keyed in `acc` by the
-    // UI-facing album id (smart albums use the reserved high id range).
-    const QList<int> sel = m_tags->selectedTagIds();
+    // photo set, honoring the current tag filter when `narrowed` — so album tiles
+    // narrow exactly like folder tiles. A regular album's membership is a plain
+    // tagIds test; a smart album's is its expanded query tree. Both are keyed in
+    // `acc` by the UI-facing album id (smart albums use the reserved high id range).
+    const QList<int> sel = narrowed ? m_tags->selectedTagIds() : QList<int>();
     const bool filtering = !sel.isEmpty();
     const oql::Node selQuery = oql::fromTagSet(sel, m_matchAll);
     // The builder's applied query narrows the tiles as the sidebar filter does.
-    const bool advanced = !m_advancedText.isEmpty();
+    const bool advanced = narrowed && !m_advancedText.isEmpty();
     const oql::Node &advQuery = m_advancedTree;
 
     struct Acc { int count = 0; QStringList thumbs; };
@@ -1307,7 +1314,14 @@ QVariantList Library::albums() const
         if (x.thumbs.size() < 4)
             x.thumbs.append(p.path);
     };
+    // Every tag id (album tags included) carried by some photo in the active
+    // library, for the smart-album visibility rule below. Gathered before the
+    // filter narrows anything: what is active is a property of the enabled
+    // folders, not of the current selection.
+    QSet<int> activeTagIds;
     for (const Photo &p : m_photos->photos()) {
+        if (!smart.isEmpty())
+            activeTagIds.unite(p.tagIds);
         if (filtering && !oql::matches(selQuery, p.tagIds, m_evalContext))
             continue;
         if (advanced && !oql::matches(advQuery, p.tagIds, m_evalContext))
@@ -1340,13 +1354,43 @@ QVariantList Library::albums() const
         });
     }
     // Smart album tiles after the regular ones (by name). Hidden when empty, like
-    // everything else. They carry their query text for the tile's tooltip (the
-    // vocabulary it is formatted against is loaded only when a tile needs it).
+    // everything else, and hidden when the rule names anything outside the
+    // active library: a tag, album or category that only disabled folders carry
+    // (see namesOnlyActive). They carry their query text for the tile's tooltip
+    // (the vocabulary it is formatted against is loaded only when a tile needs it).
+    QSet<int> activeCategoryIds;
+    for (int t : activeTagIds) {
+        const int c = m_evalContext.tagCategory.value(t, -1);
+        if (c >= 0)
+            activeCategoryIds.insert(c);
+    }
+    const int favoritesId = m_db.favoritesTagId();
+    // Whether every tag, album and category a (expanded) rule names is active.
+    // The tag sidebar, tag manager and category list all drop names that no
+    // active photo carries, so a disabled folder's tags stay out of sight; a
+    // smart album tile must not surface them instead — not through its rule
+    // text, and not through a rule like -"dark forest" that, with no active
+    // "dark forest" photo, is simply the whole library. The check ignores
+    // negation and structure on purpose: the name shows either way. Favorites
+    // is always listed, so naming it is always fine. Missing terms (deleted
+    // names) are left to the evaluator, which never matches them.
+    auto namesOnlyActive = [&](const oql::Node &tree) {
+        for (int id : oql::referencedIds(tree, {oql::NodeKind::Tag, oql::NodeKind::Album}))
+            if (id != favoritesId && !activeTagIds.contains(id))
+                return false;
+        for (int id : oql::referencedIds(tree, {oql::NodeKind::Category}))
+            if (!activeCategoryIds.contains(id))
+                return false;
+        return true;
+    };
     oql::MapVocabulary vocab;
     bool vocabLoaded = false;
     for (const SmartAlbumInfo &sa : smart) {
         const Acc x = acc.value(kSmartAlbumIdBase + sa.id);
         if (x.count == 0)
+            continue;
+        const auto tree = m_smartTrees.constFind(sa.id);
+        if (tree == m_smartTrees.constEnd() || !namesOnlyActive(tree.value()))
             continue;
         if (!vocabLoaded) {
             m_db.fillVocabulary(vocab);
@@ -1674,11 +1718,19 @@ int Library::queryMatchCount(const QString &text) const
 QVariantMap Library::queryVocabulary() const
 {
     QVariantList albums, categories;
-    for (const AlbumInfo &a : m_db.albumTags())
-        albums.append(QVariantMap{{QStringLiteral("name"), a.name}, {QStringLiteral("smart"), false}});
-    for (const SmartAlbumInfo &sa : m_db.smartAlbums())
-        albums.append(QVariantMap{{QStringLiteral("name"), sa.name}, {QStringLiteral("smart"), true}});
-    for (const CategoryInfo &c : m_db.loadCategories(/*activeOnly=*/false))
+    // The albums the album list shows over the active library — not narrowed by
+    // the current selection or applied query, which are what the builder edits.
+    for (const QVariant &v : albumTiles(/*narrowed=*/false)) {
+        const QVariantMap tile = v.toMap();
+        albums.append(QVariantMap{{QStringLiteral("name"), tile.value(QStringLiteral("name"))},
+                                  {QStringLiteral("smart"), tile.value(QStringLiteral("smart"))}});
+    }
+    // Active categories only, as the category list shows them: a category whose
+    // tags all sit in disabled folders is a name the active library hides, and
+    // the cat: suggestions must not surface it (see albums() for the matching
+    // smart-album rule). The builder refreshes on categoriesChanged, which fires
+    // whenever the active set changes, so a re-enabled folder brings them back.
+    for (const CategoryInfo &c : m_db.loadCategories(/*activeOnly=*/true))
         categories.append(QVariantMap{{QStringLiteral("name"), c.name}, {QStringLiteral("colorSlot"), c.colorSlot}});
     return QVariantMap{{QStringLiteral("albums"), albums}, {QStringLiteral("categories"), categories}};
 }
@@ -1726,7 +1778,10 @@ QString Library::saveSmartAlbumQuery(int albumId, const QString &name, const QSt
             return tr("A smart album already uses that name");
     }
     rebuildQueryState();
-    emit albumsChanged();
+    if (m_tagAlbumScope == albumId)
+        refreshTags(); // the open album's membership changed; emits albumsChanged
+    else
+        emit albumsChanged();
     return {};
 }
 
@@ -1752,7 +1807,10 @@ bool Library::updateSmartAlbum(int albumId, const QString &name,
     if (!m_db.updateSmartAlbum(albumId - kSmartAlbumIdBase, name, tags, matchAll))
         return false;
     rebuildQueryState();
-    emit albumsChanged();
+    if (m_tagAlbumScope == albumId)
+        refreshTags(); // the open album's membership changed; emits albumsChanged
+    else
+        emit albumsChanged();
     return true;
 }
 
@@ -2070,15 +2128,46 @@ void Library::setTagFolderScope(const QString &path)
     refreshTags(); // the sidebar now lists only tags in this folder subtree
 }
 
+void Library::setTagAlbumScope(int albumId)
+{
+    const int id = albumId > 0 ? albumId : 0;
+    if (m_tagAlbumScope == id)
+        return;
+    m_tagAlbumScope = id;
+    refreshTags(); // the sidebar now lists only tags on the album's photos
+}
+
+QList<int> Library::tagScopeIds(bool *scoped) const
+{
+    const bool advanced = !m_advancedText.isEmpty();
+    const bool album = m_tagAlbumScope > 0;
+    *scoped = advanced || album;
+    QList<int> ids;
+    if (!*scoped)
+        return ids;
+    const oql::Node albumQuery = album ? albumTree(m_tagAlbumScope) : oql::Node();
+    for (const Photo &p : m_photos->photos()) {
+        if (advanced && !oql::matches(m_advancedTree, p.tagIds, m_evalContext))
+            continue;
+        if (album && !oql::matches(albumQuery, p.tagIds, m_evalContext))
+            continue;
+        ids.append(p.id);
+    }
+    return ids;
+}
+
 void Library::refreshTags()
 {
     // The filter sidebar shows only tags relevant to the active (shown) set, with
-    // counts over that set; tags touching only hidden folders drop out. In "match
-    // all" mode with tags already selected, it narrows further to co-occurring
-    // tags (faceted drill-down). Database::facetTags does all of that; apply it
-    // here on the GUI thread.
+    // counts over that set; tags touching only hidden folders drop out. Inside a
+    // folder or an album, or under an applied query, it narrows to the tags on
+    // those photos. In "match all" mode with tags already selected, it narrows
+    // further to co-occurring tags (faceted drill-down). Database::facetTags does
+    // all of that; apply it here on the GUI thread.
+    bool scoped = false;
+    const QList<int> scope = tagScopeIds(&scoped);
     applyFacetTags(m_db.facetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll,
-                                  advancedScopeIds(), !m_advancedText.isEmpty()));
+                                  scope, scoped));
 }
 
 void Library::refreshTagsAsync()
@@ -2086,8 +2175,9 @@ void Library::refreshTagsAsync()
     // Same result as refreshTags(), but the ~150ms query runs on the worker so it
     // never freezes the window — used at launch, where a synchronous build would
     // stall the first interaction.
-    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll,
-                          advancedScopeIds(), !m_advancedText.isEmpty());
+    bool scoped = false;
+    const QList<int> scope = tagScopeIds(&scoped);
+    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll, scope, scoped);
 }
 
 void Library::onFacetTagsReady(const QVector<TagInfo> &tags)
@@ -2105,11 +2195,13 @@ void Library::applyFacetTags(const QVector<TagInfo> &tags)
     // before the album tiles and the grid re-read it.
     rebuildQueryState();
     emit tagsChanged();
-    // Category and implication visibility in the tag manager depend on the same
-    // active set (a category is hidden once all its tags leave the active folders;
-    // an association once either of its tags does), so refresh both in lockstep.
+    // Category, implication and alias visibility in the tag manager depend on the
+    // same active set (a category is hidden once all its tags leave the active
+    // folders; an association once either of its tags does; an alias once its
+    // tag does), so refresh them in lockstep.
     emit categoriesChanged();
     emit implicationsChanged();
+    emit aliasesChanged();
     // Album tiles count only active photos (and honor the tag filter), too.
     emit albumsChanged();
 }

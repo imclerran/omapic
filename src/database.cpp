@@ -2156,15 +2156,30 @@ bool Database::aliasExists(const QString &name)
     return q.next();
 }
 
-QVector<AliasInfo> Database::loadAliases()
+QVector<AliasInfo> Database::loadAliases(bool activeOnly)
 {
+    // When activeOnly, keep an alias only if its canonical tag applies to a
+    // photo in an active folder — the same active-photos/active-tags CTE as
+    // implications().
+    const QString cte = activeOnly
+        ? QStringLiteral(
+              "WITH active_photos AS (SELECT p.id FROM photos p WHERE %1), "
+              "active_tags AS (SELECT DISTINCT pt.tag_id FROM photo_tags pt "
+              "  WHERE pt.photo_id IN (SELECT id FROM active_photos)) ")
+              .arg(activeClause(QStringLiteral("p")))
+        : QString();
+    const QString where = activeOnly
+        ? QStringLiteral("WHERE a.tag_id IN (SELECT tag_id FROM active_tags) ")
+        : QString();
     QVector<AliasInfo> out;
     QSqlQuery q(QStringLiteral(
+                    "%1"
                     "SELECT a.alias_name, t.id, t.name, c.color_slot, c.name "
                     "FROM tag_aliases a "
                     "JOIN tags t ON t.id = a.tag_id "
                     "LEFT JOIN tag_categories c ON c.id = t.category_id "
-                    "ORDER BY t.name COLLATE NOCASE, a.alias_name COLLATE NOCASE"),
+                    "%2"
+                    "ORDER BY t.name COLLATE NOCASE, a.alias_name COLLATE NOCASE").arg(cte, where),
                 m_db);
     while (q.next()) {
         AliasInfo info;
