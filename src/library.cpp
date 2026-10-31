@@ -1307,7 +1307,14 @@ QVariantList Library::albums() const
         if (x.thumbs.size() < 4)
             x.thumbs.append(p.path);
     };
+    // Every tag id (album tags included) carried by some photo in the active
+    // library, for the smart-album visibility rule below. Gathered before the
+    // filter narrows anything: what is active is a property of the enabled
+    // folders, not of the current selection.
+    QSet<int> activeTagIds;
     for (const Photo &p : m_photos->photos()) {
+        if (!smart.isEmpty())
+            activeTagIds.unite(p.tagIds);
         if (filtering && !oql::matches(selQuery, p.tagIds, m_evalContext))
             continue;
         if (advanced && !oql::matches(advQuery, p.tagIds, m_evalContext))
@@ -1340,13 +1347,43 @@ QVariantList Library::albums() const
         });
     }
     // Smart album tiles after the regular ones (by name). Hidden when empty, like
-    // everything else. They carry their query text for the tile's tooltip (the
-    // vocabulary it is formatted against is loaded only when a tile needs it).
+    // everything else, and hidden when the rule names anything outside the
+    // active library: a tag, album or category that only disabled folders carry
+    // (see namesOnlyActive). They carry their query text for the tile's tooltip
+    // (the vocabulary it is formatted against is loaded only when a tile needs it).
+    QSet<int> activeCategoryIds;
+    for (int t : activeTagIds) {
+        const int c = m_evalContext.tagCategory.value(t, -1);
+        if (c >= 0)
+            activeCategoryIds.insert(c);
+    }
+    const int favoritesId = m_db.favoritesTagId();
+    // Whether every tag, album and category a (expanded) rule names is active.
+    // The tag sidebar, tag manager and category list all drop names that no
+    // active photo carries, so a disabled folder's tags stay out of sight; a
+    // smart album tile must not surface them instead — not through its rule
+    // text, and not through a rule like -"dark forest" that, with no active
+    // "dark forest" photo, is simply the whole library. The check ignores
+    // negation and structure on purpose: the name shows either way. Favorites
+    // is always listed, so naming it is always fine. Missing terms (deleted
+    // names) are left to the evaluator, which never matches them.
+    auto namesOnlyActive = [&](const oql::Node &tree) {
+        for (int id : oql::referencedIds(tree, {oql::NodeKind::Tag, oql::NodeKind::Album}))
+            if (id != favoritesId && !activeTagIds.contains(id))
+                return false;
+        for (int id : oql::referencedIds(tree, {oql::NodeKind::Category}))
+            if (!activeCategoryIds.contains(id))
+                return false;
+        return true;
+    };
     oql::MapVocabulary vocab;
     bool vocabLoaded = false;
     for (const SmartAlbumInfo &sa : smart) {
         const Acc x = acc.value(kSmartAlbumIdBase + sa.id);
         if (x.count == 0)
+            continue;
+        const auto tree = m_smartTrees.constFind(sa.id);
+        if (tree == m_smartTrees.constEnd() || !namesOnlyActive(tree.value()))
             continue;
         if (!vocabLoaded) {
             m_db.fillVocabulary(vocab);
