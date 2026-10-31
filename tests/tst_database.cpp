@@ -110,6 +110,7 @@ private slots:
     void removeAliasKeepsCanonicalTag();
     void deletingCanonicalTagCascadesAliases();
     void renameTagOntoAliasNameIsRejectedByDatabase();
+    void listedAliasesNeedActiveTags();
 
     void linkPhotoTagFailsOnMissingForeignKey();
     void coOccurringTagsEmptyWhenNoCoOccurrence();
@@ -453,6 +454,25 @@ void TestDatabase::listedImplicationsNeedActiveTags()
     QCOMPARE(imps.size(), 1);
     QCOMPARE(imps.first().antecedentName, QStringLiteral("beach"));
     QCOMPARE(imps.first().consequentName, QStringLiteral("vacation"));
+}
+
+void TestDatabase::listedAliasesNeedActiveTags()
+{
+    const int forest = m_db->ensureTag(QStringLiteral("forest"));
+    QVERIFY(m_db->createAlias(QStringLiteral("woods"), forest));
+
+    // The alias exists, but with its tag on no active photo only the full list
+    // (the CLI's) has it; the active-only list (the tag manager's) does not.
+    QCOMPARE(m_db->loadAliases().size(), 1);
+    QVERIFY(m_db->loadAliases(/*activeOnly=*/true).isEmpty());
+
+    // Put the tag on an active (orphan) photo; now the alias is listed.
+    const int photo = m_db->insertPhoto(QStringLiteral("/p/1.jpg"), QString());
+    m_db->linkPhotoTag(photo, forest);
+    const QVector<AliasInfo> aliases = m_db->loadAliases(/*activeOnly=*/true);
+    QCOMPARE(aliases.size(), 1);
+    QCOMPARE(aliases.first().aliasName, QStringLiteral("woods"));
+    QCOMPARE(aliases.first().tagId, forest);
 }
 
 void TestDatabase::implicationCycleDetection()

@@ -553,8 +553,10 @@ void Library::updateSearchAliases()
 
 QVariantList Library::tagAliases() const
 {
+    // Aliases shown in the tag manager: those of tags with at least one photo in
+    // an active folder, as the tag list and the association list are scoped.
     QVariantList out;
-    for (const AliasInfo &a : m_db.loadAliases()) {
+    for (const AliasInfo &a : m_db.loadAliases(/*activeOnly=*/true)) {
         out.append(QVariantMap{
             {QStringLiteral("aliasName"), a.aliasName},
             {QStringLiteral("tagId"), a.tagId},
@@ -2193,11 +2195,13 @@ void Library::applyFacetTags(const QVector<TagInfo> &tags)
     // before the album tiles and the grid re-read it.
     rebuildQueryState();
     emit tagsChanged();
-    // Category and implication visibility in the tag manager depend on the same
-    // active set (a category is hidden once all its tags leave the active folders;
-    // an association once either of its tags does), so refresh both in lockstep.
+    // Category, implication and alias visibility in the tag manager depend on the
+    // same active set (a category is hidden once all its tags leave the active
+    // folders; an association once either of its tags does; an alias once its
+    // tag does), so refresh them in lockstep.
     emit categoriesChanged();
     emit implicationsChanged();
+    emit aliasesChanged();
     // Album tiles count only active photos (and honor the tag filter), too.
     emit albumsChanged();
 }

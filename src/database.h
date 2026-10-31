@@ -204,7 +204,10 @@ public:
     // tag's own id, else -1. ensureTag and the import path consult aliases too, so
     // an alias never creates a tag.
     int resolveTagName(const QString &name);
-    QVector<AliasInfo> loadAliases();       // every alias, ordered by canonical name then alias
+    // Every alias, ordered by canonical name then alias; with activeOnly, only
+    // those whose tag applies to a photo in an active folder (the tag manager's
+    // list, which drops inactive tags like the tag list itself).
+    QVector<AliasInfo> loadAliases(bool activeOnly = false);
     bool aliasExists(const QString &name);  // case-insensitive: is `name` already an alias?
     // Create an alias `name` -> canonical tag `tagId`. When `name` is also an
     // existing tag, that tag is first merged into the canonical one (its photo,
