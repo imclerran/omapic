@@ -1715,7 +1715,12 @@ QVariantMap Library::queryVocabulary() const
         albums.append(QVariantMap{{QStringLiteral("name"), a.name}, {QStringLiteral("smart"), false}});
     for (const SmartAlbumInfo &sa : m_db.smartAlbums())
         albums.append(QVariantMap{{QStringLiteral("name"), sa.name}, {QStringLiteral("smart"), true}});
-    for (const CategoryInfo &c : m_db.loadCategories(/*activeOnly=*/false))
+    // Active categories only, as the category list shows them: a category whose
+    // tags all sit in disabled folders is a name the active library hides, and
+    // the cat: suggestions must not surface it (see albums() for the matching
+    // smart-album rule). The builder refreshes on categoriesChanged, which fires
+    // whenever the active set changes, so a re-enabled folder brings them back.
+    for (const CategoryInfo &c : m_db.loadCategories(/*activeOnly=*/true))
         categories.append(QVariantMap{{QStringLiteral("name"), c.name}, {QStringLiteral("colorSlot"), c.colorSlot}});
     return QVariantMap{{QStringLiteral("albums"), albums}, {QStringLiteral("categories"), categories}};
 }

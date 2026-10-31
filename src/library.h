@@ -316,7 +316,8 @@ public:
     // text; -1 when it doesn't parse. The builder's live count.
     Q_INVOKABLE int queryMatchCount(const QString &text) const;
     // The names the builder offers after album: and cat: — every album and smart
-    // album as {name, smart}, every user category as {name, colorSlot}.
+    // album as {name, smart}, every active user category (one with a tag on a
+    // photo in an enabled folder) as {name, colorSlot}.
     Q_INVOKABLE QVariantMap queryVocabulary() const;
 
     // --- Context-menu actions (operate on one or many selected photos) ---
