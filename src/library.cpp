@@ -1284,19 +1284,24 @@ void Library::removeTagFromPhotos(const QVariantList &photoIds, int tagId)
 
 QVariantList Library::albums() const
 {
+    return albumTiles(/*narrowed=*/true);
+}
+
+QVariantList Library::albumTiles(bool narrowed) const
+{
     const QVector<AlbumInfo> metas = m_db.albumTags();        // Favorites first, then name
     const QVector<SmartAlbumInfo> smart = m_db.smartAlbums(); // by name
 
     // Count members (and gather up-to-4 cover thumbs) per album over the active
-    // photo set, honoring the current tag filter — so album tiles narrow exactly
-    // like folder tiles. A regular album's membership is a plain tagIds test; a
-    // smart album's is its expanded query tree. Both are keyed in `acc` by the
-    // UI-facing album id (smart albums use the reserved high id range).
-    const QList<int> sel = m_tags->selectedTagIds();
+    // photo set, honoring the current tag filter when `narrowed` — so album tiles
+    // narrow exactly like folder tiles. A regular album's membership is a plain
+    // tagIds test; a smart album's is its expanded query tree. Both are keyed in
+    // `acc` by the UI-facing album id (smart albums use the reserved high id range).
+    const QList<int> sel = narrowed ? m_tags->selectedTagIds() : QList<int>();
     const bool filtering = !sel.isEmpty();
     const oql::Node selQuery = oql::fromTagSet(sel, m_matchAll);
     // The builder's applied query narrows the tiles as the sidebar filter does.
-    const bool advanced = !m_advancedText.isEmpty();
+    const bool advanced = narrowed && !m_advancedText.isEmpty();
     const oql::Node &advQuery = m_advancedTree;
 
     struct Acc { int count = 0; QStringList thumbs; };
@@ -1711,10 +1716,13 @@ int Library::queryMatchCount(const QString &text) const
 QVariantMap Library::queryVocabulary() const
 {
     QVariantList albums, categories;
-    for (const AlbumInfo &a : m_db.albumTags())
-        albums.append(QVariantMap{{QStringLiteral("name"), a.name}, {QStringLiteral("smart"), false}});
-    for (const SmartAlbumInfo &sa : m_db.smartAlbums())
-        albums.append(QVariantMap{{QStringLiteral("name"), sa.name}, {QStringLiteral("smart"), true}});
+    // The albums the album list shows over the active library — not narrowed by
+    // the current selection or applied query, which are what the builder edits.
+    for (const QVariant &v : albumTiles(/*narrowed=*/false)) {
+        const QVariantMap tile = v.toMap();
+        albums.append(QVariantMap{{QStringLiteral("name"), tile.value(QStringLiteral("name"))},
+                                  {QStringLiteral("smart"), tile.value(QStringLiteral("smart"))}});
+    }
     // Active categories only, as the category list shows them: a category whose
     // tags all sit in disabled folders is a name the active library hides, and
     // the cat: suggestions must not surface it (see albums() for the matching
