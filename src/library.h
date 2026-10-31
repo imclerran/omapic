@@ -150,6 +150,9 @@ public:
     // Scope the filter sidebar's tag chips to a folder subtree (folder view). Empty
     // string = the whole active library (flat / timeline views).
     Q_INVOKABLE void setTagFolderScope(const QString &path);
+    // Scope the filter sidebar's tag chips to an album's members (album view,
+    // inside an album). 0 = no album scope (the list level and the other views).
+    Q_INVOKABLE void setTagAlbumScope(int albumId);
     Q_INVOKABLE void addTag(int photoId, const QString &name);
     Q_INVOKABLE void removeTag(int photoId, int tagId);
     // --- Triage (one-photo-at-a-time tagging with undo) ---
@@ -475,12 +478,18 @@ private:
     // The photos the applied query matches (every active photo, copies included,
     // as the sidebar counts them), for scoping the facet tags; empty when none.
     QList<int> advancedScopeIds() const;
+    // The photos the sidebar's tags are drawn from when the applied query, the
+    // open album, or both narrow it: every active photo (copies included) that
+    // matches. `scoped` is false when neither applies; the list is then empty
+    // and means the whole active set.
+    QList<int> tagScopeIds(bool *scoped) const;
 
     QThread m_workerThread;
     LibraryWorker *m_worker = nullptr;
 
     bool m_matchAll = true; // mirrors the gallery's "match all tags" toggle
     QString m_tagFolderScope; // folder-view subtree the tag chips are scoped to ("" = all)
+    int m_tagAlbumScope = 0;  // album (UI id) the tag chips are scoped to (0 = none)
     int m_busyCount = 0;    // active jobs; m_busy mirrors (m_busyCount > 0)
     int m_modalCount = 0;   // active jobs that want the blocking overlay
     bool m_busy = false;

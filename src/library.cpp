@@ -1768,7 +1768,10 @@ QString Library::saveSmartAlbumQuery(int albumId, const QString &name, const QSt
             return tr("A smart album already uses that name");
     }
     rebuildQueryState();
-    emit albumsChanged();
+    if (m_tagAlbumScope == albumId)
+        refreshTags(); // the open album's membership changed; emits albumsChanged
+    else
+        emit albumsChanged();
     return {};
 }
 
@@ -1794,7 +1797,10 @@ bool Library::updateSmartAlbum(int albumId, const QString &name,
     if (!m_db.updateSmartAlbum(albumId - kSmartAlbumIdBase, name, tags, matchAll))
         return false;
     rebuildQueryState();
-    emit albumsChanged();
+    if (m_tagAlbumScope == albumId)
+        refreshTags(); // the open album's membership changed; emits albumsChanged
+    else
+        emit albumsChanged();
     return true;
 }
 
@@ -2112,15 +2118,46 @@ void Library::setTagFolderScope(const QString &path)
     refreshTags(); // the sidebar now lists only tags in this folder subtree
 }
 
+void Library::setTagAlbumScope(int albumId)
+{
+    const int id = albumId > 0 ? albumId : 0;
+    if (m_tagAlbumScope == id)
+        return;
+    m_tagAlbumScope = id;
+    refreshTags(); // the sidebar now lists only tags on the album's photos
+}
+
+QList<int> Library::tagScopeIds(bool *scoped) const
+{
+    const bool advanced = !m_advancedText.isEmpty();
+    const bool album = m_tagAlbumScope > 0;
+    *scoped = advanced || album;
+    QList<int> ids;
+    if (!*scoped)
+        return ids;
+    const oql::Node albumQuery = album ? albumTree(m_tagAlbumScope) : oql::Node();
+    for (const Photo &p : m_photos->photos()) {
+        if (advanced && !oql::matches(m_advancedTree, p.tagIds, m_evalContext))
+            continue;
+        if (album && !oql::matches(albumQuery, p.tagIds, m_evalContext))
+            continue;
+        ids.append(p.id);
+    }
+    return ids;
+}
+
 void Library::refreshTags()
 {
     // The filter sidebar shows only tags relevant to the active (shown) set, with
-    // counts over that set; tags touching only hidden folders drop out. In "match
-    // all" mode with tags already selected, it narrows further to co-occurring
-    // tags (faceted drill-down). Database::facetTags does all of that; apply it
-    // here on the GUI thread.
+    // counts over that set; tags touching only hidden folders drop out. Inside a
+    // folder or an album, or under an applied query, it narrows to the tags on
+    // those photos. In "match all" mode with tags already selected, it narrows
+    // further to co-occurring tags (faceted drill-down). Database::facetTags does
+    // all of that; apply it here on the GUI thread.
+    bool scoped = false;
+    const QList<int> scope = tagScopeIds(&scoped);
     applyFacetTags(m_db.facetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll,
-                                  advancedScopeIds(), !m_advancedText.isEmpty()));
+                                  scope, scoped));
 }
 
 void Library::refreshTagsAsync()
@@ -2128,8 +2165,9 @@ void Library::refreshTagsAsync()
     // Same result as refreshTags(), but the ~150ms query runs on the worker so it
     // never freezes the window — used at launch, where a synchronous build would
     // stall the first interaction.
-    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll,
-                          advancedScopeIds(), !m_advancedText.isEmpty());
+    bool scoped = false;
+    const QList<int> scope = tagScopeIds(&scoped);
+    emit requestFacetTags(m_tagFolderScope, m_tags->selectedTagIds(), m_matchAll, scope, scoped);
 }
 
 void Library::onFacetTagsReady(const QVector<TagInfo> &tags)

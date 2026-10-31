@@ -1461,6 +1461,9 @@ ApplicationWindow {
         // Scope the filter sidebar's tag chips to the current folder subtree while
         // browsing folders; the whole library otherwise (and at the folder root).
         library.setTagFolderScope(win.viewMode === "folder" ? win.currentFolder : "")
+        // And to the open album's members while inside one; none at the album
+        // list and in the other views.
+        library.setTagAlbumScope(albums && win.currentAlbum > 0 ? win.currentAlbum : 0)
     }
 
     // The natural direction for a sort mode: names read A→Z (ascending); dates and
