@@ -45,6 +45,32 @@ Item {
     // stale. Re-fetch them whenever the view is (re)shown.
     onVisibleChanged: if (visible) fv.dataRevision++
 
+    // The grid's model is a plain count (tiles + photos), so every change to
+    // it hands the view a new model: delegates are rebuilt and the scroll drops
+    // to the top. The photo count changes under the user's feet — a tag edit
+    // moves a photo out of a smart album or a tag filter — so apply those by
+    // hand and put the scroll back, now and again after the relayout. (A change
+    // in the tiles is navigation, which Main re-anchors anyway.)
+    property int photoCount: 0
+    function applyPhotoCount() {
+        const n = fv.library ? fv.library.filtered.count : 0
+        if (n === fv.photoCount)
+            return
+        const y = fgrid ? fgrid.contentY : 0
+        fv.photoCount = n
+        if (!fgrid || y <= 0)
+            return
+        fgrid.contentY = y
+        fgrid.returnToBounds()
+        Qt.callLater(function () { fgrid.contentY = y; fgrid.returnToBounds() })
+    }
+    Connections {
+        target: fv.library ? fv.library.filtered : null
+        function onCountChanged() { fv.applyPhotoCount() }
+    }
+    onLibraryChanged: applyPhotoCount()
+    Component.onCompleted: applyPhotoCount()
+
     signal goUp()                            // climb one level (Up button / Alt+Up)
     signal enterFolder(string path)          // descend into a folder (Enter on a selected folder)
     signal cellClicked(int gridIndex, int modifiers)
@@ -142,7 +168,7 @@ Item {
             maximumFlickVelocity: 6000
             ScrollBar.vertical: ScrollBar {}
 
-            model: fv.folderCount + (fv.library ? fv.library.filtered.count : 0)
+            model: fv.folderCount + fv.photoCount
 
             focus: true
             keyNavigationEnabled: false
