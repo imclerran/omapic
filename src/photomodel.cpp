@@ -112,21 +112,106 @@ QHash<int, QByteArray> PhotoModel::roleNames() const
     };
 }
 
+namespace {
+// Beyond this many separate removed/inserted runs, a reload is a different set,
+// not an edit: one reset is cheaper than that many proxy re-mappings, and a view
+// has nothing to hold its place against anyway.
+constexpr int kMaxSplices = 64;
+}
+
 void PhotoModel::setPhotos(QVector<Photo> photos)
 {
     // Reloads after a worker job (launch migration/rescan, sidecar flush, …) often
-    // re-fetch an identical set. A reset would still tear down and recreate every
-    // delegate — blanking all the thumbnails — so skip it when nothing changed.
+    // re-fetch an identical set. Equality ignores the derived search blob, so a
+    // re-fetch compares equal and nothing is signalled.
     if (photos == m_photos)
         return;
-    beginResetModel();
-    m_photos = std::move(photos);
-    m_idToRow.clear();
-    for (int i = 0; i < m_photos.size(); ++i) {
-        m_idToRow.insert(m_photos.at(i).id, i);
-        m_photos[i].searchFold = buildSearchFold(m_photos.at(i));
+
+    // Plan the splice. Survivors are the old rows whose id is still present;
+    // they must appear in the same relative order in the new set, which holds
+    // whenever the load order (added_at, id) is stable across the reload.
+    struct Run { int first; int count; };
+    QVector<Run> removals; // in old-row terms, ascending
+    QVector<Run> inserts;  // in new-row terms, ascending
+    bool splice = !m_photos.isEmpty() && !photos.isEmpty();
+    if (splice) {
+        QSet<int> newIds;
+        newIds.reserve(photos.size());
+        for (const Photo &p : photos)
+            newIds.insert(p.id);
+        QVector<int> survivors; // old rows kept, in old order
+        for (int i = 0; i < m_photos.size(); ++i) {
+            if (newIds.contains(m_photos.at(i).id)) {
+                survivors.append(i);
+            } else if (!removals.isEmpty()
+                       && removals.last().first + removals.last().count == i) {
+                ++removals.last().count;
+            } else {
+                removals.append({i, 1});
+            }
+        }
+        int k = 0; // next survivor to match
+        for (int j = 0; j < photos.size() && splice; ++j) {
+            if (k < survivors.size() && m_photos.at(survivors.at(k)).id == photos.at(j).id) {
+                ++k;
+            } else if (m_idToRow.contains(photos.at(j).id)) {
+                splice = false; // a survivor out of order: the load order changed
+            } else if (!inserts.isEmpty() && inserts.last().first + inserts.last().count == j) {
+                ++inserts.last().count;
+            } else {
+                inserts.append({j, 1});
+            }
+        }
+        if (k != survivors.size() || removals.size() + inserts.size() > kMaxSplices)
+            splice = false;
     }
-    endResetModel();
+
+    if (!splice) {
+        beginResetModel();
+        m_photos = std::move(photos);
+        m_idToRow.clear();
+        for (int i = 0; i < m_photos.size(); ++i) {
+            m_idToRow.insert(m_photos.at(i).id, i);
+            m_photos[i].searchFold = buildSearchFold(m_photos.at(i));
+        }
+        endResetModel();
+        return;
+    }
+
+    // Removals from the end, so earlier runs keep their row numbers.
+    for (int r = removals.size() - 1; r >= 0; --r) {
+        const Run run = removals.at(r);
+        beginRemoveRows({}, run.first, run.first + run.count - 1);
+        m_photos.remove(run.first, run.count);
+        endRemoveRows();
+    }
+    // Then a forward walk over the new set: insert each new run where it
+    // belongs, and refresh a survivor in place when its fields changed (tags,
+    // favorite, duplicate flag, capture time, path …).
+    int ins = 0;
+    for (int j = 0; j < photos.size(); ++j) {
+        if (ins < inserts.size() && inserts.at(ins).first == j) {
+            const Run run = inserts.at(ins++);
+            beginInsertRows({}, j, j + run.count - 1);
+            for (int n = 0; n < run.count; ++n) {
+                m_photos.insert(j + n, photos.at(j + n));
+                m_photos[j + n].searchFold = buildSearchFold(m_photos.at(j + n));
+            }
+            endInsertRows();
+            j += run.count - 1;
+            continue;
+        }
+        Photo &old = m_photos[j];
+        if (old != photos.at(j)) {
+            old = photos.at(j);
+            old.searchFold = buildSearchFold(old);
+            const QModelIndex idx = index(j, 0);
+            emit dataChanged(idx, idx);
+        }
+    }
+    m_idToRow.clear();
+    for (int i = 0; i < m_photos.size(); ++i)
+        m_idToRow.insert(m_photos.at(i).id, i);
 }
 
 void PhotoModel::appendPhoto(const Photo &photo)

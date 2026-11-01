@@ -59,8 +59,11 @@ private slots:
     void combinedTagAndSearchFilters();
     void accessorsHandleOutOfRange();
 
-    // setPhotos no-op guard (keeps launch reloads from blinking the thumbnails)
+    // setPhotos: a reload splices the model in place (keeps the view's scroll and
+    // delegates) and skips no-op reloads; only a reorder or a sweeping change resets.
     void setPhotosSkipsResetWhenUnchanged();
+    void setPhotosSplicesRemovalsInsertionsAndEdits();
+    void setPhotosResetsOnReorderOrEmptySet();
 
 private:
     static Photo makePhoto(int id, const QString &path, const QString &name,
@@ -599,10 +602,88 @@ void TestPhotoFilterModel::setPhotosSkipsResetWhenUnchanged()
     m_source->setPhotos(photos);
     QCOMPARE(resets.count(), 0);
 
-    // A real change (a favorite flips) still resets.
+    // A real change (a favorite flips) is signalled for that row, not by a reset.
+    QSignalSpy changed(m_source, &QAbstractItemModel::dataChanged);
     photos[1].favorite = true;
     m_source->setPhotos(photos);
+    QCOMPARE(resets.count(), 0);
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(changed.first().at(0).toModelIndex().row(), 1);
+    QVERIFY(m_source->photoById(11).favorite);
+}
+
+void TestPhotoFilterModel::setPhotosSplicesRemovalsInsertionsAndEdits()
+{
+    const int dog = 1, cat = 2;
+    QVector<Photo> photos;
+    for (int id = 10; id < 18; ++id)
+        photos.append(makePhoto(id, QStringLiteral("/p/%1.jpg").arg(id), QStringLiteral("%1.jpg").arg(id)));
+    m_source->setPhotos(photos);
+
+    QSignalSpy resets(m_source, &QAbstractItemModel::modelReset);
+    QSignalSpy removed(m_source, &QAbstractItemModel::rowsRemoved);
+    QSignalSpy inserted(m_source, &QAbstractItemModel::rowsInserted);
+    QSignalSpy changed(m_source, &QAbstractItemModel::dataChanged);
+
+    // The reload after a tag edit plus a trash and an import: rows 11-12 are gone,
+    // 15 is gone, 13 gained tags, a photo was added before 14 and two at the end.
+    QVector<Photo> next;
+    next.append(photos.at(0));                                                         // 10
+    Photo tagged = photos.at(3);                                                      // 13
+    tagged.tagIds = {dog, cat};
+    tagged.tagNames = {QStringLiteral("cat"), QStringLiteral("dog")};
+    next.append(tagged);
+    next.append(makePhoto(30, QStringLiteral("/p/30.jpg"), QStringLiteral("30.jpg")));
+    next.append(photos.at(4));                                                         // 14
+    next.append(photos.at(6));                                                         // 16
+    next.append(photos.at(7));                                                         // 17
+    next.append(makePhoto(31, QStringLiteral("/p/31.jpg"), QStringLiteral("31.jpg")));
+    next.append(makePhoto(32, QStringLiteral("/p/32.jpg"), QStringLiteral("32.jpg")));
+    m_source->setPhotos(next);
+
+    QCOMPARE(resets.count(), 0);
+    // Two removal runs (11-12, then 15), two insertion runs (30; 31-32), one edit.
+    QCOMPARE(removed.count(), 2);
+    QCOMPARE(inserted.count(), 2);
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(changed.first().at(0).toModelIndex().row(), 1); // 13's new row
+
+    // The model equals the new set, row lookups follow, and the search blob of the
+    // edited row was rebuilt (so a search for its new tag finds it).
+    QCOMPARE(m_source->photos().size(), next.size());
+    for (int i = 0; i < next.size(); ++i) {
+        QCOMPARE(m_source->photos().at(i).id, next.at(i).id);
+        QCOMPARE(m_source->rowForId(next.at(i).id), i);
+    }
+    QVERIFY(m_source->rowForId(11) < 0);
+    QVERIFY(m_source->photoById(13).searchFold.contains(QStringLiteral("dog")));
+    // The proxy tracked the splices row by row.
+    QCOMPARE(proxyIds(), (QList<int>{10, 13, 14, 16, 17, 30, 31, 32}));
+}
+
+void TestPhotoFilterModel::setPhotosResetsOnReorderOrEmptySet()
+{
+    QVector<Photo> photos{
+        makePhoto(10, QStringLiteral("/p/a.jpg"), QStringLiteral("a.jpg")),
+        makePhoto(11, QStringLiteral("/p/b.jpg"), QStringLiteral("b.jpg")),
+        makePhoto(12, QStringLiteral("/p/c.jpg"), QStringLiteral("c.jpg")),
+    };
+    m_source->setPhotos(photos);
+    QSignalSpy resets(m_source, &QAbstractItemModel::modelReset);
+
+    // Survivors out of order: splicing can't express it, so the model resets.
+    std::swap(photos[0], photos[2]);
+    m_source->setPhotos(photos);
     QCOMPARE(resets.count(), 1);
+    QCOMPARE(proxyIds(), (QList<int>{10, 11, 12})); // the proxy still sorts by name
+
+    // Emptying, and filling from empty, reset too.
+    m_source->setPhotos({});
+    QCOMPARE(resets.count(), 2);
+    QCOMPARE(m_source->rowCount(), 0);
+    m_source->setPhotos(photos);
+    QCOMPARE(resets.count(), 3);
+    QCOMPARE(m_source->rowCount(), 3);
 }
 
 // Custom entry point instead of QTEST_GUILESS_MAIN: PhotoFilterModel sorts with a
