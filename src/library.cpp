@@ -2101,15 +2101,21 @@ int Library::renameTag(int tagId, const QString &newName)
 
 void Library::applyTags(int photoId)
 {
-    // tagIds carries every tag (including the hidden album/favorites ones the album
-    // filter and the star need); the visible names come from photoTags(), which
-    // already drops system tags.
-    const QSet<int> ids = m_db.photoTagIds(photoId);
-    QStringList names;
-    for (const TagInfo &t : m_db.photoTags(photoId))
-        names.append(t.name);
-    const bool favorite = ids.contains(m_db.favoritesTagId());
-    m_photos->setTagsForId(photoId, ids, names, favorite);
+    // A tag change is by content, so every copy of the photo's content changed
+    // in the database; refresh each copy's row, not just the one acted on, or a
+    // duplicate keeps stale tags until the next full reload (and the filters,
+    // which read the model, would judge it by them).
+    const int favoritesId = m_db.favoritesTagId();
+    for (int pid : m_db.contentCopyIds(photoId)) {
+        // tagIds carries every tag (including the hidden album/favorites ones the
+        // album filter and the star need); the visible names come from
+        // photoTags(), which already drops system tags.
+        const QSet<int> ids = m_db.photoTagIds(pid);
+        QStringList names;
+        for (const TagInfo &t : m_db.photoTags(pid))
+            names.append(t.name);
+        m_photos->setTagsForId(pid, ids, names, ids.contains(favoritesId));
+    }
 }
 
 void Library::setMatchAll(bool matchAll)
