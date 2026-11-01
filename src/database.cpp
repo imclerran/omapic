@@ -1857,6 +1857,21 @@ QString Database::photoHash(int photoId)
     return {};
 }
 
+QList<int> Database::contentCopyIds(int photoId)
+{
+    const QString hash = photoHash(photoId);
+    if (hash.isEmpty())
+        return {photoId};
+    QList<int> ids;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id FROM photos WHERE hash = ? ORDER BY id")); // idx_photos_hash
+    q.addBindValue(hash);
+    q.exec();
+    while (q.next())
+        ids.append(q.value(0).toInt());
+    return ids;
+}
+
 void Database::applyContentTags(int photoId, const QString &hash)
 {
     if (hash.isEmpty())

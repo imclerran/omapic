@@ -255,6 +255,10 @@ public:
     static QString hashFile(const QString &path, qint64 fullHashMaxBytes = kFullHashMaxBytes,
                             qint64 sampleChunk = kSampleChunk);
     QString photoHash(int photoId);                // stored hash for a photo, empty if none
+    // Every photo sharing this photo's content hash, itself included, by id —
+    // just itself when it has no hash yet. The rows a by-content tag change
+    // touched, for refreshing them all in the model.
+    QList<int> contentCopyIds(int photoId);
     void applyContentTags(int photoId, const QString &hash); // link archived tags onto a photo
     void rememberContentTag(const QString &hash, int tagId); // archive a tag for this content
     void forgetContentTag(const QString &hash, int tagId);   // drop from archive if no live photo uses it

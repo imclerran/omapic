@@ -114,6 +114,7 @@ private slots:
 
     void linkPhotoTagFailsOnMissingForeignKey();
     void coOccurringTagsEmptyWhenNoCoOccurrence();
+    void contentCopyIdsListEveryCopyOfAHash();
 
     // Triage undo primitives
     void applyTagRecordedReportsOnlyNewRows();
@@ -1438,6 +1439,21 @@ void TestDatabase::deleteTagCascadesImplications()
 
     // After: with b (and its two implication rows) gone, a no longer reaches c.
     QVERIFY(!m_db->implicationWouldCycle(c, a));
+}
+
+void TestDatabase::contentCopyIdsListEveryCopyOfAHash()
+{
+    const int a = m_db->insertPhoto(QStringLiteral("/p/a.jpg"), QStringLiteral("H1"));
+    const int b = m_db->insertPhoto(QStringLiteral("/q/a-copy.jpg"), QStringLiteral("H1"));
+    const int c = m_db->insertPhoto(QStringLiteral("/p/c.jpg"), QStringLiteral("H2"));
+    const int unhashed = m_db->insertPhoto(QStringLiteral("/p/d.jpg"), QString());
+
+    // Every copy of the content, itself included, from either copy.
+    QCOMPARE(m_db->contentCopyIds(a), (QList<int>{a, b}));
+    QCOMPARE(m_db->contentCopyIds(b), (QList<int>{a, b}));
+    // A lone hash and a photo not yet hashed are just themselves.
+    QCOMPARE(m_db->contentCopyIds(c), QList<int>{c});
+    QCOMPARE(m_db->contentCopyIds(unhashed), QList<int>{unhashed});
 }
 
 void TestDatabase::linkPhotoTagFailsOnMissingForeignKey()
