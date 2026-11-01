@@ -298,14 +298,20 @@ QVariantList PhotoFilterModel::monthGroups() const
 
 bool PhotoFilterModel::containsId(int id) const
 {
+    return rowOfId(id) >= 0;
+}
+
+int PhotoFilterModel::rowOfId(int id) const
+{
     auto *photos = qobject_cast<PhotoModel *>(sourceModel());
     if (!photos)
-        return false;
+        return -1;
     const int srcRow = photos->rowForId(id);
     if (srcRow < 0)
-        return false; // gone from the active set entirely
+        return -1; // gone from the active set entirely
     // Visible only if the source row maps through to a proxy row.
-    return mapFromSource(photos->index(srcRow, 0)).isValid();
+    const QModelIndex idx = mapFromSource(photos->index(srcRow, 0));
+    return idx.isValid() ? idx.row() : -1;
 }
 
 bool PhotoFilterModel::lessThan(const QModelIndex &left, const QModelIndex &right) const

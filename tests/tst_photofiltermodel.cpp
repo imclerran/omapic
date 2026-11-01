@@ -250,6 +250,17 @@ void TestPhotoFilterModel::containsIdTracksVisibility()
     QVERIFY(m_proxy->containsId(10));   // passes the filter
     QVERIFY(!m_proxy->containsId(11));  // filtered out
     QVERIFY(!m_proxy->containsId(999)); // not in the source at all
+
+    // rowOfId is the proxy row behind containsId: the shown photo's row, -1 for
+    // a hidden or unknown one, and it follows the sort order, not the source.
+    QCOMPARE(m_proxy->rowOfId(10), 0);
+    QCOMPARE(m_proxy->rowOfId(11), -1);
+    QCOMPARE(m_proxy->rowOfId(999), -1);
+    m_proxy->setSelectedTagIds({});
+    QCOMPARE(m_proxy->rowOfId(11), 1);
+    m_proxy->setSortAscending(false); // by name, descending: b before a
+    QCOMPARE(m_proxy->rowOfId(11), 0);
+    QCOMPARE(m_proxy->rowOfId(10), 1);
 }
 
 // --- Folder-view directory gate ---------------------------------------------

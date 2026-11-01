@@ -82,8 +82,52 @@ Item {
         // changed in another view removes/alters rows without a dataChanged this
         // view sees, so re-fetch on every (re)show to avoid a stale star/badge.
         tv.dataRevision++
+        // Replacing the row model resets the ListView to the top; a photo leaving
+        // the filter under a tag edit must not do that, so hold the viewport's top
+        // photo in place across the rebuild (see topAnchor).
+        const anchor = topAnchor()
         tv.groups = tv.library.filtered.monthGroups()
         rebuildRows()
+        restoreAnchor(anchor)
+    }
+
+    // The photo at the top of the viewport, as something to find again once the
+    // row model has been replaced: its id (rows removed above it move it, and the
+    // id still finds it), its proxy row as the fallback when it left the view
+    // (the next photo takes its place), and how far the viewport sits into its
+    // row, so the restore is pixel-exact. null when there is nothing to hold.
+    function topAnchor() {
+        if (!tv.library || list.model.length === 0 || list.contentY <= 0)
+            return null
+        let topIdx = list.indexAt(2, list.contentY + 2)
+        if (topIdx >= 0 && list.model[topIdx] && list.model[topIdx].header)
+            ++topIdx // a month header: anchor on the row below it instead
+        if (topIdx < 0 || !list.model[topIdx] || list.model[topIdx].header)
+            return null
+        const row = list.model[topIdx].firstRow
+        const p = tv.library.filtered.photoAt(row)
+        const item = list.itemAtIndex(topIdx)
+        return { row: row, id: p ? p.id : -1, offset: item ? list.contentY - item.y : 0 }
+    }
+    function restoreAnchor(anchor) {
+        if (!anchor)
+            return
+        Qt.callLater(function () {
+            if (!tv.library)
+                return
+            let row = anchor.id >= 0 ? tv.library.filtered.rowOfId(anchor.id) : -1
+            if (row < 0)
+                row = Math.min(anchor.row, tv.library.filtered.count - 1)
+            const k = groupIndexOfRow(row)
+            if (k < 0 || k >= tv.groupRowStart.length)
+                return
+            const lr = Math.floor((row - tv.groups[k].firstRow) / tv.columns)
+            list.positionViewAtIndex(tv.groupRowStart[k] + 1 + lr, ListView.Beginning)
+            if (anchor.offset > 0) {
+                list.contentY += anchor.offset
+                list.returnToBounds()
+            }
+        })
     }
 
     // Flatten the month groups into a virtualizable list of rows: one header row
@@ -109,27 +153,14 @@ Item {
         list.model = rows
     }
 
-    // Column count changes on resize; re-flow the rows to match. Replacing the row
-    // model resets the ListView to the top, so keep the photo at the top of the
-    // viewport roughly in place across the re-flow.
+    // Column count changes on resize; re-flow the rows to match, keeping the
+    // photo at the top of the viewport in place across the re-flow.
     onColumnsChanged: {
         if (!tv.visible)
             return
-        let anchorProxy = -1
-        const topIdx = list.indexAt(2, list.contentY + 2)
-        if (topIdx >= 0 && list.model[topIdx] && !list.model[topIdx].header)
-            anchorProxy = list.model[topIdx].firstRow
+        const anchor = topAnchor()
         rebuildRows()
-        if (anchorProxy >= 0) {
-            const ap = anchorProxy
-            Qt.callLater(function () {
-                const k = groupIndexOfRow(ap)
-                if (k >= 0 && k < tv.groupRowStart.length) {
-                    const lr = Math.floor((ap - tv.groups[k].firstRow) / tv.columns)
-                    list.positionViewAtIndex(tv.groupRowStart[k] + 1 + lr, ListView.Beginning)
-                }
-            })
-        }
+        restoreAnchor(anchor)
     }
 
     onVisibleChanged: {
