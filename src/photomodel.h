@@ -39,6 +39,12 @@ public:
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
+    // Replace the photo set. Rows are spliced in place — those gone are removed,
+    // those new inserted, those changed signalled — so a view keeps its scroll
+    // position and its delegates across a reload. A reset happens only when the
+    // surviving photos are not in the same order in both sets (the load order
+    // changed under us), when either set is empty, or when the change is too
+    // scattered for splicing to be cheaper than starting over.
     void setPhotos(QVector<Photo> photos);
     void appendPhoto(const Photo &photo);
     int rowForId(int id) const;

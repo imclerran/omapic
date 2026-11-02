@@ -139,6 +139,10 @@ public:
     // Whether the photo with this id currently passes the filter (is visible in
     // the gallery). Used to prune the selection when the filter changes.
     Q_INVOKABLE bool containsId(int id) const;
+    // The proxy row showing the photo with this id; -1 when it is filtered out
+    // or not in the source at all. Lets a view find a photo again after rows
+    // moved under it.
+    Q_INVOKABLE int rowOfId(int id) const;
 
 signals:
     void selectedTagIdsChanged();

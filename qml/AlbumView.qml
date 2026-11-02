@@ -47,6 +47,32 @@ Item {
     // stale. Re-fetch them whenever the view is (re)shown.
     onVisibleChanged: if (visible) av.dataRevision++
 
+    // The grid's model is a plain count (tiles + photos), so every change to
+    // it hands the view a new model: delegates are rebuilt and the scroll drops
+    // to the top. The photo count changes under the user's feet — a tag edit
+    // moves a photo out of a smart album or a tag filter — so apply those by
+    // hand and put the scroll back, now and again after the relayout. (A change
+    // in the tiles is navigation, which Main re-anchors anyway.)
+    property int photoCount: 0
+    function applyPhotoCount() {
+        const n = av.library ? av.library.filtered.count : 0
+        if (n === av.photoCount)
+            return
+        const y = agrid ? agrid.contentY : 0
+        av.photoCount = n
+        if (!agrid || y <= 0)
+            return
+        agrid.contentY = y
+        agrid.returnToBounds()
+        Qt.callLater(function () { agrid.contentY = y; agrid.returnToBounds() })
+    }
+    Connections {
+        target: av.library ? av.library.filtered : null
+        function onCountChanged() { av.applyPhotoCount() }
+    }
+    onLibraryChanged: applyPhotoCount()
+    Component.onCompleted: applyPhotoCount()
+
     signal goUp()                            // back to the album list (Alt+Up / Back)
     signal enterAlbum(int albumId)           // open an album (Enter on a selected tile)
     signal newSmartAlbumRequested()          // the "New Smart Album" button
@@ -161,7 +187,7 @@ Item {
             maximumFlickVelocity: 6000
             ScrollBar.vertical: ScrollBar {}
 
-            model: av.albumCount + (av.library ? av.library.filtered.count : 0)
+            model: av.albumCount + av.photoCount
 
             focus: true
             keyNavigationEnabled: false

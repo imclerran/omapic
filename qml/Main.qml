@@ -391,8 +391,9 @@ ApplicationWindow {
 
     // Run a mutation that refreshes the photo model (tag rename/delete, image
     // delete/remove) without the gallery jumping to the top. Those paths call
-    // setPhotos(), a wholesale model reset that otherwise drops the scroll; capture
-    // and restore contentY around it, deferred once more for the view's relayout.
+    // setPhotos(), which splices the model in place and so keeps the view where
+    // it was; capturing and restoring contentY around it, deferred once more for
+    // the view's relayout, backstops the cases where it has to reset instead.
     function withPreservedGalleryScroll(fn) {
         const y = grid.contentY
         preservingGalleryScroll = true
@@ -408,11 +409,12 @@ ApplicationWindow {
     }
 
     // Keep the gallery in place when applying/removing tags. Small edits update
-    // the model in place and don't move the grid, but a large selection runs on
-    // the worker thread and reloads the whole model (setPhotos) on completion,
-    // which snaps the grid to the top. Capture contentY around the operation and
-    // restore it — immediately for the synchronous (small) case, and again once
-    // the background job finishes (busy returns to false) for the large case.
+    // the model in place and don't move the grid; a large selection runs on the
+    // worker thread and reloads the model (setPhotos) on completion, which splices
+    // the rows in place and keeps the grid too, except when it has to reset.
+    // Capture contentY around the operation and restore it as a backstop —
+    // immediately for the synchronous (small) case, and again once the background
+    // job finishes (busy returns to false) for the large case.
     property real galleryTagScrollY: 0
     property bool galleryTagScrollPending: false
     function withPreservedGalleryScrollTagging(fn) {
