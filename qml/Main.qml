@@ -99,6 +99,31 @@ ApplicationWindow {
         onActivated: win.enterTriage()
     }
 
+    // Ctrl+Space toggles Favorites for the selected photo(s), the gallery-side
+    // counterpart of triage's favorite key. Window-wide (like Ctrl+T) so it works
+    // in all four views and from the detail panel; the viewer and slideshow are
+    // separate windows, so it never fires over them. Kept enabled even with an
+    // empty selection so Ctrl+Space doesn't fall through to a view's plain-Space
+    // handler and start a slideshow.
+    Shortcut {
+        sequence: "Ctrl+Space"
+        enabled: !win.triageActive && library.fatalError === ""
+        onActivated: win.toggleSelectedFavorites()
+    }
+    // One favorite status across the selection flips it; a mix adds the
+    // non-favorites, so a partly starred selection ends up fully starred rather
+    // than losing stars the user already set.
+    function toggleSelectedFavorites() {
+        const ids = win.selectedIds
+        if (ids.length === 0)
+            return
+        const notFav = ids.filter(function (id) { return !library.isFavorite(id) })
+        if (notFav.length === 0)
+            library.setFavorite(ids, false)     // all favorites → unstar them all
+        else
+            library.setFavorite(notFav, true)   // none or some → star the rest
+    }
+
     // Display label for a view mode (the compact switcher's current-view button).
     function viewLabel(mode) {
         return mode === "timeline" ? qsTr("Timeline")
