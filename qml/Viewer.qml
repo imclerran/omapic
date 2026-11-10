@@ -48,6 +48,12 @@ PhotoViewer {
         // Theme actions need the Library, which the standalone viewer doesn't
         // have, so they stay unconnected here (the menu items are no-ops).
 
+        // A nested Window is transient for its enclosing Window by default, and
+        // Qt's Wayland backend never maps a toplevel whose transient parent is
+        // hidden. On a command-line slideshow launch the viewer window is never
+        // shown, so the slideshow must stand on its own or it never appears.
+        transientParent: launchSlideshow ? null : viewer
+
         // A slideshow launched from the command line is the whole session:
         // leaving it (Esc) quits rather than dropping back to a viewer window
         // that was never shown.
