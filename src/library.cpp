@@ -918,14 +918,25 @@ bool Library::editThemeInAetherPath(const QString &path)
     // Load the photo into Aether's GUI editor so a new theme can be tweaked
     // before applying — deliberately not `--generate`, which would apply a theme
     // immediately (that's setAetherTheme). `aether extract` talks to a running
-    // GUI over its control socket, so: start the GUI if it isn't up, then retry
-    // `extract` until the socket is ready. Run in a detached shell so the wait
+    // GUI over its control socket, so: start the GUI if it isn't up, then poll
+    // `status` until the socket answers. Run in a detached shell so the wait
     // never blocks omapic's UI thread.
+    //
+    // A freshly started Aether editor (4.32, 4.33) reports its extraction mode
+    // as "auto", a name its own extractor rejects, so a plain `extract` fails
+    // with "unknown extraction mode" until the user picks a mode in the GUI.
+    // When that happens, retry with "normal", Aether's auto-detect mode, which
+    // is what "auto" means. A plain `extract` is tried first so a mode the
+    // user has chosen is kept.
     static const QString script = QStringLiteral(
         "sock=\"$HOME/.config/aether/aether.sock\"\n"
         "if [ ! -S \"$sock\" ]; then setsid aether >/dev/null 2>&1 & fi\n"
         "for i in $(seq 1 100); do\n"
-        "  aether extract \"$1\" >/dev/null 2>&1 && exit 0\n"
+        "  if aether status >/dev/null 2>&1; then\n"
+        "    aether extract \"$1\" >/dev/null 2>&1 && exit 0\n"
+        "    aether extract \"$1\" --mode normal >/dev/null 2>&1 && exit 0\n"
+        "    exit 1\n"
+        "  fi\n"
         "  sleep 0.2\n"
         "done\n"
         "exit 1\n");
